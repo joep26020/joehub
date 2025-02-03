@@ -1,1 +1,2 @@
-deathcounter = true
+local deathCounterAllowed = true
+return deathCounterAllowed
