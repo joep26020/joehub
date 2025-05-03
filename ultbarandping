@@ -461,6 +461,10 @@ if Config.AntiDeathCounter then
         end
 
         local function onCharacter(char)
+	    if baseplate then baseplate:Destroy(); baseplate = nil end
+	    isTeleporting   = false
+	    teleportStart   = nil
+	    originalCFrame  = nil
             local hum = char:WaitForChild("Humanoid", 2)
             local hrp = char:WaitForChild("HumanoidRootPart", 2)
             local animator = hum:FindFirstChildOfClass("Animator") or hum:WaitForChild("Animator", 2)
@@ -516,15 +520,16 @@ local function attachPlayer(plr)
 			hiddenKills[plr] = true
 		end
 
-		-- when they toggle hide-kills
 		addConn(plr:GetAttributeChangedSignal("S_HideKills"):Connect(function()
-			if plr:GetAttribute("S_HideKills") == true then
-				hiddenKills[plr] = true
-			else
-				hiddenKills[plr] = nil
-				clearReveal(plr)
-			end
+		    if plr:GetAttribute("S_HideKills") then        
+		        hiddenKills[plr] = true
+		        reveal(plr)
+		    else                                        
+		        hiddenKills[plr] = nil
+		        clearReveal(plr)
+		    end
 		end))
+
 	end
 
     if Config.PingBar or Config.UltBar then
@@ -568,21 +573,23 @@ end))
 
 if Config.LeaderboardSpy then
     addConn(RunService.Heartbeat:Connect(function()
-        for _, plr in ipairs(Players:GetPlayers()) do
-            if plr ~= LP then
-                local hidden = plr:GetAttribute("S_HideKills") == true
-                if hidden then
-                    if not hiddenKills[plr] then
-                        hiddenKills[plr] = true
-                        trackTKF(plr)        
-                    end
-                    reveal(plr)            
-                elseif hiddenKills[plr] then
-                    hiddenKills[plr] = nil
-                    clearReveal(plr)
-                end
-            end
-        end
+	for _, plr in ipairs(Players:GetPlayers()) do
+	    if plr ~= LP then
+	        local hidden = plr:GetAttribute("S_HideKills")
+	        if hidden then
+	            if not hiddenKills[plr] then
+	                hiddenKills[plr] = true
+	                trackTKF(plr)
+	            end
+	            reveal(plr)
+	        else
+	            if hiddenKills[plr] then
+	                hiddenKills[plr] = nil
+	            end
+	            clearReveal(plr)      -- ALWAYS make sure the icon is gone
+	        end
+	    end
+	end
     end))
 end
 
