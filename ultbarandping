@@ -319,10 +319,7 @@ if (Config.PingBar or Config.UltBar or Config.EvasiveBar) then
 			local pulse = (math.sin(os.clock()*math.pi*4)+1)/2
 			if ulted then
 				setFill(h.ultBar,1,CRIMSON_LOW,CRIMSON_HIGH,pulse)           -- pulsing crimson
-				h.ultBar.glow.ImageColor3 = Color3.new(0,0,0)
-				h.ultBar.glow.ImageTransparency = 0.5
 			elseif pct >= 100 then
-				-- charged: red bar + white pulsing glow
 				setFill(h.ultBar, 1, BASE_RED, BASE_RED, nil)                -- bar solid red
 				h.ultBar.glow.ImageColor3 = Color3.new(1,1,1)                -- pure white glow
 				local gPulse = (math.sin(os.clock()*math.pi*4) + 1) / 2
@@ -330,6 +327,7 @@ if (Config.PingBar or Config.UltBar or Config.EvasiveBar) then
 				h.ultBar.glow.Visible = true
 			else
 				setFill(h.ultBar,pct/100,BASE_RED,BASE_RED,nil)              -- red fill %
+				h.ultBar.glow.ImageTransparency = 0.5
 			end
 		end
 
