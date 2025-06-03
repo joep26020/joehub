@@ -1,4 +1,17 @@
+--[[
+-- put this at startup loadstring
+local cfg = {
+	AntiDeathCounter    = false,
+	AntiDeathCounterSpy = true,
+	UltBar              = true,
+	PingBar             = true,
+	EvasiveBar          = true,    
+	LeaderboardSpy      = true,
+}
 
+_G.Config  = cfg
+Config     = cfg      
+]]
 local cfg = _G.Config or {}
 --------------------------[[ FLAGS ]]---------------------------------
 local AntiDeathCounter    = cfg.AntiDeathCounter
