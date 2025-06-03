@@ -6784,7 +6784,7 @@ if game.PlaceId == 10449761463 then
 	_G.Config = cfg
 	Config    = cfg
 
-	loadstring(game:HttpGet("https://raw.githubusercontent.com/joep26020/joehub/main/ultbarandping.lua"))()
+	loadstring(game:HttpGet("https://raw.githubusercontent.com/joep26020/joehub/main/ultbarandping"))()
 
 	_G.FollowConfig = {
 		SPEED         = 750,
@@ -6792,7 +6792,7 @@ if game.PlaceId == 10449761463 then
 		ANIM_INTERVAL = 0.09,
 	}
 
-	loadstring(game:HttpGet("https://raw.githubusercontent.com/joep26020/joehub/main/xteepee.lua"))()
+	loadstring(game:HttpGet("https://raw.githubusercontent.com/joep26020/joehub/main/xteepee"))()
 end
 
 while wait() do 
