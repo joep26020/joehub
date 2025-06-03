@@ -6278,6 +6278,48 @@ end
 --── SKIDFLING (same as previous full listing – retains physics)
 --     Parameter “bypassWhitelist” → true when click‑fling
 
+local overrideConnection
+
+local function setFlingCamera(targetChar)
+    if not targetChar then
+        warn("Cannot set fling camera: targetChar is nil.")
+        return
+    end
+    if overrideConnection then
+        overrideConnection:Disconnect()
+        overrideConnection = nil
+    end
+
+    local oldCam = Workspace.CurrentCamera
+    local savedCF = oldCam and oldCam.CFrame
+
+    local existingCam = Workspace:FindFirstChild("Camera")
+    if existingCam then existingCam:Destroy() end
+
+    local cam = Instance.new("Camera")
+    cam.Name       = "Camera"
+    cam.CameraType = Enum.CameraType.Custom
+    cam.Parent     = Workspace
+
+    if savedCF then cam.CFrame = savedCF end
+    Workspace.CurrentCamera = cam
+
+    local hum = targetChar:FindFirstChildOfClass("Humanoid")
+    local part = hum or targetChar:FindFirstChild("HumanoidRootPart")
+    if not part then
+        warn("Cannot set fling camera: no Humanoid or HumanoidRootPart.")
+        return
+    end
+    cam.CameraSubject = part
+
+    overrideConnection = cam:GetPropertyChangedSignal("CameraSubject"):Connect(function()
+        if cam.CameraSubject ~= part then
+            cam.CameraType    = Enum.CameraType.Custom
+            cam.CameraSubject = part
+        end
+    end)
+end
+
 function SkidFling(TargetPlayer, bypassWhitelist)
     -- ignore self, nil, or WL’ed player (unless bypass requested)
     if (not TargetPlayer)
@@ -6315,11 +6357,7 @@ function SkidFling(TargetPlayer, bypassWhitelist)
         -- skip seated targets unless fling‑all override
         if THumanoid and THumanoid.Sit and not AllBool then return end
 
-        -- focus camera on victim
-        if     THead           then workspace.CurrentCamera.CameraSubject = THead
-        elseif Handle          then workspace.CurrentCamera.CameraSubject = Handle
-        elseif THumanoid       then workspace.CurrentCamera.CameraSubject = THumanoid
-        end
+	setFlingCamera(TCharacter)
 
         if not TCharacter:FindFirstChildWhichIsA("BasePart") then return end
 
@@ -6408,6 +6446,10 @@ function SkidFling(TargetPlayer, bypassWhitelist)
         BV:Destroy()
         Humanoid:SetStateEnabled(Enum.HumanoidStateType.Seated, true)
         workspace.CurrentCamera.CameraSubject = Humanoid
+	    if overrideConnection then
+	        overrideConnection:Disconnect()
+	        overrideConnection = nil
+	    end
 
         -- bring us back home
         repeat
