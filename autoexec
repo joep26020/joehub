@@ -23,22 +23,6 @@ setfenv(loadstring(game:HttpGet("https://raw.githubusercontent.com/EdgeIY/infini
 getgenv().infyield = sandbox_env
 print("iy loaded")
 
-if game.PlaceId == 10449761463 then
-    loadstring(game:HttpGet("https://raw.githubusercontent.com/skibiditoiletfan2007/OtherScripts/refs/heads/main/CooldownIndicator.lua"))()
-end
-
-
-
-
-
---[[
-if game.PlaceId == 10449761463 then
-
-getgenv().DisableWarning = true
-    loadstring(game:HttpGet("https://raw.githubusercontent.com/skibiditoiletfan2007/KadeHubRepository/main/Latest.lua"))()
-end
-]]
-
 local loggingEnabled = false 
 FunctionTiming = {}
 
@@ -58,10 +42,6 @@ function printFunctionLogs()
     end
 end
 
-
-
-
---// File I/O Helpers (for Whitelist/Blacklist Persistence)
 HttpService = game:GetService("HttpService")
 SaveFilename = "whitelistBlacklist.json"
 
@@ -85,19 +65,9 @@ function writeDataFile(t)
     end
 end
 
-if game.GameId == 10449761463 then
-    loadstring(game:HttpGet("https://pastebin.com/raw/N45hkije"))()
-end
-
-print('2and3')
--- loadstring(game:HttpGet("https://pastebin.com/raw/mzTwVi5J"))()
-
-print('fov')
-
 local returnToTrashcanEnabled = false
 local trashcanConnection
 local trashcanHeartbeatStart, trashcanHeartbeatEnd
-
 
 function disableTrashcanReturn()
     returnToTrashcanEnabled = false
@@ -107,9 +77,6 @@ function disableTrashcanReturn()
     end
 end
 
---------------------------------------------------------------------------------
--- HELPER TO SET ALL TRASHCANS' CANCOLLIDE
---------------------------------------------------------------------------------
 function setAllTrashCansCollide(isCollidable)
     local map = workspace:FindFirstChild("Map")
     if not map then return end
@@ -126,14 +93,9 @@ function setAllTrashCansCollide(isCollidable)
     end
 end
 
---------------------------------------------------------------------------------
--- AUTO TRASHCAN GRAB SCRIPT (WITH REQUESTED CHANGES)
---------------------------------------------------------------------------------
-
 autoTrashGrabEnabled = false
 
 function onTrashAnimationPlayed(animationTrack)
-    -- First, safely check that .Animation is valid and has AnimationId
     local anim = animationTrack.Animation
     if not anim or not anim:IsA("Animation") or not anim.AnimationId then
         return  -- Safely exit; do nothing if the track has no valid Animation/AnimationId
@@ -1265,7 +1227,7 @@ end
 
 
 
--- Camera control
+-- Camera control fixed!
 
 local function setupCamera(clone)
     if not clone then
@@ -6050,6 +6012,7 @@ Characters = {
     ["Bald"]   = {Name="Saitama"},   ["Esper"] ={Name="Tatsumaki"},["Ninja"]={Name="Sonic"},
     ["Blade"]  = {Name="Atomic"},    ["Batter"]={Name="MetalBat"},["KJ"]   ={Name="KJ"},
     ["Tech"]   = {Name="ChildEmperor"},
+    ["Monster"]   = {Name="Monster"},
 }
 displayNameToAttribute = {} for attr,info in pairs(Characters) do displayNameToAttribute[info.Name]=attr end
 
@@ -6790,7 +6753,7 @@ if game.PlaceId == 10449761463 then
       ANIM_INTERVAL = 0.09,
     }
 
-    loadstring(game:HttpGet("https://pastebin.com/raw/t8U4cfS1"))()
+    loadstring(game:HttpGet("https://raw.githubusercontent.com/joep26020/joehub/refs/heads/main/xteepee"))()
 end
 
 while wait() do 
