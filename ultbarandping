@@ -67,6 +67,7 @@ local CharacterColors = {
     Esper  = Color3.fromRGB(  0, 255, 105),  
     Purple = Color3.fromRGB(121, 0, 253),  
     Tech   = Color3.fromRGB(  0,   0,   0), 
+    Monster   = Color3.fromRGB(  139,   0,   0), 
 }
 
 
