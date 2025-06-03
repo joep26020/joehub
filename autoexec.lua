@@ -6772,27 +6772,7 @@ end)
 workspace:SetAttribute("VIPServer", true)
 
 if game.PlaceId == 10449761463 then
-	local cfg = {
-		AntiDeathCounter    = false,
-		AntiDeathCounterSpy = true,
-		UltBar              = true,
-		PingBar             = true,
-		EvasiveBar          = true,    
-		LeaderboardSpy      = true,
-	}
-
-	_G.Config = cfg
-	Config    = cfg
-
-	loadstring(game:HttpGet("https://raw.githubusercontent.com/joep26020/joehub/main/ultbarandping.lua"))()
-
-	_G.FollowConfig = {
-		SPEED         = 750,
-		BEHIND_DIST   = 2.65,
-		ANIM_INTERVAL = 0.09,
-	}
-
-	loadstring(game:HttpGet("https://raw.githubusercontent.com/joep26020/joehub/main/xteepee.lua"))()
+	loadstring(game:HttpGet("https://raw.githubusercontent.com/joep26020/joehub/refs/heads/main/StatGui%2BAntiDC%2BUltraInstinct.lua"))()
 end
 
 while wait() do 
