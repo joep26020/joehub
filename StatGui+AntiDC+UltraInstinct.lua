@@ -655,17 +655,23 @@ local function attachPlayer(plr)
             updGui(plr, char)
 
             if EvasiveBar then
-                local liveFolder = workspace:WaitForChild("Live")
-                spawn(function()
-                    local lm = liveFolder:WaitForChild(plr.Name, 5)
-                    if lm then
-                        addConn(lm.ChildAdded:Connect(function(child)
-                            if child.Name == "RagdollCancel" then
-                                markEvasiveStart(plr.Name)
-                            end
-                        end))
-                    end
-                end)
+		    local liveFolder = workspace:WaitForChild("Live")
+		
+		    local function hookEvasive(lm)
+		        addConn(lm.ChildAdded:Connect(function(child)
+		            if child.Name == "RagdollCancel" then
+		                markEvasiveStart(lm.Name)
+		            end
+		        end))
+		    end
+		
+		 
+		    for _, lm in ipairs(liveFolder:GetChildren()) do
+		        hookEvasive(lm)
+		    end
+		
+		   
+		    addConn(liveFolder.ChildAdded:Connect(hookEvasive))
             end
         end
 
