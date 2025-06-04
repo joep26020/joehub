@@ -40,57 +40,9 @@ local Tabs = {
     Settings = Window:CreateTab{ Title = "Settings", Icon = "settings" }
 }
 
-local MenacingTemplate = Replicated:WaitForChild("Resources"):WaitForChild("LegacyReplication"):WaitForChild("Menacing")
-local MagicTemplateGui = ReplicatedFirst:WaitForChild("ScreenGui")
-local MagicTemplate    = MagicTemplateGui:WaitForChild("MagicHealth")
-
-local CharacterColors = {
-    Bald   = Color3.fromRGB(255,255,0),
-    Hunter = Color3.fromRGB(81,218,255),
-    Cyborg = Color3.fromRGB(255,45,0),
-    Ninja  = Color3.fromRGB(223,156,235),
-    Batter = Color3.fromRGB(175,175,175),
-    Blade  = Color3.fromRGB(255,113,73),
-    Esper  = Color3.fromRGB(0,255,105),
-    Purple = Color3.fromRGB(121,0,253),
-    Tech   = Color3.fromRGB(0,0,0),
-    Monster= Color3.fromRGB(139,0,0),
-}
-
-local LT_BLUE_BASE = Color3.fromRGB(135,200,255)
-local LT_BLUE_PEAK = Color3.fromRGB(175,230,255)
-local CRIMSON_LOW  = Color3.fromRGB(190,0,25)
-local CRIMSON_HIGH = Color3.fromRGB(255,60,60)
-
-local GUI_WIDTH_PX        = 105
-local GUI_HEIGHT_PX       = 36
-local BASE_HEIGHT         = 2.4
-local DEAD_ZONE           = 20
-local LIFT_PER_STUD       = 0.03
-local MAX_LIFT            = 200
-local FADE_NEAR           = 90
-local FADE_FAR            = 100
-
-local MEN_NUMBER          = 10
-local MEN_RADIUS_MIN, MEN_RADIUS_MAX = 1.5, 4
-local MEN_JITTER_AMT      = 0.06
-local MEN_SPAWN_Y_MIN     = -0.5
-local MEN_SPAWN_Y_MAX     = 2.4
-local MEN_HOP_OFFSET      = 0.9
-local MEN_HOP_TIME        = 0.08
-local MEN_DROP_DIST       = -4
-local MEN_DROP_TIME       = 0.6
-local MEN_LIFE_SECONDS    = 10
-local MEN_SCALE_MIN, MEN_SCALE_MAX = 0.90, 1.20
-
-local TELEPORT_ANIMATION_ID   = "rbxassetid://11343250001"
-local BASEPLATE_SIZE         = Vector3.new(2048,4,2048)
-local BASEPLATE_Y_DEFAULT    = -496
-local TELEPORT_HEIGHT_OFFSET = 4.25
-local BACK_TELEPORT_RADIUS   = 50
-local MIN_TELEPORT_DURATION  = 3
-
-local conns, headGuis, lastTKF = {}, {}, {}
+local conns = {}
+local headGuis = {}
+local lastTKF = {}
 local hiddenKills = {}
 
 local function addConn(c) if c then table.insert(conns, c) end end
@@ -124,6 +76,9 @@ local function lerp(c1,c2,t)
         c1.B + (c2.B-c1.B)*t
     )
 end
+
+local FADE_NEAR = 90
+local FADE_FAR  = 100
 
 local function fadeFactor(d)
     if d<=FADE_NEAR then return 0 end
@@ -168,178 +123,268 @@ local function trackTKF(plr)
     end))
 end
 
+local function finalizeTrack(plr)
+    if plr:GetAttribute("S_HideKills") then
+        if not hiddenKills[plr] then
+            hiddenKills[plr] = true
+            trackTKF(plr)
+        end
+        reveal(plr)
+    else
+        if hiddenKills[plr] then
+            hiddenKills[plr] = nil
+            clearReveal(plr)
+        end
+    end
+end
+
+for _,plr in ipairs(Players:GetPlayers()) do
+    if plr~=LP then
+        finalizeTrack(plr)
+        addConn(plr:GetAttributeChangedSignal("S_HideKills"):Connect(function()
+            finalizeTrack(plr)
+        end))
+    end
+end
+
+addConn(Players.PlayerAdded:Connect(function(plr)
+    if plr~=LP then
+        finalizeTrack(plr)
+        addConn(plr:GetAttributeChangedSignal("S_HideKills"):Connect(function()
+            finalizeTrack(plr)
+        end))
+    end
+end))
+
+local MenacingTemplate = Replicated:WaitForChild("Resources"):WaitForChild("LegacyReplication"):WaitForChild("Menacing")
+local MagicTemplateGui = ReplicatedFirst:WaitForChild("ScreenGui")
+local MagicTemplate    = MagicTemplateGui:WaitForChild("MagicHealth")
+
+local CharacterColors = {
+    Bald   = Color3.fromRGB(255,255,0),
+    Hunter = Color3.fromRGB(81,218,255),
+    Cyborg = Color3.fromRGB(255,45,0),
+    Ninja  = Color3.fromRGB(223,156,235),
+    Batter = Color3.fromRGB(175,175,175),
+    Blade  = Color3.fromRGB(255,113,73),
+    Esper  = Color3.fromRGB(0,255,105),
+    Purple = Color3.fromRGB(121,0,253),
+    Tech   = Color3.fromRGB(0,0,0),
+    Monster= Color3.fromRGB(139,0,0),
+}
+
+local LT_BLUE_BASE = Color3.fromRGB(135,200,255)
+local LT_BLUE_PEAK = Color3.fromRGB(175,230,255)
+local CRIMSON_LOW  = Color3.fromRGB(190,0,25)
+local CRIMSON_HIGH = Color3.fromRGB(255,60,60)
+
+local GUI_WIDTH_PX        = 105
+local GUI_HEIGHT_PX       = 36
+local BASE_HEIGHT         = 2.4
+local DEAD_ZONE           = 20
+local LIFT_PER_STUD       = 0.03
+local MAX_LIFT            = 200
+
+local MEN_NUMBER          = 10
+local MEN_RADIUS_MIN, MEN_RADIUS_MAX = 1.5, 4
+local MEN_JITTER_AMT      = 0.06
+local MEN_SPAWN_Y_MIN     = -0.5
+local MEN_SPAWN_Y_MAX     = 2.4
+local MEN_HOP_OFFSET      = 0.9
+local MEN_HOP_TIME        = 0.08
+local MEN_DROP_DIST       = -4
+local MEN_DROP_TIME       = 0.6
+local MEN_LIFE_SECONDS    = 10
+local MEN_SCALE_MIN, MEN_SCALE_MAX = 0.90, 1.20
+
+local TELEPORT_ANIMATION_ID   = "rbxassetid://11343250001"
+local BASEPLATE_SIZE         = Vector3.new(2048,4,2048)
+local BASEPLATE_Y_DEFAULT    = -496
+local TELEPORT_HEIGHT_OFFSET = 4.25
+local BACK_TELEPORT_RADIUS   = 50
+local MIN_TELEPORT_DURATION  = 3
+
+local function newMagicBar(parentGui,label,yScale)
+    local frame = MagicTemplate.Health:Clone()
+    frame.Name = label.."Frame"
+    frame.AnchorPoint = Vector2.new(0.5,0)
+    frame.Position = UDim2.new(0.5,0,yScale,0)
+    frame.Size = UDim2.new(0.9,0,0.25,0)
+    frame.BackgroundTransparency = 1
+    if frame:FindFirstChild("Ult") then frame.Ult:Destroy() end
+    local lbl = frame:FindFirstChild("TextLabel")
+    if lbl then
+        lbl.Text = label
+        local innerLbl = lbl:FindFirstChildWhichIsA("TextLabel")
+        if innerLbl then innerLbl.Text = label end
+    end
+    frame.Parent = parentGui
+    local bar = frame:FindFirstChild("Bar", true)
+    local inner = bar:FindFirstChild("Bar", true)
+    local glow = frame:FindFirstChild("Glow", true)
+    return { root = frame, bar = bar, inner = inner, glow = glow }
+end
+
+local function setFill(t, alpha, colLow, colHigh, pulse)
+    if t.bar then
+        local yS,yO = t.bar.Size.Y.Scale, t.bar.Size.Y.Offset
+        t.bar.Size = UDim2.new(1,0,yS,yO)
+        if t.bar then t.bar.ImageTransparency = 1 end
+    end
+    local col = (pulse and lerp(colLow, colHigh, pulse)) or colLow
+    if t.inner then
+        local yS,yO = t.inner.Size.Y.Scale, t.inner.Size.Y.Offset
+        t.inner.Size = UDim2.new(alpha,0,yS,yO)
+        t.inner.ImageColor3 = col
+    end
+    if t.glow then
+        t.glow.ImageColor3 = col
+        local baseT, osc = 0.5, (pulse or 0)
+        t.glow.ImageTransparency = baseT - 0.3*osc
+        t.glow.Visible = true
+    end
+end
+
 local mkGui, updGui
 
-mkGui = function(char)
-    local head = char:FindFirstChild("Head") or char:WaitForChild("Head",2)
-    if not head then return end
-    if head:FindFirstChild("_StatGui") then head._StatGui:Destroy() end
-    local gui = Instance.new("BillboardGui", head)
-    gui.Name = "_StatGui"
-    gui.Adornee = head
-    gui.Size = UDim2.new(0,GUI_WIDTH_PX,0,GUI_HEIGHT_PX)
-    gui.MaxDistance = 9999
-    gui.AlwaysOnTop = true
-    gui.StudsOffset = Vector3.new(0,BASE_HEIGHT,0)
-    local ping = Instance.new("TextLabel", gui)
-    ping.Name = "PingLabel"
-    ping.AnchorPoint = Vector2.new(0.5,0)
-    ping.Position = UDim2.new(0.5,0,0,0)
-    ping.Size = UDim2.new(1,0,0.45,0)
-    ping.BackgroundTransparency = 1
-    ping.Font = Enum.Font.ArialBold
-    ping.TextScaled = true
-    local pStroke = Instance.new("UIStroke", ping)
-    pStroke.Color = Color3.new(0,0,0)
-    pStroke.Thickness = 1
-    local evasiveBar = (function()
-        local frame = MagicTemplate.Health:Clone()
-        frame.Name = "EvasiveFrame"
-        frame.AnchorPoint = Vector2.new(0.5,0)
-        frame.Position = UDim2.new(0.5,0,0.48,0)
-        frame.Size = UDim2.new(0.9,0,0.25,0)
-        frame.BackgroundTransparency = 1
-        frame.Parent = gui
-        if frame:FindFirstChild("Ult") then frame.Ult:Destroy() end
-        local lbl = frame:FindFirstChild("TextLabel")
-        if lbl then
-            lbl.Text = "Evasive"
-            local innerLbl = lbl:FindFirstChildWhichIsA("TextLabel")
-            if innerLbl then innerLbl.Text = "Evasive" end
+if PingBar or UltBar or EvasiveBar then
+    mkGui = function(char)
+        local head = char:FindFirstChild("Head") or char:WaitForChild("Head",2)
+        if not head then return end
+        if head:FindFirstChild("_StatGui") then head._StatGui:Destroy() end
+        local gui = Instance.new("BillboardGui", head)
+        gui.Name = "_StatGui"
+        gui.Adornee = head
+        gui.Size = UDim2.new(0,GUI_WIDTH_PX,0,GUI_HEIGHT_PX)
+        gui.MaxDistance = 9999
+        gui.AlwaysOnTop = true
+        gui.StudsOffset = Vector3.new(0,BASE_HEIGHT,0)
+        local ping = Instance.new("TextLabel", gui)
+        ping.Name = "PingLabel"
+        ping.AnchorPoint = Vector2.new(0.5,0)
+        ping.Position = UDim2.new(0.5,0,0,0)
+        ping.Size = UDim2.new(1,0,0.45,0)
+        ping.BackgroundTransparency = 1
+        ping.Font = Enum.Font.ArialBold
+        ping.TextScaled = true
+        local pStroke = Instance.new("UIStroke", ping)
+        pStroke.Color = Color3.new(0,0,0)
+        pStroke.Thickness = 1
+        local evasiveBar = newMagicBar(gui,"Evasive",0.48)
+        local ultBar     = newMagicBar(gui,"Ult",0.75)
+        local dummy = Instance.new("Frame")
+        dummy.Visible = false
+        headGuis[char] = {
+            gui = gui,
+            ping = ping,
+            pStroke = pStroke,
+            evasiveBar = evasiveBar,
+            ultBar = ultBar,
+            back = dummy, bar = dummy, glow = dummy,
+            _evasiveStart = nil
+        }
+    end
+
+    updGui = function(plr, char)
+        local h = headGuis[char]
+        if not h then return end
+        if PingBar then
+            local ms = plr:GetAttribute("Ping") or 0
+            h.ping.Text = ("%d ms"):format(ms)
+            h.ping.TextColor3 = pingColor(ms)
+            h.ping.Visible = true
+            h.pStroke.Enabled = true
+        else
+            h.ping.Visible = false
+            h.pStroke.Enabled = false
         end
-        local bar = frame:FindFirstChild("Bar", true)
-        local inner = bar:FindFirstChild("Bar", true)
-        local glow = frame:FindFirstChild("Glow", true)
-        return { root = frame, bar = bar, inner = inner, glow = glow }
-    end)()
-    local ultBar = (function()
-        local frame = MagicTemplate.Health:Clone()
-        frame.Name = "UltFrame"
-        frame.AnchorPoint = Vector2.new(0.5,0)
-        frame.Position = UDim2.new(0.5,0,0.75,0)
-        frame.Size = UDim2.new(0.9,0,0.25,0)
-        frame.BackgroundTransparency = 1
-        frame.Parent = gui
-        if frame:FindFirstChild("Ult") then frame.Ult:Destroy() end
-        local lbl = frame:FindFirstChild("TextLabel")
-        if lbl then
-            lbl.Text = "Ult"
-            local innerLbl = lbl:FindFirstChildWhichIsA("TextLabel")
-            if innerLbl then innerLbl.Text = "Ult" end
+        h.ultBar.root.Visible = UltBar
+        if UltBar then
+            local pct = math.clamp(plr:GetAttribute("Ultimate") or 0,0,100)
+            local live = workspace:FindFirstChild("Live")
+            local lc = live and live:FindFirstChild(char.Name)
+            local ulted = lc and lc:GetAttribute("Ulted")==true
+            local pulse = (math.sin(os.clock()*math.pi*4)+1)/2
+            if ulted then
+                setFill(h.ultBar,1,CRIMSON_LOW,CRIMSON_HIGH,pulse)
+            elseif pct>=100 then
+                setFill(h.ultBar,1,Color3.fromRGB(255,87,87),Color3.fromRGB(255,87,87),nil)
+                h.ultBar.glow.ImageColor3 = Color3.new(1,1,1)
+                local gPulse = (math.sin(os.clock()*math.pi*4)+1)/2
+                h.ultBar.glow.ImageTransparency = 0.5 - 0.3*gPulse
+                h.ultBar.glow.Visible = true
+            else
+                setFill(h.ultBar,pct/100,Color3.fromRGB(255,87,87),Color3.fromRGB(255,87,87),nil)
+                h.ultBar.glow.ImageTransparency = 0.5
+            end
         end
-        local bar = frame:FindFirstChild("Bar", true)
-        local inner = bar:FindFirstChild("Bar", true)
-        local glow = frame:FindFirstChild("Glow", true)
-        return { root = frame, bar = bar, inner = inner, glow = glow }
-    end)()
-    local dummy = Instance.new("Frame")
-    dummy.Visible = false
-    headGuis[char] = {
-        gui = gui,
-        ping = ping,
-        pStroke = pStroke,
-        evasiveBar = evasiveBar,
-        ultBar = ultBar,
-        back = dummy, bar = dummy, glow = dummy,
-        _evasiveStart = nil
-    }
+        h.evasiveBar.root.Visible = EvasiveBar
+        if EvasiveBar then
+            local vars = h.evasiveBar
+            local live = workspace:FindFirstChild("Live")
+            local lc = live and live:FindFirstChild(char.Name)
+            local class = lc and lc:GetAttribute("Character")
+            local col = CharacterColors[class] or Color3.new(1,1,1)
+            local start = h._evasiveStart
+            if not start then
+                setFill(vars,1,col,col,nil)
+            else
+                local dt = math.min(30, tick()-start)
+                local alpha = dt/30
+                local pulse = (math.sin(os.clock()*math.pi*4)+1)/2
+                setFill(vars,alpha,col,col,pulse)
+                if dt>=30 then h._evasiveStart = nil end
+            end
+        end
+        local yPing,yEvasive,yUlt = 0,0.48,0.75
+        if not EvasiveBar and not UltBar then
+            yPing = 0.25
+        elseif not EvasiveBar and UltBar then
+            yPing,yUlt = 0.3,0.7
+        elseif EvasiveBar and not UltBar then
+            yPing,yEvasive = 0.3,0.7
+        end
+        h.ping.Position = UDim2.new(0.5,0,yPing,0)
+        h.evasiveBar.root.Position = UDim2.new(0.5,0,yEvasive,0)
+        h.ultBar.root.Position = UDim2.new(0.5,0,yUlt,0)
+    end
+else
+    mkGui = function() end
+    updGui = function() end
 end
 
-updGui = function(plr, char)
-    local h = headGuis[char]
-    if not h then return end
-    if PingBar then
-        local ms = plr:GetAttribute("Ping") or 0
-        h.ping.Text = ("%d ms"):format(ms)
-        h.ping.TextColor3 = pingColor(ms)
-        h.ping.Visible = true
-        h.pStroke.Enabled = true
-    else
-        h.ping.Visible = false
-        h.pStroke.Enabled = false
-    end
-    h.ultBar.root.Visible = UltBar
-    if UltBar then
-        local pct = math.clamp(plr:GetAttribute("Ultimate") or 0,0,100)
-        local live = workspace:FindFirstChild("Live")
-        local lc = live and live:FindFirstChild(char.Name)
-        local ulted = lc and lc:GetAttribute("Ulted")==true
-        local pulse = (math.sin(os.clock()*math.pi*4)+1)/2
-        if ulted then
-            local colLow, colHigh = CRIMSON_LOW, CRIMSON_HIGH
-            local tPulse = pulse
-            h.ultBar.inner.Size = UDim2.new(1,0,h.ultBar.inner.Size.Y.Scale,h.ultBar.inner.Size.Y.Offset)
-            h.ultBar.inner.ImageColor3 = lerp(colLow,colHigh,tPulse)
-            h.ultBar.glow.ImageColor3 = lerp(colLow,colHigh,tPulse)
-            h.ultBar.glow.ImageTransparency = 0.5 - 0.3*tPulse
-            h.ultBar.glow.Visible = true
-        elseif pct>=100 then
-            local c = Color3.fromRGB(255,87,87)
-            h.ultBar.inner.Size = UDim2.new(1,0,h.ultBar.inner.Size.Y.Scale,h.ultBar.inner.Size.Y.Offset)
-            h.ultBar.inner.ImageColor3 = c
-            h.ultBar.glow.ImageColor3 = Color3.new(1,1,1)
-            local gPulse = (math.sin(os.clock()*math.pi*4)+1)/2
-            h.ultBar.glow.ImageTransparency = 0.5 - 0.3*gPulse
-            h.ultBar.glow.Visible = true
-        else
-            local col = Color3.fromRGB(255,87,87)
-            h.ultBar.inner.Size = UDim2.new(pct/100,0,h.ultBar.inner.Size.Y.Scale,h.ultBar.inner.Size.Y.Offset)
-            h.ultBar.inner.ImageColor3 = col
-            h.ultBar.glow.ImageTransparency = 0.5
-        end
-    end
-    h.evasiveBar.root.Visible = EvasiveBar
-    if EvasiveBar then
-        local vars = h.evasiveBar
-        local live = workspace:FindFirstChild("Live")
-        local lc = live and live:FindFirstChild(char.Name)
-        local class = lc and lc:GetAttribute("Character")
-        local col = CharacterColors[class] or Color3.new(1,1,1)
-        local start = h._evasiveStart
-        if not start then
-            vars.inner.Size = UDim2.new(1,0,vars.inner.Size.Y.Scale,vars.inner.Size.Y.Offset)
-            vars.inner.ImageColor3 = col
-            vars.glow.ImageColor3 = col
-            vars.glow.ImageTransparency = 0.5
-            vars.glow.Visible = true
-        else
-            local dt = math.min(30, tick()-start)
-            local alpha = dt/30
-            local pulse = (math.sin(os.clock()*math.pi*4)+1)/2
-            vars.inner.Size = UDim2.new(alpha,0,vars.inner.Size.Y.Scale,vars.inner.Size.Y.Offset)
-            vars.inner.ImageColor3 = col
-            vars.glow.ImageColor3 = lerp(col,col,pulse)
-            vars.glow.ImageTransparency = 0.5 - 0.3*pulse
-            vars.glow.Visible = true
-            if dt>=30 then h._evasiveStart = nil end
-        end
-    end
-    local root = char.PrimaryPart or char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Head")
-    if root then
-        local camPos = Camera.CFrame.Position
-        local camDist = (camPos - root.Position).Magnitude
-        local extra = (camDist>DEAD_ZONE) and math.clamp((camDist-DEAD_ZONE)*LIFT_PER_STUD,0,MAX_LIFT) or 0
-        h.gui.StudsOffset = Vector3.new(0,BASE_HEIGHT+extra,0)
-        local lpRoot = LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")
-        if lpRoot then
-            local playerDist = (lpRoot.Position - root.Position).Magnitude
-            local t = fadeFactor(playerDist)
-            h.ping.TextTransparency = t
-            h.pStroke.Transparency = t
-            local function fadeBarLayer(obj,t2)
-                if obj then obj.ImageTransparency = t2 end
-            end
-            fadeBarLayer(h.ultBar.inner,t)
-            fadeBarLayer(h.evasiveBar.inner,t)
-            if h.ultBar.glow then
-                h.ultBar.glow.ImageTransparency = h.ultBar.glow.ImageTransparency + (1-h.ultBar.glow.ImageTransparency)*t
-            end
-            if h.evasiveBar.glow then
-                h.evasiveBar.glow.ImageTransparency = h.evasiveBar.glow.ImageTransparency + (1-h.evasiveBar.glow.ImageTransparency)*t
+local function updateGuiLift()
+    for char,h in pairs(headGuis) do
+        local root = char.PrimaryPart or char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Head")
+        if root then
+            local camPos = workspace.CurrentCamera.CFrame.Position
+            local camDist = (camPos - root.Position).Magnitude
+            local extra = (camDist>DEAD_ZONE) and math.clamp((camDist-DEAD_ZONE)*LIFT_PER_STUD,0,MAX_LIFT) or 0
+            h.gui.StudsOffset = Vector3.new(0,BASE_HEIGHT+extra,0)
+            local lpRoot = LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")
+            if lpRoot then
+                local playerDist = (lpRoot.Position - root.Position).Magnitude
+                local t = fadeFactor(playerDist)
+                h.ping.TextTransparency = t
+                h.pStroke.Transparency = t
+                if h.ultBar.inner then
+                    h.ultBar.inner.ImageTransparency = t
+                end
+                if h.evasiveBar.inner then
+                    h.evasiveBar.inner.ImageTransparency = t
+                end
+                if h.ultBar.glow then
+                    h.ultBar.glow.ImageTransparency = h.ultBar.glow.ImageTransparency + (1-h.ultBar.glow.ImageTransparency)*t
+                end
+                if h.evasiveBar.glow then
+                    h.evasiveBar.glow.ImageTransparency = h.evasiveBar.glow.ImageTransparency + (1-h.evasiveBar.glow.ImageTransparency)*t
+                end
             end
         end
     end
 end
+
+RunService.Heartbeat:Connect(updateGuiLift)
 
 if EvasiveBar then
     local liveFolder = workspace:WaitForChild("Live")
@@ -566,26 +611,23 @@ local function attachPlayer(plr)
         local function onChar(char)
             mkGui(char)
             updGui(plr,char)
-            addConn(char.AncestryChanged:Connect(function(_,parent)
-                if not parent then headGuis[char] = nil end
-            end))
-            if PingBar then
-                addConn(plr:GetAttributeChangedSignal("Ping"):Connect(function()
-                    if plr.Character then updGui(plr,plr.Character) end
-                end))
-            end
-            if UltBar then
-                addConn(plr:GetAttributeChangedSignal("Ultimate"):Connect(function()
-                    if plr.Character then updGui(plr,plr.Character) end
-                end))
-            end
-            addConn(Camera:GetPropertyChangedSignal("CFrame"):Connect(function()
-                if plr.Character then updGui(plr,plr.Character) end
-            end))
         end
         if plr.Character then onChar(plr.Character) end
         addConn(plr.CharacterAdded:Connect(onChar))
+        if PingBar then
+            addConn(plr:GetAttributeChangedSignal("Ping"):Connect(function()
+                if plr.Character then updGui(plr,plr.Character) end
+            end))
+        end
+        if UltBar then
+            addConn(plr:GetAttributeChangedSignal("Ultimate"):Connect(function()
+                if plr.Character then updGui(plr,plr.Character) end
+            end))
+        end
     end
+    addConn(plr.AncestryChanged:Connect(function(_,parent)
+        if not parent then lastTKF[plr] = nil end
+    end))
 end
 
 for _,p in ipairs(Players:GetPlayers()) do attachPlayer(p) end
@@ -617,24 +659,28 @@ local function startFollow()
         if movementConn then movementConn:Disconnect() movementConn = nil end
         if track then track:Stop() end
         animPlaying = false
+		if followToggle then
+			followToggle:SetValue(false, true)
+		end
         return
     end
-    if not hrp then return end
     local best, minD = nil, math.huge
-    for _,p in ipairs(Players:GetPlayers()) do
-        if p~=LP and p.Character then
-            local h = p.Character:FindFirstChildOfClass("Humanoid")
-            local part = p.Character:FindFirstChild("HumanoidRootPart")
-            if h and part and h.Health>0 then
-                local d = (part.Position - hrp.Position).Magnitude
-                if d<minD then
-                    minD, best = d, p
+    if hrp then
+        for _,p in ipairs(Players:GetPlayers()) do
+            if p~=LP and p.Character then
+                local h = p.Character:FindFirstChildOfClass("Humanoid")
+                local part = p.Character:FindFirstChild("HumanoidRootPart")
+                if h and part and h.Health>0 then
+                    local d = (part.Position - hrp.Position).Magnitude
+                    if d<minD then
+                        minD, best = d, p
+                    end
                 end
             end
         end
     end
-    if not best or not best.Character then return end
     target = best
+    if not target or not target.Character then return end
     local tHum = target.Character:FindFirstChildOfClass("Humanoid")
     local tHRP = target.Character:FindFirstChild("HumanoidRootPart")
     if not (tHum and tHRP) then return end
@@ -678,6 +724,7 @@ local function stopFollow()
     end
 end
 
+-- Main Tab UI
 local toggles = {
     { Name = "Anti Death Counter",    Value = AntiDeathCounter },
     { Name = "DC Spy", Value = AntiDeathCounterSpy },
@@ -690,12 +737,12 @@ local toggles = {
 for _,info in ipairs(toggles) do
     local toggle = Tabs.Main:CreateToggle(info.Name, { Title = info.Name, Default = info.Value })
     toggle:OnChanged(function(val)
-        if info.Name == "Anti Death Counter" then AntiDeathCounter    = val end
-        if info.Name == "DC Spy"             then AntiDeathCounterSpy = val end
-        if info.Name == "Ult Bar"            then UltBar              = val end
-        if info.Name == "Ping Bar"           then PingBar             = val end
-        if info.Name == "Evasive Bar"        then EvasiveBar          = val end
-        if info.Name == "Leaderboard Spy"    then LeaderboardSpy      = val end
+        if info.Name == "Anti Death Counter"    then AntiDeathCounter    = val end
+        if info.Name == "DC Spy" then AntiDeathCounterSpy = val end
+        if info.Name == "Ult Bar"              then UltBar              = val end
+        if info.Name == "Ping Bar"             then PingBar             = val end
+        if info.Name == "Evasive Bar"          then EvasiveBar          = val end
+        if info.Name == "Leaderboard Spy"      then LeaderboardSpy      = val end
     end)
 end
 
@@ -752,11 +799,9 @@ local keybind = Tabs.Main:CreateKeybind("FollowKeybind", {
         followKey = newKey
     end
 })
-
 keybind:OnClick(function()
     followToggle:SetValue(not followToggle.Value)
 end)
-
 
 SaveManager:SetLibrary(Library)
 InterfaceManager:SetLibrary(Library)
@@ -767,3 +812,9 @@ InterfaceManager:BuildInterfaceSection(Tabs.Settings)
 SaveManager:BuildConfigSection(Tabs.Settings)
 
 Window:SelectTab(1)
+
+for _,c in ipairs(conns) do
+    if c.Disconnect then
+        -- store for later but do not disconnect here
+    end
+end
