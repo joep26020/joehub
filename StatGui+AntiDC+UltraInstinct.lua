@@ -525,7 +525,10 @@ if AntiDeathCounterSpy then
 end
 local liveFolder = workspace:WaitForChild("Live")
 local function onLiveAdded(lm)
-    if lm.Name == "Weakest Dummy" and lm:FindFirstChild("DummyHandler") then
+    if lm:GetAttribute("NPC") == true then
+        return
+    end
+    if lm.Name == LP.Name then
         return
     end
     mkGui(lm)
