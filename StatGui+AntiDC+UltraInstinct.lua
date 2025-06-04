@@ -31,7 +31,7 @@ local Window = Library:CreateWindow{
     Resize = true,
     MinSize = Vector2.new(310, 200),
     Acrylic = false,
-    Theme = "Dark",
+    Theme = "Vynixu",
     MinimizeKey = Enum.KeyCode.RightControl
 }
 
@@ -869,9 +869,8 @@ end)
 
 SaveManager:SetLibrary(Library)
 InterfaceManager:SetLibrary(Library)
-SaveManager:IgnoreThemeSettings()
 InterfaceManager:SetFolder("FluentScriptHub")
-SaveManager:SetFolder("FluentScriptHub/this-game")
+SaveManager:SetFolder("FluentScriptHub/TSBgame")
 InterfaceManager:BuildInterfaceSection(Tabs.Settings)
 SaveManager:BuildConfigSection(Tabs.Settings)
 
