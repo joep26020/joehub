@@ -400,26 +400,23 @@ local function updateGuiLift()
             end
         end
 
-		if h.evasiveBar.inner then
-			if h._evasiveStart then
-				local dt = math.min(30, tick() - h._evasiveStart)
-				local alpha = dt / 30
-				local yS, yO = h.evasiveBar.inner.Size.Y.Scale, h.evasiveBar.inner.Size.Y.Offset
-				h.evasiveBar.inner.Size = UDim2.new(alpha, 0, yS, yO)
-			else
-				local yS, yO = h.evasiveBar.inner.Size.Y.Scale, h.evasiveBar.inner.Size.Y.Offset
-				h.evasiveBar.inner.Size = UDim2.new(1, 0, yS, yO)
-			end
+	if h.evasiveBar.inner then
+		if h._evasiveStart then
+			local dt = math.min(30, tick() - h._evasiveStart)
+			local alpha = dt / 30
+			local yS, yO = h.evasiveBar.inner.Size.Y.Scale, h.evasiveBar.inner.Size.Y.Offset
+			h.evasiveBar.inner.Size = UDim2.new(alpha, 0, yS, yO)
+		else
+			local yS, yO = h.evasiveBar.inner.Size.Y.Scale, h.evasiveBar.inner.Size.Y.Offset
+			h.evasiveBar.inner.Size = UDim2.new(1, 0, yS, yO)
 		end
+	end
 
-		if h.evasiveBar.glow then
-			local innerScale = h.evasiveBar.inner.Size.X.Scale
-			if innerScale < 1 and t < 1 then
-				h.evasiveBar.glow.ImageTransparency = t * (innerScale)
-			else
-				h.evasiveBar.glow.ImageTransparency = t
-			end
-		end
+	if h.evasiveBar.glow then
+		local innerScale = h.evasiveBar.inner.Size.X.Scale
+		local fillAlpha = math.clamp(innerScale, 0, 1)
+		h.evasiveBar.glow.ImageTransparency = t * (1 - fillAlpha)
+	end
     end
 end
 
