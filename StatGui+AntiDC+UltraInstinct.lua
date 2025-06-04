@@ -629,7 +629,14 @@ local function attachPlayer(plr)
 
             if EvasiveBar then
 		    local liveFolder = workspace:WaitForChild("Live")
-		
+		    local function markEvasiveStart(plrName)
+		        for char,h in pairs(headGuis) do
+		            if char.Name == plrName then
+		                h._evasiveStart = tick()
+		                return
+		            end
+		        end
+		    end
 		    local function hookEvasive(lm)
 		        addConn(lm.ChildAdded:Connect(function(child)
 		            if child.Name == "RagdollCancel" then
@@ -637,13 +644,9 @@ local function attachPlayer(plr)
 		            end
 		        end))
 		    end
-		
-		 
 		    for _, lm in ipairs(liveFolder:GetChildren()) do
 		        hookEvasive(lm)
 		    end
-		
-		   
 		    addConn(liveFolder.ChildAdded:Connect(hookEvasive))
             end
         end
