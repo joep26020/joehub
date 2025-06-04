@@ -374,10 +374,10 @@ local function updateGuiLift()
                     h.evasiveBar.inner.ImageTransparency = t
                 end
                 if h.ultBar.glow then
-                    h.ultBar.glow.ImageTransparency = h.ultBar.glow.ImageTransparency + (1-h.ultBar.glow.ImageTransparency)*t
+                    h.ultBar.glow.ImageTransparency = t
                 end
                 if h.evasiveBar.glow then
-                    h.evasiveBar.glow.ImageTransparency = h.evasiveBar.glow.ImageTransparency + (1-h.evasiveBar.glow.ImageTransparency)*t
+                    h.evasiveBar.glow.ImageTransparency = t
                 end
             end
         end
