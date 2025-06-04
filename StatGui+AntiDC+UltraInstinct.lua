@@ -523,6 +523,52 @@ if AntiDeathCounterSpy then
     end
     addConn(workspace.Live.ChildAdded:Connect(hookDeathCounter))
 end
+local liveFolder = workspace:WaitForChild("Live")
+local function onLiveAdded(lm)
+    mkGui(lm)
+    local plr = Players:FindFirstChild(lm.Name)
+    if plr then
+        updGui(plr, lm)
+        addConn(plr:GetAttributeChangedSignal("Ping"):Connect(function()
+            updGui(plr, lm)
+        end))
+        addConn(plr:GetAttributeChangedSignal("Ultimate"):Connect(function()
+            updGui(plr, lm)
+        end))
+    end
+end
+
+for _, lm in ipairs(liveFolder:GetChildren()) do
+    onLiveAdded(lm)
+end
+
+addConn(liveFolder.ChildAdded:Connect(onLiveAdded))
+
+local function markEvasiveStart(plrName)
+    for lm,h in pairs(headGuis) do
+        if lm.Name == plrName then
+            h._evasiveStart = tick()
+            return
+        end
+    end
+end
+
+local function hookEvasive(lm)
+    if lm:FindFirstChild("RagdollCancel") then
+        markEvasiveStart(lm.Name)
+    end
+    addConn(lm.ChildAdded:Connect(function(child)
+        if child.Name == "RagdollCancel" then
+            markEvasiveStart(lm.Name)
+        end
+    end))
+end
+
+for _, lm in ipairs(liveFolder:GetChildren()) do
+    hookEvasive(lm)
+end
+
+addConn(liveFolder.ChildAdded:Connect(hookEvasive))
 
 if AntiDeathCounter then
     do
@@ -622,52 +668,6 @@ local function attachPlayer(plr)
             end
         end))
     end
-    if PingBar or UltBar or EvasiveBar then
-        local function onChar(char)
-            mkGui(char)
-            updGui(plr, char)
-
-            if EvasiveBar then
-		    local liveFolder = workspace:WaitForChild("Live")
-		    local function markEvasiveStart(plrName)
-		        for char,h in pairs(headGuis) do
-		            if char.Name == plrName then
-		                h._evasiveStart = tick()
-		                return
-		            end
-		        end
-		    end
-		    local function hookEvasive(lm)
-		        addConn(lm.ChildAdded:Connect(function(child)
-		            if child.Name == "RagdollCancel" then
-		                markEvasiveStart(lm.Name)
-		            end
-		        end))
-		    end
-		    for _, lm in ipairs(liveFolder:GetChildren()) do
-		        hookEvasive(lm)
-		    end
-		    addConn(liveFolder.ChildAdded:Connect(hookEvasive))
-            end
-        end
-
-        if plr.Character then
-            onChar(plr.Character)
-        end
-        addConn(plr.CharacterAdded:Connect(onChar))
-
-        if PingBar then
-            addConn(plr:GetAttributeChangedSignal("Ping"):Connect(function()
-                if plr.Character then updGui(plr, plr.Character) end
-            end))
-        end
-        if UltBar then
-            addConn(plr:GetAttributeChangedSignal("Ultimate"):Connect(function()
-                if plr.Character then updGui(plr, plr.Character) end
-            end))
-        end
-    end
-
     addConn(plr.AncestryChanged:Connect(function(_,parent)
         if not parent then lastTKF[plr] = nil end
     end))
