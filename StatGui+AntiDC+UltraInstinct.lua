@@ -391,13 +391,7 @@ local function updateGuiLift()
         local ulted = lc and lc:GetAttribute("Ulted") == true
 
         if h.ultBar.glow then
-            if pct >= 100 or ulted then
-                local pulse = (math.sin(os.clock() * math.pi * 4) + 1) / 2
-                local pulseAlpha = 0.5 - 0.3 * pulse
-                h.ultBar.glow.ImageTransparency = math.max(pulseAlpha, t)
-            else
-                h.ultBar.glow.ImageTransparency = t
-            end
+		h.ultBar.glow.ImageTransparency = t
         end
 
 	if h.evasiveBar.inner then
