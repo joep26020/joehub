@@ -355,50 +355,76 @@ end
 
 local function updateGuiLift()
     for char,h in pairs(headGuis) do
-        local root = char.PrimaryPart or char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Head")
-        if root then
-            local camPos = workspace.CurrentCamera.CFrame.Position
-            local camDist = (camPos - root.Position).Magnitude
-            local extra = (camDist > DEAD_ZONE) and math.clamp((camDist - DEAD_ZONE) * LIFT_PER_STUD, 0, MAX_LIFT) or 0
-            h.gui.StudsOffset = Vector3.new(0, BASE_HEIGHT + extra, 0)
+        local root = char.PrimaryPart 
+                     or char:FindFirstChild("HumanoidRootPart") 
+                     or char:FindFirstChild("Head")
+        if not root then continue end
 
-            local plr = Players:FindFirstChild(char.Name)
-            if plr and LP.Character and LP.Character:FindFirstChild("HumanoidRootPart") then
-                local playerDist = (LP.Character.HumanoidRootPart.Position - root.Position).Magnitude
-                local t = fadeFactor(playerDist)
+        local camPos = workspace.CurrentCamera.CFrame.Position
+        local camDist = (camPos - root.Position).Magnitude
+        local extra = (camDist > DEAD_ZONE)
+                      and math.clamp((camDist - DEAD_ZONE) * LIFT_PER_STUD, 0, MAX_LIFT)
+                      or 0
+        h.gui.StudsOffset = Vector3.new(0, BASE_HEIGHT + extra, 0)
 
-                h.ping.TextTransparency = t
-                h.pStroke.Transparency = t
+        local plr = Players:FindFirstChild(char.Name)
+        if not (plr and LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")) then
+            continue
+        end
 
-                if h.ultBar.inner then
-                    h.ultBar.inner.ImageTransparency = t
-                end
-                if h.evasiveBar.inner then
-                    h.evasiveBar.inner.ImageTransparency = t
-                end
+        local playerDist = (LP.Character.HumanoidRootPart.Position - root.Position).Magnitude
+        local t = fadeFactor(playerDist)
 
-                local pct = plr:GetAttribute("Ultimate") or 0
-                local live = workspace:FindFirstChild("Live")
-                local lc = live and live:FindFirstChild(char.Name)
-                local ulted = lc and lc:GetAttribute("Ulted") == true
+        h.ping.TextTransparency = t
+        h.pStroke.Transparency = t
 
-                if h.ultBar.glow then
-                    if pct >= 100 or ulted then
-                        local pulse = (math.sin(os.clock() * math.pi * 4) + 1) / 2
-                        local pulseAlpha = 0.5 - 0.3 * pulse
-                        h.ultBar.glow.ImageTransparency = math.max(pulseAlpha, t)
-                    else
-                        h.ultBar.glow.ImageTransparency = t
-                    end
-                end
+        if h.ultBar.inner then
+            h.ultBar.inner.ImageTransparency = t
+        end
+        if h.evasiveBar.inner then
+            h.evasiveBar.inner.ImageTransparency = t
+        end
 
-                if h.evasiveBar.glow then
-                    h.evasiveBar.glow.ImageTransparency = t
-                end
+        local pct = plr:GetAttribute("Ultimate") or 0
+        local live = workspace:FindFirstChild("Live")
+        local lc  = live and live:FindFirstChild(char.Name)
+        local ulted = lc and lc:GetAttribute("Ulted") == true
+
+        if h.ultBar.glow then
+            if pct >= 100 or ulted then
+                local pulse = (math.sin(os.clock() * math.pi * 4) + 1) / 2
+                local pulseAlpha = 0.5 - 0.3 * pulse
+                h.ultBar.glow.ImageTransparency = math.max(pulseAlpha, t)
+            else
+                h.ultBar.glow.ImageTransparency = t
             end
         end
+
+		if h.evasiveBar.inner then
+			if h._evasiveStart then
+				local dt = math.min(30, tick() - h._evasiveStart)
+				local alpha = dt / 30
+				local yS, yO = h.evasiveBar.inner.Size.Y.Scale, h.evasiveBar.inner.Size.Y.Offset
+				h.evasiveBar.inner.Size = UDim2.new(alpha, 0, yS, yO)
+			else
+				local yS, yO = h.evasiveBar.inner.Size.Y.Scale, h.evasiveBar.inner.Size.Y.Offset
+				h.evasiveBar.inner.Size = UDim2.new(1, 0, yS, yO)
+			end
+		end
+
+		if h.evasiveBar.glow then
+			local innerScale = h.evasiveBar.inner.Size.X.Scale
+			if innerScale < 1 then
+				h.evasiveBar.glow.ImageTransparency = .7
+			else
+				h.evasiveBar.glow.ImageTransparency = t
+			end
+		end
     end
 end
+
+RunService.Heartbeat:Connect(updateGuiLift)
+
 
 
 
@@ -406,13 +432,14 @@ RunService.Heartbeat:Connect(updateGuiLift)
 
 if EvasiveBar then
     local liveFolder = workspace:WaitForChild("Live")
-    local function markEvasiveStart(plrName)
-        for char,g in pairs(headGuis) do
-            if char.Name == plrName then
-                g._evasiveStart = tick()
-            end
-        end
-    end
+	local function markEvasiveStart(plrName)
+		for char,h in pairs(headGuis) do
+			if char.Name == plrName then
+				h._evasiveStart = tick()
+				return
+			end
+		end
+	end
     for _,lm in ipairs(liveFolder:GetChildren()) do
         addConn(lm.ChildAdded:Connect(function(child)
             if child.Name=="RagdollCancel" then markEvasiveStart(lm.Name) end
@@ -628,21 +655,40 @@ local function attachPlayer(plr)
     if PingBar or UltBar or EvasiveBar then
         local function onChar(char)
             mkGui(char)
-            updGui(plr,char)
+            updGui(plr, char)
+
+            if EvasiveBar then
+                local liveFolder = workspace:WaitForChild("Live")
+                spawn(function()
+                    local lm = liveFolder:WaitForChild(plr.Name, 5)
+                    if lm then
+                        addConn(lm.ChildAdded:Connect(function(child)
+                            if child.Name == "RagdollCancel" then
+                                markEvasiveStart(plr.Name)
+                            end
+                        end))
+                    end
+                end)
+            end
         end
-        if plr.Character then onChar(plr.Character) end
+
+        if plr.Character then
+            onChar(plr.Character)
+        end
         addConn(plr.CharacterAdded:Connect(onChar))
+
         if PingBar then
             addConn(plr:GetAttributeChangedSignal("Ping"):Connect(function()
-                if plr.Character then updGui(plr,plr.Character) end
+                if plr.Character then updGui(plr, plr.Character) end
             end))
         end
         if UltBar then
             addConn(plr:GetAttributeChangedSignal("Ultimate"):Connect(function()
-                if plr.Character then updGui(plr,plr.Character) end
+                if plr.Character then updGui(plr, plr.Character) end
             end))
         end
     end
+
     addConn(plr.AncestryChanged:Connect(function(_,parent)
         if not parent then lastTKF[plr] = nil end
     end))
@@ -833,6 +879,5 @@ Window:SelectTab(1)
 
 for _,c in ipairs(conns) do
     if c.Disconnect then
-        -- store for later but do not disconnect here
     end
 end
