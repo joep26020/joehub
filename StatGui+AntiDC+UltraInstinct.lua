@@ -359,23 +359,39 @@ local function updateGuiLift()
         if root then
             local camPos = workspace.CurrentCamera.CFrame.Position
             local camDist = (camPos - root.Position).Magnitude
-            local extra = (camDist>DEAD_ZONE) and math.clamp((camDist-DEAD_ZONE)*LIFT_PER_STUD,0,MAX_LIFT) or 0
-            h.gui.StudsOffset = Vector3.new(0,BASE_HEIGHT+extra,0)
-            local lpRoot = LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")
-            if lpRoot then
-                local playerDist = (lpRoot.Position - root.Position).Magnitude
+            local extra = (camDist > DEAD_ZONE) and math.clamp((camDist - DEAD_ZONE) * LIFT_PER_STUD, 0, MAX_LIFT) or 0
+            h.gui.StudsOffset = Vector3.new(0, BASE_HEIGHT + extra, 0)
+
+            local plr = Players:FindFirstChild(char.Name)
+            if plr and LP.Character and LP.Character:FindFirstChild("HumanoidRootPart") then
+                local playerDist = (LP.Character.HumanoidRootPart.Position - root.Position).Magnitude
                 local t = fadeFactor(playerDist)
+
                 h.ping.TextTransparency = t
                 h.pStroke.Transparency = t
+
                 if h.ultBar.inner then
                     h.ultBar.inner.ImageTransparency = t
                 end
                 if h.evasiveBar.inner then
                     h.evasiveBar.inner.ImageTransparency = t
                 end
+
+                local pct = plr:GetAttribute("Ultimate") or 0
+                local live = workspace:FindFirstChild("Live")
+                local lc = live and live:FindFirstChild(char.Name)
+                local ulted = lc and lc:GetAttribute("Ulted") == true
+
                 if h.ultBar.glow then
-                    h.ultBar.glow.ImageTransparency = t
+                    if pct >= 100 or ulted then
+                        local pulse = (math.sin(os.clock() * math.pi * 4) + 1) / 2
+                        local pulseAlpha = 0.5 - 0.3 * pulse
+                        h.ultBar.glow.ImageTransparency = math.max(pulseAlpha, t)
+                    else
+                        h.ultBar.glow.ImageTransparency = t
+                    end
                 end
+
                 if h.evasiveBar.glow then
                     h.evasiveBar.glow.ImageTransparency = t
                 end
@@ -383,6 +399,8 @@ local function updateGuiLift()
         end
     end
 end
+
+
 
 RunService.Heartbeat:Connect(updateGuiLift)
 
