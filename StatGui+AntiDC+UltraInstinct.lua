@@ -422,33 +422,6 @@ end
 
 RunService.Heartbeat:Connect(updateGuiLift)
 
-
-
-
-RunService.Heartbeat:Connect(updateGuiLift)
-
-if EvasiveBar then
-    local liveFolder = workspace:WaitForChild("Live")
-	local function markEvasiveStart(plrName)
-		for char,h in pairs(headGuis) do
-			if char.Name == plrName then
-				h._evasiveStart = tick()
-				return
-			end
-		end
-	end
-    for _,lm in ipairs(liveFolder:GetChildren()) do
-        addConn(lm.ChildAdded:Connect(function(child)
-            if child.Name=="RagdollCancel" then markEvasiveStart(lm.Name) end
-        end))
-    end
-    addConn(liveFolder.ChildAdded:Connect(function(lm)
-        addConn(lm.ChildAdded:Connect(function(child)
-            if child.Name=="RagdollCancel" then markEvasiveStart(lm.Name) end
-        end))
-    end))
-end
-
 if AntiDeathCounterSpy then
     local liveFolder = workspace:WaitForChild("Live")
     local function highlightFor10sec(model)
