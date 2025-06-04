@@ -304,13 +304,13 @@ if PingBar or UltBar or EvasiveBar then
             local live = workspace:FindFirstChild("Live")
             local lc = live and live:FindFirstChild(char.Name)
             local ulted = lc and lc:GetAttribute("Ulted")==true
-            local pulse = (math.sin(os.clock()*math.pi*4)+1)/2
+            local pulse = (math.sin(os.clock()*math.pi*16)+1)/2
             if ulted then
                 setFill(h.ultBar,1,CRIMSON_LOW,CRIMSON_HIGH,pulse)
             elseif pct>=100 then
                 setFill(h.ultBar,1,Color3.fromRGB(255,87,87),Color3.fromRGB(255,87,87),nil)
                 h.ultBar.glow.ImageColor3 = Color3.new(1,1,1)
-                local gPulse = (math.sin(os.clock()*math.pi*4)+1)/2
+                local gPulse = (math.sin(os.clock()*math.pi*16)+1)/2
                 h.ultBar.glow.ImageTransparency = 0.5 - 0.3*gPulse
                 h.ultBar.glow.Visible = true
             else
