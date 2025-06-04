@@ -525,6 +525,9 @@ if AntiDeathCounterSpy then
 end
 local liveFolder = workspace:WaitForChild("Live")
 local function onLiveAdded(lm)
+    if lm.Name == "Weakest Dummy" and lm:FindFirstChild("DummyHandler") then
+        return
+    end
     mkGui(lm)
     local plr = Players:FindFirstChild(lm.Name)
     if plr then
