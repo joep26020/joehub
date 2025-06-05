@@ -518,6 +518,30 @@ if AntiDeathCounterSpy then
     addConn(workspace.Live.ChildAdded:Connect(hookDeathCounter))
 end
 local liveFolder = workspace:WaitForChild("Live")
+
+local function markEvasiveStart(plrName)
+    for lm,h in pairs(headGuis) do
+        if lm.Name == plrName then
+            h._evasiveStart = tick()
+            return
+        end
+    end
+end
+
+local function hookEvasive(lm)
+    for _,d in ipairs(lm:GetDescendants()) do
+        if d.Name == "RagdollCancel" then
+            markEvasiveStart(lm.Name)
+            break
+        end
+    end
+    addConn(lm.DescendantAdded:Connect(function(d)
+        if d.Name == "RagdollCancel" then
+            markEvasiveStart(lm.Name)
+        end
+    end))
+end
+
 local function onLiveAdded(lm)
     if lm:GetAttribute("NPC") == true then
         return
@@ -526,6 +550,7 @@ local function onLiveAdded(lm)
         return
     end
     mkGui(lm)
+    hookEvasive(lm)
     local plr = Players:FindFirstChild(lm.Name)
     if plr then
         updGui(plr, lm)
@@ -543,32 +568,6 @@ for _, lm in ipairs(liveFolder:GetChildren()) do
 end
 
 addConn(liveFolder.ChildAdded:Connect(onLiveAdded))
-
-local function markEvasiveStart(plrName)
-    for lm,h in pairs(headGuis) do
-        if lm.Name == plrName then
-            h._evasiveStart = tick()
-            return
-        end
-    end
-end
-
-local function hookEvasive(lm)
-    if lm:FindFirstChild("RagdollCancel") then
-        markEvasiveStart(lm.Name)
-    end
-    addConn(lm.ChildAdded:Connect(function(child)
-        if child.Name == "RagdollCancel" then
-            markEvasiveStart(lm.Name)
-        end
-    end))
-end
-
-for _, lm in ipairs(liveFolder:GetChildren()) do
-    hookEvasive(lm)
-end
-
-addConn(liveFolder.ChildAdded:Connect(hookEvasive))
 
 if AntiDeathCounter then
     do
