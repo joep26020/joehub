@@ -359,6 +359,7 @@ end
 
 local function updateGuiLift()
     for char,h in pairs(headGuis) do
+        h.evasiveBar.root.Visible = EvasiveBar
         local root = char.PrimaryPart 
                      or char:FindFirstChild("HumanoidRootPart") 
                      or char:FindFirstChild("Head")
