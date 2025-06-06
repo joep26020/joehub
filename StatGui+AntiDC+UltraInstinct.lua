@@ -536,6 +536,9 @@ local function onLiveAdded(lm)
         addConn(plr:GetAttributeChangedSignal("Ultimate"):Connect(function()
             updGui(plr, lm)
         end))
+	    addConn(lm:GetAttributeChangedSignal("JustEvasived"):Connect(function()
+	        updGui(plr, lm)
+	    end))
     end
 end
 
