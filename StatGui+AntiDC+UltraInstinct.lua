@@ -225,22 +225,21 @@ local function newMagicBar(parentGui,label,yScale)
     return { root = frame, bar = bar, inner = inner, glow = glow }
 end
 
+-- 1. Replace setFill entirely with this:
 local function setFill(t, alpha, colLow, colHigh, pulse)
     if t.bar then
-        local yS,yO = t.bar.Size.Y.Scale, t.bar.Size.Y.Offset
-        t.bar.Size = UDim2.new(1,0,yS,yO)
-        if t.bar then t.bar.ImageTransparency = 1 end
+        t.bar.Size = UDim2.new(1, 0, t.bar.Size.Y.Scale, t.bar.Size.Y.Offset)
+        t.bar.ImageTransparency = 1
     end
     local col = (pulse and lerp(colLow, colHigh, pulse)) or colLow
     if t.inner then
-        local yS,yO = t.inner.Size.Y.Scale, t.inner.Size.Y.Offset
-        t.inner.Size = UDim2.new(alpha,0,yS,yO)
+        -- fill horizontally (X = alpha, Y stays full)
+        t.inner.Size = UDim2.new(alpha, 0, 1, 0)
         t.inner.ImageColor3 = col
     end
     if t.glow then
         t.glow.ImageColor3 = col
-        local baseT, osc = 0.5, (pulse or 0)
-        t.glow.ImageTransparency = baseT - 0.3*osc
+        t.glow.ImageTransparency = 0.5 - 0.3*(pulse or 0)
         t.glow.Visible = true
     end
 end
@@ -318,24 +317,29 @@ if PingBar or UltBar or EvasiveBar then
                 h.ultBar.glow.ImageTransparency = 0.5
             end
         end
-        h.evasiveBar.root.Visible = EvasiveBar
-        if EvasiveBar then
-            local vars = h.evasiveBar
-            local live = workspace:FindFirstChild("Live")
-            local lc = live and live:FindFirstChild(char.Name)
-            local class = lc and lc:GetAttribute("Character")
-            local col = CharacterColors[class] or Color3.new(1,1,1)
-            local start = h._evasiveStart
-            if not start then
-                setFill(vars,1,col,col,nil)
-            else
-                local dt = math.min(30, tick()-start)
-                local alpha = dt/30
-                local pulse = (math.sin(os.clock()*math.pi*4)+1)/2
-                setFill(vars,alpha,col,col,pulse)
-                if dt>=30 then h._evasiveStart = nil end
-            end
-        end
+	h.evasiveBar.root.Visible = EvasiveBar
+	if EvasiveBar then
+	    local vars = h.evasiveBar
+	    local live = workspace:FindFirstChild("Live")
+	    local lc = live and live:FindFirstChild(char.Name)
+	    local class = lc and lc:GetAttribute("Character")
+	    local col = CharacterColors[class] or Color3.new(1,1,1)
+	
+	    local startTime = h._evasiveStart
+	    if not startTime then
+	        -- no cooldown → full bar, hide glow
+	        setFill(vars, 1, col, col, nil)
+	        if vars.glow then vars.glow.Visible = false end
+	    else
+	        local dt = math.min(30, tick() - startTime)
+	        local alpha = dt / 30
+	        local pulse = (math.sin(os.clock() * math.pi * 4) + 1) / 2
+	        setFill(vars, alpha, col, col, pulse)
+	        if dt >= 30 then
+	            h._evasiveStart = nil
+	        end
+	    end
+	end
         local yPing,yEvasive,yUlt = 0,0.48,0.75
         if not EvasiveBar and not UltBar then
             yPing = 0.25
@@ -395,15 +399,13 @@ local function updateGuiLift()
         end
 
 	if h.evasiveBar.inner then
-		if h._evasiveStart then
-			local dt = math.min(30, tick() - h._evasiveStart)
-			local alpha = dt / 30
-			local yS, yO = h.evasiveBar.inner.Size.Y.Scale, h.evasiveBar.inner.Size.Y.Offset
-			h.evasiveBar.inner.Size = UDim2.new(alpha, 0, yS, yO)
-		else
-			local yS, yO = h.evasiveBar.inner.Size.Y.Scale, h.evasiveBar.inner.Size.Y.Offset
-			h.evasiveBar.inner.Size = UDim2.new(1, 0, yS, yO)
-		end
+	    local alpha = 1
+	    if h._evasiveStart then
+	        local dt = math.min(30, tick() - h._evasiveStart)
+	        alpha = dt / 30
+	    end
+	    -- horizontal fill
+	    h.evasiveBar.inner.Size = UDim2.new(alpha, 0, 1, 0)
 	end
 
 	if h.evasiveBar.glow then
