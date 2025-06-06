@@ -325,16 +325,12 @@ if PingBar or UltBar or EvasiveBar then
             local live = workspace:FindFirstChild("Live")
             local lc = live and live:FindFirstChild(char.Name)
             local class = lc and lc:GetAttribute("Character")
-            local col = CharacterColors[class] or Color3.new(1,1,1)
-            local start = lc and lc:GetAttribute("JustEvasived")
-	    if start ~= nil then
-		local dt = math.min(30, tick() - start)
-		local alpha = dt / 30
-		local pulse = (math.sin(os.clock() * math.pi * 4) + 1) / 2
-		setFill(vars, alpha, col, col, pulse)
-	    else
-		setFill(vars, 1, col, col, nil)
-	    end
+	    local col = CharacterColors[class] or Color3.new(1,1,1)
+	    local start = lc and (lc:GetAttribute("JustEvasived") or 0)
+	    local dt = math.min(30, tick() - start)
+	    local alpha = dt / 30
+	    local pulse = (start > 0) and ((math.sin(os.clock() * math.pi * 4) + 1) / 2) or nil
+	    setFill(vars, alpha, col, col, pulse)
         end
         local yPing,yEvasive,yUlt = 0,0.48,0.75
         if not EvasiveBar and not UltBar then
