@@ -357,22 +357,6 @@ else
     updGui = function() end
 end
 
-local function bindPlayerSignals(plr, lm)
-    -- first update
-    updGui(plr, lm)
-
-    -- hook attribute changes
-    addConn(plr:GetAttributeChangedSignal("Ping"):Connect(function()
-        updGui(plr, lm)
-    end))
-    addConn(plr:GetAttributeChangedSignal("Ultimate"):Connect(function()
-        updGui(plr, lm)
-    end))
-    addConn(lm:GetAttributeChangedSignal("JustEvasived"):Connect(function()
-        updGui(plr, lm)
-    end))
-end
-
 local function updateGuiLift()
     for char,h in pairs(headGuis) do
         h.evasiveBar.root.Visible = EvasiveBar
@@ -541,28 +525,48 @@ if AntiDeathCounterSpy then
 end
 local liveFolder = workspace:WaitForChild("Live")
 
+local function setupGuiAndSignals(plr, lm)
+    -- Create GUI for the model
+    mkGui(lm)
+    -- Immediately update the GUI
+    updGui(plr, lm)
+
+    -- Set up attribute change listeners
+    local function connectAttributeChange(attrName)
+        addConn(plr:GetAttributeChangedSignal(attrName):Connect(function()
+            updGui(plr, lm)
+        end))
+    end
+
+    connectAttributeChange("Ping")
+    connectAttributeChange("Ultimate")
+    connectAttributeChange("JustEvasived")
+end
+
 
 local function onLiveAdded(lm)
-    if lm:GetAttribute("NPC") == true then
-        return
-    end
-    if lm.Name == LP.Name then
-        return
-    end
+    if lm:GetAttribute("NPC") == true then return end
+    if lm.Name == LP.Name then return end
+
+    -- create GUI
     mkGui(lm)
+
+    -- Once GUI is created, find matching Player
     local plr = Players:FindFirstChild(lm.Name)
-	if plr then
-	    bindPlayerSignals(plr, lm)
-	else
-	    local tmp
-	    tmp = Players.PlayerAdded:Connect(function(newPlr)
-	        if newPlr.Name == lm.Name then
-	            bindPlayerSignals(newPlr, lm)
-	            tmp:Disconnect()
-	        end
-	    end)
-	end
+    if plr then
+        setupGuiAndSignals(plr, lm)
+    else
+        -- wait for player object if missing
+        local tmp
+        tmp = Players.PlayerAdded:Connect(function(newPlr)
+            if newPlr.Name == lm.Name then
+                setupGuiAndSignals(newPlr, lm)
+                tmp:Disconnect()
+            end
+        end)
+    end
 end
+
 
 for _, lm in ipairs(liveFolder:GetChildren()) do
     onLiveAdded(lm)
