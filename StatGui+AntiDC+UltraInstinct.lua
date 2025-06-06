@@ -274,8 +274,8 @@ if PingBar or UltBar or EvasiveBar then
         local ultBar     = newMagicBar(gui,"Ult",0.75)
         local dummy = Instance.new("Frame")
         dummy.Visible = false
-	evasiveBar.root.Visible = true
-	ultBar.root.Visible     = true
+	evasiveBar.root.Visible = EvasiveBar
+	ultBar.root.Visible     = UltBar
         headGuis[char] = {
             gui = gui,
             ping = ping,
