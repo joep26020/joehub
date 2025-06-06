@@ -329,10 +329,10 @@ if PingBar or UltBar or EvasiveBar then
 		local attr  = lc and lc:GetAttribute("JustEvasived")
 		
 		if attr == nil then
-		    -- no “JustEvasived” yet → bar is full
+	
 		    setFill(vars, 1, col, col, nil)
 		else
-		    -- attribute exists → fade out over 30 seconds
+
 		    local dt    = math.min(30, tick() - attr)
 		    local alpha = dt / 30
 		    local pulse = (math.sin(os.clock() * math.pi * 4) + 1) / 2
@@ -355,6 +355,22 @@ if PingBar or UltBar or EvasiveBar then
 else
     mkGui = function() end
     updGui = function() end
+end
+
+local function bindPlayerSignals(plr, lm)
+    -- first update
+    updGui(plr, lm)
+
+    -- hook attribute changes
+    addConn(plr:GetAttributeChangedSignal("Ping"):Connect(function()
+        updGui(plr, lm)
+    end))
+    addConn(plr:GetAttributeChangedSignal("Ultimate"):Connect(function()
+        updGui(plr, lm)
+    end))
+    addConn(lm:GetAttributeChangedSignal("JustEvasived"):Connect(function()
+        updGui(plr, lm)
+    end))
 end
 
 local function updateGuiLift()
@@ -535,18 +551,17 @@ local function onLiveAdded(lm)
     end
     mkGui(lm)
     local plr = Players:FindFirstChild(lm.Name)
-    if plr then
-        updGui(plr, lm)
-        addConn(plr:GetAttributeChangedSignal("Ping"):Connect(function()
-            updGui(plr, lm)
-        end))
-        addConn(plr:GetAttributeChangedSignal("Ultimate"):Connect(function()
-            updGui(plr, lm)
-        end))
-	addConn(lm:GetAttributeChangedSignal("JustEvasived"):Connect(function()
-	    updGui(plr, lm)
-	end))
-    end
+	if plr then
+	    bindPlayerSignals(plr, lm)
+	else
+	    local tmp
+	    tmp = Players.PlayerAdded:Connect(function(newPlr)
+	        if newPlr.Name == lm.Name then
+	            bindPlayerSignals(newPlr, lm)
+	            tmp:Disconnect()
+	        end
+	    end)
+	end
 end
 
 for _, lm in ipairs(liveFolder:GetChildren()) do
