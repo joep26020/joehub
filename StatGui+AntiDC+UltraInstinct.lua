@@ -412,7 +412,7 @@ local function updateGuiLift()
 	    local innerScale = h.evasiveBar.inner.Size.X.Scale
 	    local baseT = (1 - innerScale) * 0.8
 	    h.evasiveBar.glow.ImageTransparency = math.max(t, baseT)
-	    h.evasiveBar.glow.Visible = (innerScale < 1)
+	    h.evasiveBar.glow.Visible = true
 	end
     end
 end
