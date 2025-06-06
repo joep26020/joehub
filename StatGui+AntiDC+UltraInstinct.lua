@@ -327,14 +327,14 @@ if PingBar or UltBar or EvasiveBar then
             local class = lc and lc:GetAttribute("Character")
             local col = CharacterColors[class] or Color3.new(1,1,1)
             local start = lc and lc:GetAttribute("JustEvasived")
-            if start then
-                local dt = math.min(30, tick()-start)
-                local alpha = dt/30
-                local pulse = (math.sin(os.clock()*math.pi*4)+1)/2
-                setFill(vars,alpha,col,col,pulse)
-            else
-                setFill(vars,1,col,col,nil)
-            end
+	    if start ~= nil then
+		local dt = math.min(30, tick() - start)
+		local alpha = dt / 30
+		local pulse = (math.sin(os.clock() * math.pi * 4) + 1) / 2
+		setFill(vars, alpha, col, col, pulse)
+	    else
+		setFill(vars, 1, col, col, nil)
+	    end
         end
         local yPing,yEvasive,yUlt = 0,0.48,0.75
         if not EvasiveBar and not UltBar then
