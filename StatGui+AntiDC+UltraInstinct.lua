@@ -327,8 +327,8 @@ if PingBar or UltBar or EvasiveBar then
 	
 	    local startTime = h._evasiveStart
 	    if not startTime then
-	        -- no cooldown → full bar, hide glow
 	        setFill(vars, 1, col, col, nil)
+		vars.glow.Visible = true
 	    else
 	        local dt = math.min(30, tick() - startTime)
 	        local alpha = dt / 30
