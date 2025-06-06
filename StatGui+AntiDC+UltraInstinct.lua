@@ -320,26 +320,27 @@ if PingBar or UltBar or EvasiveBar then
             end
         end
         h.evasiveBar.root.Visible = EvasiveBar
-        if EvasiveBar then
-            local vars = h.evasiveBar
-            local live = workspace:FindFirstChild("Live")
-            local lc = live and live:FindFirstChild(char.Name)
-            local class = lc and lc:GetAttribute("Character")
-		local col   = CharacterColors[class] or Color3.new(1,1,1)
-		local attr  = lc and lc:GetAttribute("JustEvasived")
-		
-		if attr == nil then
+	if EvasiveBar then
+	    local vars = h.evasiveBar
+	    local live = workspace:FindFirstChild("Live")
+	    local lc = live and live:FindFirstChild(char.Name)
+	    local class = lc and lc:GetAttribute("Character")
+	    local col   = CharacterColors[class] or Color3.new(1,1,1)
 	
-		    setFill(vars, 1, col, col, nil)
-		else
-
-		    local dt    = math.min(30, tick() - attr)
-		    local alpha = dt / 30
-		    local pulse = (math.sin(os.clock() * math.pi * 4) + 1) / 2
-		    setFill(vars, alpha, col, col, pulse)
-		end
-
-        end
+	    if lc and lc:HasAttribute("JustEvasived") then
+	        local attr = lc:GetAttribute("JustEvasived")
+	        local dt    = math.min(30, tick() - attr)
+	        local alpha = dt / 30
+	        local pulse = (math.sin(os.clock() * math.pi * 4) + 1) / 2
+	        setFill(vars, alpha, col, col, pulse)
+	    else
+	        -- no JustEvasived attribute → ability is ready, show full bar without glow
+	        setFill(vars, 1, col, col, nil)
+	        if vars.glow then
+	            vars.glow.Visible = false
+	        end
+	    end
+	end
         local yPing,yEvasive,yUlt = 0,0.48,0.75
         if not EvasiveBar and not UltBar then
             yPing = 0.25
@@ -399,23 +400,22 @@ local function updateGuiLift()
 		h.ultBar.glow.ImageTransparency = t
         end
 
-        if h.evasiveBar.inner then
-                local start = lc and lc:GetAttribute("JustEvasived")
-                local alpha
-                if start then
-                        local dt = math.min(30, tick() - start)
-                        alpha = dt / 30
-                else
-                        alpha = 1
-                end
-                local yS, yO = h.evasiveBar.inner.Size.Y.Scale, h.evasiveBar.inner.Size.Y.Offset
-                h.evasiveBar.inner.Size = UDim2.new(alpha, 0, yS, yO)
-        end
+	if h.evasiveBar.inner then
+	    local alpha = 1
+	    if lc and lc:HasAttribute("JustEvasived") then
+	        local start = lc:GetAttribute("JustEvasived")
+	        local dt = math.min(30, tick() - start)
+	        alpha = dt / 30
+	    end
+	    -- set width full (1), height = alpha
+	    h.evasiveBar.inner.Size = UDim2.new(1, 0, alpha, 0)
+	end
 
 	if h.evasiveBar.glow then
-	    local innerScale = h.evasiveBar.inner.Size.X.Scale
-	    local baseT = (1 - innerScale) * 0.8
+	    -- hide glow unless on cooldown; transparency scales with remaining height
+	    local baseT = (1 - h.evasiveBar.inner.Size.Y.Scale) * 0.8
 	    h.evasiveBar.glow.ImageTransparency = math.max(t, baseT)
+	    h.evasiveBar.glow.Visible = (h.evasiveBar.inner.Size.Y.Scale < 1)
 	end
     end
 end
