@@ -42,6 +42,7 @@ local Tabs = {
 
 local conns = {}
 local headGuis = {}
+local guiByName = {}
 local lastTKF = {}
 local hiddenKills = {}
 
@@ -248,7 +249,7 @@ local mkGui, updGui
 
 if PingBar or UltBar or EvasiveBar then
     mkGui = function(char)
-        local head = char:FindFirstChild("Head") or char:WaitForChild("Head",2)
+        local head = char:FindFirstChild("Head") or char:WaitForChild("Head",10)
         if not head then return end
         if head:FindFirstChild("_StatGui") then head._StatGui:Destroy() end
         local gui = Instance.new("BillboardGui", head)
@@ -273,15 +274,24 @@ if PingBar or UltBar or EvasiveBar then
         local ultBar     = newMagicBar(gui,"Ult",0.75)
         local dummy = Instance.new("Frame")
         dummy.Visible = false
-        headGuis[char] = {
+        local data = {
             gui = gui,
             ping = ping,
             pStroke = pStroke,
             evasiveBar = evasiveBar,
             ultBar = ultBar,
             back = dummy, bar = dummy, glow = dummy,
-            _evasiveStart = nil
+            _evasiveStart = nil,
+            evasiveCol = Color3.new(1,1,1)
         }
+        headGuis[char] = data
+        guiByName[char.Name] = data
+        char.Destroying:Once(function()
+            headGuis[char] = nil
+            if guiByName[char.Name] == data then
+                guiByName[char.Name] = nil
+            end
+        end)
     end
 
     updGui = function(plr, char)
@@ -317,28 +327,21 @@ if PingBar or UltBar or EvasiveBar then
                 h.ultBar.glow.ImageTransparency = 0.5
             end
         end
-	h.evasiveBar.root.Visible = EvasiveBar
-	if EvasiveBar then
-	    local vars = h.evasiveBar
-	    local live = workspace:FindFirstChild("Live")
-	    local lc = live and live:FindFirstChild(char.Name)
-	    local class = lc and lc:GetAttribute("Character")
-	    local col = CharacterColors[class] or Color3.new(1,1,1)
-	
-	    local startTime = h._evasiveStart
-	    if not startTime then
-	        setFill(vars, 1, col, col, nil)
-		vars.glow.Visible = true
-	    else
-	        local dt = math.min(30, tick() - startTime)
-	        local alpha = dt / 30
-	        local pulse = (math.sin(os.clock() * math.pi * 4) + 1) / 2
-	        setFill(vars, alpha, col, col, pulse)
-	        if dt >= 30 then
-	            h._evasiveStart = nil
-	        end
-	    end
-	end
+        h.evasiveBar.root.Visible = EvasiveBar
+        if EvasiveBar then
+            local live = workspace:FindFirstChild("Live")
+            local lc = live and live:FindFirstChild(char.Name)
+            local class = lc and lc:GetAttribute("Character")
+            local col = CharacterColors[class] or Color3.new(1,1,1)
+            h.evasiveCol = col
+            if h.evasiveBar.inner then
+                h.evasiveBar.inner.ImageColor3 = col
+            end
+            if h.evasiveBar.glow then
+                h.evasiveBar.glow.ImageColor3 = col
+                h.evasiveBar.glow.Visible = true
+            end
+        end
         local yPing,yEvasive,yUlt = 0,0.48,0.75
         if not EvasiveBar and not UltBar then
             yPing = 0.25
@@ -397,22 +400,26 @@ local function updateGuiLift()
 		h.ultBar.glow.ImageTransparency = t
         end
 
-	if h.evasiveBar.inner then
-	    local alpha = 1
-	    if h._evasiveStart then
-	        local dt = math.min(30, tick() - h._evasiveStart)
-	        alpha = dt / 30
-	    end
-	    -- horizontal fill
-	    h.evasiveBar.inner.Size = UDim2.new(alpha, 0, 1, 0)
-	end
+        if h.evasiveBar.inner then
+            local alpha = 1
+            local pulse
+            if h._evasiveStart then
+                local dt = math.min(30, tick() - h._evasiveStart)
+                alpha = dt / 30
+                pulse = (math.sin(os.clock() * math.pi * 4) + 1) / 2
+                if dt >= 30 then
+                    h._evasiveStart = nil
+                end
+            end
+            local col = h.evasiveCol or Color3.new(1,1,1)
+            setFill(h.evasiveBar, alpha, col, col, pulse)
+        end
 
-	if h.evasiveBar.glow then
-	    local innerScale = h.evasiveBar.inner.Size.X.Scale
-	    local baseT = (1 - innerScale) * 0.8
-	    h.evasiveBar.glow.ImageTransparency = math.max(t, baseT)
-	    -- no explicit `glow.Visible = true` here
-	end
+        if h.evasiveBar.glow then
+            local innerScale = h.evasiveBar.inner.Size.X.Scale
+            local baseT = (1 - innerScale) * 0.8
+            h.evasiveBar.glow.ImageTransparency = math.max(t, baseT)
+        end
     end
 end
 
@@ -521,27 +528,24 @@ if AntiDeathCounterSpy then
 end
 local liveFolder = workspace:WaitForChild("Live")
 
-local function markEvasiveStart(plrName)
-    for lm,h in pairs(headGuis) do
-        if lm.Name == plrName then
-            h._evasiveStart = tick()
-            return
-        end
+local function markEvasiveStart(model)
+    local h = headGuis[model]
+    if h then
+        h._evasiveStart = tick()
     end
 end
 
 local function hookEvasive(lm)
-    for _,d in ipairs(lm:GetDescendants()) do
-        if d.Name == "RagdollCancel" then
-            markEvasiveStart(lm.Name)
-            break
+    local function check(node)
+        if node.Name == "RagdollCancel" then
+            markEvasiveStart(lm)
         end
     end
-    addConn(lm.DescendantAdded:Connect(function(d)
-        if d.Name == "RagdollCancel" then
-            markEvasiveStart(lm.Name)
-        end
-    end))
+
+    for _,d in ipairs(lm:GetDescendants()) do
+        check(d)
+    end
+    addConn(lm.DescendantAdded:Connect(check))
 end
 
 local function onLiveAdded(lm)
