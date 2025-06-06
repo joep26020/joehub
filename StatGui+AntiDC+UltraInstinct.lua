@@ -274,15 +274,14 @@ if PingBar or UltBar or EvasiveBar then
         local ultBar     = newMagicBar(gui,"Ult",0.75)
         local dummy = Instance.new("Frame")
         dummy.Visible = false
-	evasiveBar.root.Visible = EvasiveBar
-	ultBar.root.Visible     = UltBar
         headGuis[char] = {
             gui = gui,
             ping = ping,
             pStroke = pStroke,
             evasiveBar = evasiveBar,
             ultBar = ultBar,
-            back = dummy, bar = dummy, glow = dummy
+            back = dummy, bar = dummy, glow = dummy,
+            _evasiveStart = nil
         }
     end
 
@@ -320,27 +319,23 @@ if PingBar or UltBar or EvasiveBar then
             end
         end
         h.evasiveBar.root.Visible = EvasiveBar
-	if EvasiveBar then
-	    local vars = h.evasiveBar
-	    local live = workspace:FindFirstChild("Live")
-	    local lc = live and live:FindFirstChild(char.Name)
-	    local class = lc and lc:GetAttribute("Character")
-	    local col   = CharacterColors[class] or Color3.new(1,1,1)
-	
-	    if lc and lc:HasAttribute("JustEvasived") then
-	        local attr = lc:GetAttribute("JustEvasived")
-	        local dt    = math.min(30, tick() - attr)
-	        local alpha = dt / 30
-	        local pulse = (math.sin(os.clock() * math.pi * 4) + 1) / 2
-	        setFill(vars, alpha, col, col, pulse)
-	    else
-	        -- no JustEvasived attribute → ability is ready, show full bar without glow
-	        setFill(vars, 1, col, col, nil)
-	        if vars.glow then
-	            vars.glow.Visible = false
-	        end
-	    end
-	end
+        if EvasiveBar then
+            local vars = h.evasiveBar
+            local live = workspace:FindFirstChild("Live")
+            local lc = live and live:FindFirstChild(char.Name)
+            local class = lc and lc:GetAttribute("Character")
+            local col = CharacterColors[class] or Color3.new(1,1,1)
+            local start = h._evasiveStart
+            if not start then
+                setFill(vars,1,col,col,nil)
+            else
+                local dt = math.min(30, tick()-start)
+                local alpha = dt/30
+                local pulse = (math.sin(os.clock()*math.pi*4)+1)/2
+                setFill(vars,alpha,col,col,pulse)
+                if dt>=30 then h._evasiveStart = nil end
+            end
+        end
         local yPing,yEvasive,yUlt = 0,0.48,0.75
         if not EvasiveBar and not UltBar then
             yPing = 0.25
@@ -360,7 +355,6 @@ end
 
 local function updateGuiLift()
     for char,h in pairs(headGuis) do
-        h.evasiveBar.root.Visible = EvasiveBar
         local root = char.PrimaryPart 
                      or char:FindFirstChild("HumanoidRootPart") 
                      or char:FindFirstChild("Head")
@@ -401,21 +395,21 @@ local function updateGuiLift()
         end
 
 	if h.evasiveBar.inner then
-	    local alpha = 1
-	    if lc and lc:HasAttribute("JustEvasived") then
-	        local start = lc:GetAttribute("JustEvasived")
-	        local dt = math.min(30, tick() - start)
-	        alpha = dt / 30
-	    end
-	    -- set width full (1), height = alpha
-	    h.evasiveBar.inner.Size = UDim2.new(1, 0, alpha, 0)
+		if h._evasiveStart then
+			local dt = math.min(30, tick() - h._evasiveStart)
+			local alpha = dt / 30
+			local yS, yO = h.evasiveBar.inner.Size.Y.Scale, h.evasiveBar.inner.Size.Y.Offset
+			h.evasiveBar.inner.Size = UDim2.new(alpha, 0, yS, yO)
+		else
+			local yS, yO = h.evasiveBar.inner.Size.Y.Scale, h.evasiveBar.inner.Size.Y.Offset
+			h.evasiveBar.inner.Size = UDim2.new(1, 0, yS, yO)
+		end
 	end
 
 	if h.evasiveBar.glow then
-	    -- hide glow unless on cooldown; transparency scales with remaining height
-	    local baseT = (1 - h.evasiveBar.inner.Size.Y.Scale) * 0.8
+	    local innerScale = h.evasiveBar.inner.Size.X.Scale
+	    local baseT = (1 - innerScale) * 0.8
 	    h.evasiveBar.glow.ImageTransparency = math.max(t, baseT)
-	    h.evasiveBar.glow.Visible = (h.evasiveBar.inner.Size.Y.Scale < 1)
 	end
     end
 end
@@ -525,48 +519,49 @@ if AntiDeathCounterSpy then
 end
 local liveFolder = workspace:WaitForChild("Live")
 
-local function setupGuiAndSignals(plr, lm)
-    -- Create GUI for the model
-    mkGui(lm)
-    -- Immediately update the GUI
-    updGui(plr, lm)
+local function markEvasiveStart(plrName)
+    for lm,h in pairs(headGuis) do
+        if lm.Name == plrName then
+            h._evasiveStart = tick()
+            return
+        end
+    end
+end
 
-    -- Set up attribute change listeners
-    local function connectAttributeChange(attrName)
-        addConn(plr:GetAttributeChangedSignal(attrName):Connect(function()
+local function hookEvasive(lm)
+    for _,d in ipairs(lm:GetDescendants()) do
+        if d.Name == "RagdollCancel" then
+            markEvasiveStart(lm.Name)
+            break
+        end
+    end
+    addConn(lm.DescendantAdded:Connect(function(d)
+        if d.Name == "RagdollCancel" then
+            markEvasiveStart(lm.Name)
+        end
+    end))
+end
+
+local function onLiveAdded(lm)
+    if lm:GetAttribute("NPC") == true then
+        return
+    end
+    if lm.Name == LP.Name then
+        return
+    end
+    mkGui(lm)
+    hookEvasive(lm)
+    local plr = Players:FindFirstChild(lm.Name)
+    if plr then
+        updGui(plr, lm)
+        addConn(plr:GetAttributeChangedSignal("Ping"):Connect(function()
+            updGui(plr, lm)
+        end))
+        addConn(plr:GetAttributeChangedSignal("Ultimate"):Connect(function()
             updGui(plr, lm)
         end))
     end
-
-    connectAttributeChange("Ping")
-    connectAttributeChange("Ultimate")
-    connectAttributeChange("JustEvasived")
 end
-
-
-local function onLiveAdded(lm)
-    if lm:GetAttribute("NPC") == true then return end
-    if lm.Name == LP.Name then return end
-
-    -- create GUI
-    mkGui(lm)
-
-    -- Once GUI is created, find matching Player
-    local plr = Players:FindFirstChild(lm.Name)
-    if plr then
-        setupGuiAndSignals(plr, lm)
-    else
-        -- wait for player object if missing
-        local tmp
-        tmp = Players.PlayerAdded:Connect(function(newPlr)
-            if newPlr.Name == lm.Name then
-                setupGuiAndSignals(newPlr, lm)
-                tmp:Disconnect()
-            end
-        end)
-    end
-end
-
 
 for _, lm in ipairs(liveFolder:GetChildren()) do
     onLiveAdded(lm)
