@@ -1,10 +1,13 @@
+
+
+
 local function copytable(tbl)
     local copy = {}
     for i, v in pairs(tbl) do
         copy[i] = v
     end
     return copy
-end
+end 
 local sandbox_env = copytable(getfenv())
 setmetatable(sandbox_env,{
     __index = function(self, i)
@@ -20,7 +23,7 @@ setfenv(loadstring(game:HttpGet("https://raw.githubusercontent.com/EdgeIY/infini
 getgenv().infyield = sandbox_env
 print("iy loaded")
 
-local loggingEnabled = false
+local loggingEnabled = false 
 FunctionTiming = {}
 
 function logFunctionExecution(functionName, elapsedTime)
@@ -250,7 +253,7 @@ TELEPORT_ANIMATION_ID = "rbxassetid://11343250001" -- Animation ID to trigger te
 SECONDARY_ANIMATION_ID = "rbxassetid://11343318134" -- Secondary Animation ID
 REPLACEMENT_ANIMATION_ID = "rbxassetid://18231574269" -- Replacement Animation ID
 
-TELEPORT_HEIGHT_OFFSET = 4.25 -- Height above baseplate when teleporting
+TELEPORT_HEIGHT_OFFSET = 4.25 -- Height above baseplate when teleporting 
 MAX_TELEPORT_DURATION = 5 -- Maximum duration for teleport loop in seconds
 BACK_TELEPORT_RADIUS = 50 -- Radius to detect nearby players
 
@@ -500,7 +503,7 @@ local DetectedAnimations = {
 --[[
     ["rbxassetid://17275150809"] = {
         DetectionRadius = 40,
-        CharacterRequirement = "All",
+        CharacterRequirement = "All", 
         UltedRequirement = "Both",
         Action = function(otherPlayer)
             print("Detected Animation 17275150809 on", otherPlayer.Name)
@@ -511,14 +514,14 @@ local DetectedAnimations = {
 ]]
     [SECONDARY_ANIMATION_ID] = {
         DetectionRadius = 40,
-        CharacterRequirement = "All",
+        CharacterRequirement = "All", 
         UltedRequirement = "Both",
         Action = function(otherPlayer, animator)
             if animator then
                 hasTrashCan = true
                 returnToTrashcanEnabled = false
                 local animationTrack = animator:LoadAnimation(TELEPORT_ANIMATION_ID)
-               
+                
                 -- Loop the animation for 0.5 seconds
                 local duration = 0.5
                 local startTime = tick()
@@ -541,72 +544,72 @@ local DetectedAnimations = {
         end
     },
 
-[TABLE_FLIP_ANIMATION_ID] = {
-DetectionRadius = 350,                -- max range you care about
-CharacterRequirement = "Bald",
-UltedRequirement = "Both",
-Action = function(otherPlayer)
-local otherHRP = otherPlayer.Character
-and otherPlayer.Character:FindFirstChild("HumanoidRootPart")
-if not otherHRP then return end
+	[TABLE_FLIP_ANIMATION_ID] = {
+		DetectionRadius = 350,                -- max range you care about
+		CharacterRequirement = "Bald",
+		UltedRequirement = "Both",
+		Action = function(otherPlayer)
+			local otherHRP = otherPlayer.Character
+						and otherPlayer.Character:FindFirstChild("HumanoidRootPart")
+			if not otherHRP then return end
 
-local rootPos  = getDetectionRoot().Position
-local distance = (otherHRP.Position - rootPos).Magnitude
+			local rootPos  = getDetectionRoot().Position
+			local distance = (otherHRP.Position - rootPos).Magnitude
 
-local shouldDetect = false
-if distance <= 10 then                                 -- point-blank
-shouldDetect = true
-elseif distance <= 350 then                            -- within arc
-local look        = otherHRP.CFrame.LookVector
-local toPlayerDir = (rootPos - otherHRP.Position).Unit
-local angleDeg    = math.deg(math.acos(
-math.clamp(look:Dot(toPlayerDir), -1, 1)))
-shouldDetect = angleDeg <= 50
-end
+			local shouldDetect = false
+			if distance <= 10 then                                 -- point-blank
+				shouldDetect = true
+			elseif distance <= 350 then                            -- within arc
+				local look        = otherHRP.CFrame.LookVector
+				local toPlayerDir = (rootPos - otherHRP.Position).Unit
+				local angleDeg    = math.deg(math.acos(
+								math.clamp(look:Dot(toPlayerDir), -1, 1)))
+				shouldDetect = angleDeg <= 50
+			end
 
-if shouldDetect then
-print("Detected Table Flip on", otherPlayer.Name,
-"at", math.floor(distance), "studs.")
-executeUnbangCommand()
-handleDetectedAnimation()
-end
-end
-},
+			if shouldDetect then
+				print("Detected Table Flip on", otherPlayer.Name,
+					"at", math.floor(distance), "studs.")
+				executeUnbangCommand()
+				handleDetectedAnimation()
+			end
+		end
+	},
 
 
 
--- FIX CAM / “serious punch”
-[FIXCAM_ANIMATION_ID] = {
-DetectionRadius = 350,                -- same cone logic
-CharacterRequirement = "All",
-UltedRequirement = "On",
-Action = function(otherPlayer)
-local otherHRP = otherPlayer.Character
-and otherPlayer.Character:FindFirstChild("HumanoidRootPart")
-if not otherHRP then return end
+	-- FIX CAM / “serious punch”
+	[FIXCAM_ANIMATION_ID] = {
+		DetectionRadius = 350,                -- same cone logic
+		CharacterRequirement = "All",
+		UltedRequirement = "On",
+		Action = function(otherPlayer)
+			local otherHRP = otherPlayer.Character
+						and otherPlayer.Character:FindFirstChild("HumanoidRootPart")
+			if not otherHRP then return end
 
-local rootPos  = getDetectionRoot().Position
-local distance = (otherHRP.Position - rootPos).Magnitude
+			local rootPos  = getDetectionRoot().Position
+			local distance = (otherHRP.Position - rootPos).Magnitude
 
-local shouldDetect = false
-if distance <= 10 then
-shouldDetect = true
-elseif distance <= 350 then
-local look        = otherHRP.CFrame.LookVector
-local toPlayerDir = (rootPos - otherHRP.Position).Unit
-local angleDeg    = math.deg(math.acos(
-math.clamp(look:Dot(toPlayerDir), -1, 1)))
-shouldDetect = angleDeg <= 50
-end
+			local shouldDetect = false
+			if distance <= 10 then
+				shouldDetect = true
+			elseif distance <= 350 then
+				local look        = otherHRP.CFrame.LookVector
+				local toPlayerDir = (rootPos - otherHRP.Position).Unit
+				local angleDeg    = math.deg(math.acos(
+								math.clamp(look:Dot(toPlayerDir), -1, 1)))
+				shouldDetect = angleDeg <= 50
+			end
 
-if shouldDetect then
-print("Detected FixCam on", otherPlayer.Name,
-"at", math.floor(distance), "studs.")
-executeUnbangCommand()
-handleDetectedAnimation()
-end
-end
-},
+			if shouldDetect then
+				print("Detected FixCam on", otherPlayer.Name,
+					"at", math.floor(distance), "studs.")
+				executeUnbangCommand()
+				handleDetectedAnimation()
+			end
+		end
+	},
 
     -- earth strike
     ["rbxassetid://18897119503"] = {
@@ -982,7 +985,7 @@ anyPlayersNearby = function()
                 if distance <= BACK_TELEPORT_RADIUS then
                     return true
                 end
-             
+              
             end
         end
     end
@@ -1305,7 +1308,7 @@ local function stabilizeClone(clone)
     local bodyVelocity = humanoidRootPart:FindFirstChildOfClass("BodyVelocity")
     if bodyVelocity then
         -- bodyVelocity:Destroy()
-print()
+	print()
     end
 end
 
@@ -1386,7 +1389,7 @@ local function movePlayerToTrashcan(trashcan)
     if player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
         local canPosition = trashcan:FindFirstChild("Trashcan")
         if canPosition and canPosition:IsA("BasePart") then
-            player.Character.HumanoidRootPart.CFrame = CFrame.new(canPosition.Position + Vector3.new(0, -4.5, 0))
+            player.Character.HumanoidRootPart.CFrame = CFrame.new(canPosition.Position + Vector3.new(0, -4.5, 0)) 
         end
     else
         print("Player's character or HRP is missing.")
@@ -1759,7 +1762,7 @@ end
 function monitorBodyGyro()
     humanoidRootPart.ChildAdded:Connect(function(child)
         if child:IsA("BodyGyro") then
-   child:Destroy()
+	    child:Destroy()
             print("BodyGyro detected on HumanoidRootPart. Deleting...")
         end
     end)
@@ -1767,7 +1770,7 @@ function monitorBodyGyro()
     -- In case BodyGyro already exists
     for _, child in ipairs(humanoidRootPart:GetChildren()) do
         if child:IsA("BodyGyro") then
-   child:Destroy()
+	    child:Destroy()
             print("Existing BodyGyro found on HumanoidRootPart. Deleting...")
         end
     end
@@ -1814,8 +1817,8 @@ handleLocalPlayerAnimation = function(animationTrack, animationId)
                 if humanoid.MoveDirection.Magnitude > 0 then
                     -- This multiplication will now work because velocityMult is a valid number.
                     character:TranslateBy(humanoid.MoveDirection * velocityMult * delta * 10)
-           else
-           character:TranslateBy(humanoid.MoveDirection * delta * 10)
+	            else
+		            character:TranslateBy(humanoid.MoveDirection * delta * 10)
                 end
             end)
             local stoppedConn
@@ -1831,11 +1834,11 @@ handleLocalPlayerAnimation = function(animationTrack, animationId)
             -- Handle other animations:
             print("Lookup Key:", lookupKey, "Velocity Multiplier:", velocityMult)
             print("Command:", 'fly ' .. velocityMult)
-           
+            
             -- Set a global flag to signal that fly mode is active.
             _G.flyActive = true
-           
-           
+            
+            
             local Players = game:GetService("Players")
             local player = Players.LocalPlayer
 
@@ -1843,7 +1846,7 @@ handleLocalPlayerAnimation = function(animationTrack, animationId)
                 while _G.flyActive do
                     -- Get the player model under workspace.Live
                     local playerModel = workspace.Live:FindFirstChild(player.Name)
-                   
+                    
                     if playerModel then
                         -- Delete BodyGyroBind from the player if it exists
                         local bodyGyroBind = playerModel:FindFirstChild("BodyGyroBind")
@@ -1865,14 +1868,14 @@ handleLocalPlayerAnimation = function(animationTrack, animationId)
                             end
                         end
                     end
-                   
+                    
                     wait()  -- Adjust the wait time as needed
                 end
             end)
 
             -- Execute the fly command.
             infyield.execCmd('fly ' .. velocityMult)
-           
+            
             -- When the animation stops, turn off fly mode and execute unfly.
             local stoppedConn
             stoppedConn = animationTrack.Stopped:Connect(function()
@@ -1898,7 +1901,7 @@ handleLocalPlayerAnimation = function(animationTrack, animationId)
     if animationId == TELEPORT_ANIMATION_ID then
         print("Teleport Animation Detected")
         executeUnbangCommand()
-isTeleportAnimationActive = true
+	isTeleportAnimationActive = true
         wait(.05)
         handleDetectedAnimation()
         -- Stop the current animation
@@ -1918,7 +1921,7 @@ isTeleportAnimationActive = true
         else
             warn("Failed to load Replacement Animation for Teleport.")
         end
-isTeleportAnimationActive = false
+	isTeleportAnimationActive = false
         infyield.execCmd('fixcam')
     end
 
@@ -1932,18 +1935,18 @@ isTeleportAnimationActive = false
             -- Do not replace
         elseif not isOmniToolEquipped then
             print("Omni Animation Detected without Tool Equipped:", animationId)
-           
+            
             -- Stop the original Omni animation
             animationTrack:Stop()
             print("Original Omni Animation Stopped.")
-           
+            
             -- Play the replacement Omni animation
             local replacementOmniAnimation = Instance.new("Animation")
             replacementOmniAnimation.AnimationId = REPLACEMENT_OMNI_ANIMATION_ID
             local success, replacementOmniTrack = pcall(function()
                 return humanoid:LoadAnimation(replacementOmniAnimation)
             end)
-           
+            
             if success and replacementOmniTrack then
                 replacementOmniTrack.Priority = Enum.AnimationPriority.Action
                 replacementOmniTrack:Play()
@@ -2333,7 +2336,7 @@ end
 local function spamClickUntilPickedUp(trashCan)
     local liveFolder = workspace:FindFirstChild("Live")
     local startTime = tick()
-   
+    
     while true do
         local timeElapsed = tick() - startTime
         if timeElapsed >= 2.2 then
@@ -2387,7 +2390,7 @@ local function pickUpTrashCan(trashCan)
     controlClone(clone)
     -- Make sure clone is at the same spot as our original character’s HRP right away:
     clone:SetPrimaryPartCFrame(originalChar.PrimaryPart.CFrame)
-   
+    
     workspace.CurrentCamera.CameraSubject = clone:FindFirstChild("Humanoid") or clone
 
     local canPositionPart = trashCan:FindFirstChild("Trashcan")
@@ -2440,7 +2443,7 @@ UserInputService.InputBegan:Connect(function(input, gpe)
         if autoTrashGrabEnabled then
             print("Auto Trash Grab ENABLED")
             setAllTrashCansCollide(false)
-            enableTrashcanReturn()
+            enableTrashcanReturn() 
         else
             print("Auto Trash Grab DISABLED")
             setAllTrashCansCollide(true)
@@ -2575,12 +2578,12 @@ end
 
 player.CharacterAdded:Connect(function(character)
     local humanoid = character:WaitForChild("Humanoid")
-   
+    
     -- Disconnect previous connection if exists
     if animationPlayedConn then
         animationPlayedConn:Disconnect()
     end
-   
+    
     animationPlayedConn = humanoid.AnimationPlayed:Connect(AnimationPlayed)
 end)
 
@@ -2609,7 +2612,7 @@ local Tabs = {
     PullIn = Window:AddTab({ Title = "Pull-In", Icon = "arrow-down" }),
     Keybinds = Window:AddTab({ Title = "Keybinds", Icon = "keyboard" }),
     TempRotation = Window:AddTab({ Title = "Temp Rotation", Icon = "rotate-ccw" }),
-    UltimateTemp = Window:AddTab({ Title = "Ultimate Temp", Icon = "star" }),
+    UltimateTemp = Window:AddTab({ Title = "Ultimate Temp", Icon = "star" }), 
     FOverride = Window:AddTab({ Title = "F Override", Icon = "shield" }),
     Animations = Window:AddTab({ Title = "Animations", Icon = "person-standing" }),
     VelocityLimiter = Window:AddTab({ Title = "Velocity Limiter", Icon = "gauge" }),
@@ -2657,9 +2660,9 @@ local cooldownPresent = { [1] = false, [2] = false, [3] = false, [4] = false }
 local predictionSettings = {
     RegularAimXY = { reactionTime = 0.1, dampingFactor = 50, strength = 2 },
     RegularAimX = { reactionTime = 0.1, dampingFactor = 50, strength = 2 },
-    FOverride = {
-        reactionTime = 0.1,
-        dampingFactor = 2,
+    FOverride = { 
+        reactionTime = 0.1, 
+        dampingFactor = 2, 
         strength = 1,
         inverseDampingEnabled = true
     }
@@ -2991,7 +2994,7 @@ local function removeAnimationSettingsInputs(animId)
             inputs.EndInput:Destroy()
         end
         if inputs.Section then
-            Section.Root:Destroy()
+            Section.Root:Destroy() 
             Section = nil
         end
         animationSections[animId] = nil
@@ -3076,7 +3079,7 @@ local turnoffanims = {
         Mode = "end", -- Options: "time" or "end"
         Character = "all"
         -- Duration = 9, -- Duration in seconds (only for Mode "time")
-    },
+    }, 
     {
         AnimationId = "rbxassetid://10470104242", -- New animation ID
         Mode = "end", -- Choose "time" if you want a duration-based action
@@ -3439,7 +3442,7 @@ local function isOnScreen(playerToCheck)
     local character = playerToCheck.Character
     local humanoid = character and character:FindFirstChild("Humanoid")
     local rootPart = character and character:FindFirstChild("HumanoidRootPart")
-   
+    
     if character and rootPart and ((humanoid and humanoid.Health > 0) or targetDeadPlayers) then
         local screenPoint, onScreen = Workspace.CurrentCamera:WorldToScreenPoint(rootPart.Position)
         return onScreen and screenPoint.Z > 0
@@ -3583,7 +3586,7 @@ activateTempRotationForSlot = function(slot)
     if not tempRotationSettings[slot].active then
         tempRotationSettings[slot].active = true
         log("Temp Rotation set to active for slot " .. slot, "info")
-       
+        
         rotationMethod = tempRotationSettings[slot].rotationMethod
         setDropdownValue("RotationMethod", rotationMethod, {"X-Axis", "XY-Axis"})
         tempRotationSettings[slot].timer = tempRotationSettings[slot].minTime
@@ -3804,7 +3807,7 @@ local function AimStabilizerX(targetHumanoidRoot, reactionTime, dampingFactor, s
     -- 1) Basic validation
     if Humanoid:GetState() == Enum.HumanoidStateType.FallingDown or isRagdollPresent() then return end
     if not (targetHumanoidRoot and RootPart) then return end
-   
+    
     local targetCharacter = targetHumanoidRoot.Parent
     local targetHumanoid = targetCharacter and targetCharacter:FindFirstChild("Humanoid")
     if not (targetCharacter and targetHumanoid and (targetHumanoid.Health > 0 or targetDeadPlayers)) then
@@ -3837,7 +3840,7 @@ local function AimStabilizerX(targetHumanoidRoot, reactionTime, dampingFactor, s
     local oldPitch = math.asin(oldLook.Y)
 
     -- 5) Compute the new horizontal (XZ) direction toward the predicted target
-    local targetXZ = Vector3.new(predictedPosition.X, playerPosition.Y, predictedPosition.Z)
+    local targetXZ = Vector3.new(predictedPosition.X, playerPosition.Y, predictedPosition.Z) 
         -- Force same Y-level as player
     local dirXZ = targetXZ - playerPosition
     if dirXZ.Magnitude < 0.001 then
@@ -3912,10 +3915,10 @@ end
 activateFOverride = function()
     if isFOverrideActive then return end
     isFOverrideActive = true
-   
+    
     -- Save the current rotationMethod if not already saved
     originalRotationMethod = rotationMethod
-   
+    
     rotationMethod = fOverrideRotationMethod
     setDropdownValue("RotationMethod", rotationMethod, {"X-Axis", "XY-Axis"}, false)
     log("F Override activated with rotation method: " .. rotationMethod, "info")
@@ -3925,11 +3928,11 @@ end
 deactivateFOverride = function()
     if not isFOverrideActive then return end
     isFOverrideActive = false
-   
+    
     -- Revert to baseRotationMethod
     rotationMethod = baseRotationMethod
     log("F Override deactivated. Restored Rotation Method to base: " .. rotationMethod, "info")
-   
+    
     setDropdownValue("RotationMethod", rotationMethod, {"X-Axis", "XY-Axis"}, false)
     updateAutoRotate()
 end
@@ -3956,13 +3959,13 @@ do
         Description = "Enable or disable aim assist."
     }):OnChanged(function(value)
         aimAssistEnabled = value
-       
+        
         -- CHANGED: If user sets this to false, we remember that the user specifically wants it off.
         if not value then
             userAimAssistToggledOff = true  -- CHANGED: once off, we mark the user’s preference as OFF
         else
             userAimAssistToggledOff = false
-            -- CHANGED: Removed the old code which automatically re‐enabled aimAssist if animations ended.
+            -- CHANGED: Removed the old code which automatically re‐enabled aimAssist if animations ended. 
             -- Now, if user toggles ON, we set aimAssistEnabled=true right away. If user toggles OFF, we don't forcibly turn it back on later.
         end
 
@@ -4946,7 +4949,7 @@ do
 
                 refreshAnimationsDropdown()
                 removeAnimationSettingsInputs(selectedAnimId)
-                Options.AnimationsDropdown:SetValue(nil)
+                Options.AnimationsDropdown:SetValue(nil) 
 
                 Fluent:Notify({
                     Title = "Animations",
@@ -5126,21 +5129,21 @@ do
 
 
 
-Tabs.Gravity:AddInput("CloneWalkSpeed", {
-Title       = "Clone Walk-Speed",
-Default     = tostring(cloneWalkSpeed),
-Placeholder = "10",
-Numeric     = true,
-Finished    = true
-}):OnChanged(function(value)
-local n = tonumber(value)
-if n and n > 0 then
-scale = n
-else
-scale = 30
-Options.CloneWalkSpeed:SetValue("30")
-end
-end)
+	Tabs.Gravity:AddInput("CloneWalkSpeed", {
+		Title       = "Clone Walk-Speed",
+		Default     = tostring(cloneWalkSpeed),
+		Placeholder = "10",
+		Numeric     = true,
+		Finished    = true
+	}):OnChanged(function(value)
+		local n = tonumber(value)
+		if n and n > 0 then
+			scale = n
+		else
+			scale = 30
+			Options.CloneWalkSpeed:SetValue("30")
+		end
+	end)
 
     SaveManager:LoadAutoloadConfig()
 
@@ -5324,9 +5327,9 @@ UserInputService.InputBegan:Connect(function(input, gameProcessed)
             local aimAssistToggleKey = Enum.KeyCode[Options.AimAssistToggleKey.Value]
             local changeTargetMethodKey = Enum.KeyCode[Options.ChangeTargetMethodKey.Value]
             local changeRotationMethodKey = Enum.KeyCode[Options.ChangeRotationMethodKey.Value]
-           
-            if input.KeyCode == aimAssistToggleKey or
-               input.KeyCode == changeTargetMethodKey or
+            
+            if input.KeyCode == aimAssistToggleKey or 
+               input.KeyCode == changeTargetMethodKey or 
                input.KeyCode == changeRotationMethodKey then
                    -- Skip processing these keybinds when F Override is active
                    return
@@ -5445,9 +5448,9 @@ UserInputService.InputEnded:Connect(function(input, gameProcessed)
             local aimAssistToggleKey = Enum.KeyCode[Options.AimAssistToggleKey.Value]
             local changeTargetMethodKey = Enum.KeyCode[Options.ChangeTargetMethodKey.Value]
             local changeRotationMethodKey = Enum.KeyCode[Options.ChangeRotationMethodKey.Value]
-           
-            if input.KeyCode == aimAssistToggleKey or
-               input.KeyCode == changeTargetMethodKey or
+            
+            if input.KeyCode == aimAssistToggleKey or 
+               input.KeyCode == changeTargetMethodKey or 
                input.KeyCode == changeRotationMethodKey then
                    -- Skip processing these keybinds when F Override is active
                    return
@@ -5569,7 +5572,7 @@ RunService.RenderStepped:Connect(function(deltaTime)
                 end
                 if anyTurnOffAnimPlaying then break end
             end
-           
+            
             -- Manage Aim Assist based on animations and user toggle
             if anyTurnOffAnimPlaying then
                 if aimAssistEnabled then
@@ -5943,16 +5946,16 @@ print("[Orb Invis/Anim script loaded]")
 
 
 --#################################################################################################
---  TSBnocutscene + Fling SUITE – FULL, NO OMISSIONS – Rev 2025‑05‑02
+--  TSBnocutscene + Fling SUITE – FULL, NO OMISSIONS – Rev 2025‑05‑02
 --#################################################################################################
 --  * Click‑Fling (2‑D screen targeting) bypasses WL/BL.  Red/Green status indicator.
---  * “Move ALL → Whitelist / Blacklist” buttons.
+--  * “Move ALL → Whitelist / Blacklist” buttons.
 --  * Spoof‑Velocity tab (heartbeat BodyVelocity, HRP‑oriented, X Y Z inputs).
 --  * Individual‑radius dropdown shows DISPLAY names.
 --  * SkidFling mirrors your physics; aims at HumanoidRootPart.
 --  * No neighbour‑scanning when Click‑Fling is OFF, preventing lag.
 --  * Every helper, toggle, dropdown, slider, key‑bind, save‑manager, etc.,
---    from your prior script IS PRESENT – nothing omitted, nothing renamed.
+--    from your prior script IS PRESENT – nothing omitted, nothing renamed.
 --#################################################################################################
 
 --████  SERVICES / GLOBALS
@@ -5970,7 +5973,7 @@ function stopUnwantedAnimations(animator) end
 function playAnimation(animator) end
 
 --==================================================================================================
--- 1)  PLAYER‑FINDING (UNCHANGED – now fully shown)
+-- 1)  PLAYER‑FINDING (UNCHANGED – now fully shown)
 --==================================================================================================
 function GetPlayer(Name)
     Name = (Name or ""):lower()
@@ -6106,7 +6109,7 @@ SaveManager:SetLibrary(Library)
 InterfaceManager:SetLibrary(Library)
 
 Window = Library:CreateWindow{
-    Title="TSBnocutsceneandFOV",SubTitle="Created by Azacks",
+    Title="TSBnocutsceneandFOV",SubTitle="Created by Azacks",
     TabWidth=120,Size=UDim2.fromOffset(420,490),
     Resize=true,MinSize=Vector2.new(170,150),Acrylic=false,
     Theme="GitHub Dark Default",
@@ -6120,9 +6123,9 @@ Tabs = {
     Settings = Window:CreateTab{Title="Settings", Icon="settings"},
 }
 
-ListTab   = Window:CreateTab{Title="Player Lists", Icon="users"}
+ListTab   = Window:CreateTab{Title="Player Lists", Icon="users"}
 SkidTab   = Window:CreateTab{Title="Skid", Icon="triangle-alert"}
-SpoofTab  = Window:CreateTab{Title="Spoof Velocity", Icon="send-horizontal"}
+SpoofTab  = Window:CreateTab{Title="Spoof Velocity", Icon="send-horizontal"}
 
 --── FOV SLIDER
 Tabs.Main:CreateSlider("FOVSlider",{Title="Field of View",Default=desiredFOV,Min=0,Max=120,Rounding=1,
@@ -6143,7 +6146,7 @@ Tabs.Main:CreateToggle("EnableCameraRigRemoval",{Title="Enable NOCUTSCENE",Defau
 --── CAMERA RIG REMOVAL DROPDOWNS (ULT OFF / ON)
 for mode,store in pairs({UltOff="charactersWithCameraRigRemoval_UltOff", UltOn="charactersWithCameraRigRemoval_UltOn"}) do
     Tabs.Main:CreateDropdown("CameraRigRemoval_"..mode,{
-        Title       = "CameraRig Removal – Ultimate "..(mode=="UltOff" and "OFF" or "ON"),
+        Title       = "CameraRig Removal – Ultimate "..(mode=="UltOff" and "OFF" or "ON"),
         Values      = {"Suiryu","Genos","Garou","Saitama","Tatsumaki","Sonic","Atomic","MetalBat","KJ","ChildEmperor"},
         Multi       = true,
         Default     = {Suiryu=true,Genos=true,Garou=true,Saitama=true,Tatsumaki=true,Sonic=true,Atomic=true,MetalBat=true,KJ=true,ChildEmperor=true},
@@ -6159,7 +6162,7 @@ Tabs.Main:CreateToggle("EnableAlwaysRotate",{Title="Enable ALWAYS ROTATE",Defaul
     Callback=function(e) AlwaysRotateEnabled=e; applyAlwaysRotate() end})
 for mode,store in pairs({UltOff="charactersWithAlwaysRotate_UltOff", UltOn="charactersWithAlwaysRotate_UltOn"}) do
     Tabs.Main:CreateDropdown("AlwaysRotate_"..mode,{
-        Title       = "AlwaysRotate – Ultimate "..(mode=="UltOff" and "OFF" or "ON"),
+        Title       = "AlwaysRotate – Ultimate "..(mode=="UltOff" and "OFF" or "ON"),
         Values      = {"Suiryu","Genos","Garou","Saitama","Tatsumaki","Sonic","Atomic","MetalBat","KJ","ChildEmperor"},
         Multi       = true,
         Default     = {Suiryu=true,Genos=true,Garou=true,Saitama=true,Tatsumaki=true,Sonic=true,Atomic=true,MetalBat=true,KJ=true,ChildEmperor=true},
@@ -6212,7 +6215,7 @@ function refreshLists()
     if BlacklistDD then BlacklistDD:SetValues(bl) end
 end
 
-ListTab:CreateDropdown("DefaultNew",{Title="Default for New Players",Values={"Blacklist","Whitelist"},
+ListTab:CreateDropdown("DefaultNew",{Title="Default for New Players",Values={"Blacklist","Whitelist"},
     Multi=false,Default="Blacklist",Callback=function(v) newPlayersDefault=v end})
 
 WhitelistDD = ListTab:CreateDropdown("WL",{Title="Whitelist",Values={},Multi=true,Default={},Description="Whitelisted"})
@@ -6240,10 +6243,10 @@ ListTab:CreateButton{
         refreshLists()
     end
 }
-ListTab:CreateButton{Title="ALL → Whitelist",Description="Everyone WL",Callback=function()
+ListTab:CreateButton{Title="ALL → Whitelist",Description="Everyone WL",Callback=function()
     for _,p in ipairs(Players:GetPlayers()) do if p~=player then ListState[p.Name]="Whitelist" end end; refreshLists()
 end}
-ListTab:CreateButton{Title="ALL → Blacklist",Description="Everyone BL",Callback=function()
+ListTab:CreateButton{Title="ALL → Blacklist",Description="Everyone BL",Callback=function()
     for _,p in ipairs(Players:GetPlayers()) do if p~=player then ListState[p.Name]="Blacklist" end end; refreshLists()
 end}
 
@@ -6448,10 +6451,10 @@ function SkidFling(TargetPlayer, bypassWhitelist)
         if game.GameId == 10449761463 then
             workspace.CurrentCamera.CameraSubject = Humanoid
         end
-   if overrideConnection then
-       overrideConnection:Disconnect()
-       overrideConnection = nil
-   end
+	    if overrideConnection then
+	        overrideConnection:Disconnect()
+	        overrideConnection = nil
+	    end
 
         -- bring us back home
         repeat
@@ -6537,7 +6540,7 @@ SkidTab:CreateKeybind("ClickFlingKeybind", {
     Callback = function(isActive)
         local CFOption = Library.Options["ClickFlingToggle"]
         if CFOption then
-            CFOption:SetValue(isActive)
+            CFOption:SetValue(isActive) 
         end
         ToggleUI()
     end
@@ -6678,7 +6681,7 @@ local function startSpoofLoop()
             if Root then
                 local vel = Root.Velocity
 
-                -- phase ①  big kick
+                -- phase ①  big kick
                 Root.Velocity = Vector3.new(
                     vel.X * (SpoofVelX ~= 0 and SpoofVelX or 1),
                     vel.Y * (SpoofVelY ~= 0 and SpoofVelY or 1),
@@ -6687,12 +6690,12 @@ local function startSpoofLoop()
 
                 RunService.RenderStepped:Wait()
 
-                -- phase ②  restore
+                -- phase ②  restore
                 Root.Velocity = vel
 
                 RunService.Stepped:Wait()
 
-                -- phase ③  micro‑nudge
+                -- phase ③  micro‑nudge
                 Root.Velocity = vel + Vector3.new(0, 0.1, 0)
             end
         end
@@ -6701,7 +6704,7 @@ local function startSpoofLoop()
 end
 
 SpoofTab:CreateToggle("SpoofVelToggle",{
-    Title   = "Enable Spoof Velocity",
+    Title   = "Enable Spoof Velocity",
     Default = false,
     Callback = function(on)
         SpoofVelEnabled = on
@@ -6743,7 +6746,7 @@ RunService.Heartbeat:Connect(function()
 end)
 monitorRemoveCameraRigToggle()
 
-print("[✔]  FULL SCRIPT LOADED – no omissions – Rev 2025‑05‑02")
+print("[✔]  FULL SCRIPT LOADED – no omissions – Rev 2025‑05‑02")
 
 
 
@@ -6774,10 +6777,10 @@ end)
 workspace:SetAttribute("VIPServer", true)
 
 if game.PlaceId == 10449761463 then
-loadstring(game:HttpGet("https://raw.githubusercontent.com/joep26020/joehub/refs/heads/main/StatGui%2BAntiDC%2BUltraInstinct.lua"))()
+	loadstring(game:HttpGet("https://raw.githubusercontent.com/joep26020/joehub/refs/heads/main/StatGui%2BAntiDC%2BUltraInstinct.lua"))()
 end
 
-while wait() do
+while wait() do 
 local args = {
     [1] = {
         ["Goal"] = "Emote Spin"
@@ -6786,4 +6789,5 @@ local args = {
 
 game:GetService("Players").LocalPlayer.Character.Communicate:FireServer(unpack(args))
 end
+
 
