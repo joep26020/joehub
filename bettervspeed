@@ -1,0 +1,192 @@
+-- Vehicle Boost GUI (centered + editable values + killable + persists after death)
+
+-- 1) Disconnect any previous loop (if re-running)
+if vehicleloopspeed then vehicleloopspeed:Disconnect() end
+
+local Players          = game:GetService("Players")
+local RunService       = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+
+local LocalPlayer = Players.LocalPlayer
+
+-- 2) Default boost parameters (you can override via GUI)
+local vspeed        = 200     -- forward boost accel (studs/sec²)
+local turnForce     = 290     -- base turning force
+local turnScale     = 0.0385  -- extra turning force per stud/sec of speed
+local downScale     = 0.05    -- extra downward accel per stud/sec of speed
+local jumpStrength  = 195     -- upward impulse strength
+
+-- 3) Build the GUI ----------------------------------------------------------
+local gui = Instance.new("ScreenGui")
+gui.Name         = "VehicleBoostGUI"
+gui.ResetOnSpawn = false
+gui.Parent       = LocalPlayer:WaitForChild("PlayerGui")
+
+local frame = Instance.new("Frame", gui)
+frame.Size              = UDim2.new(0, 200, 0, 240)   -- tall enough for jump field
+frame.Position          = UDim2.new(0.5, -100, 0.5, -120)
+frame.Active            = true
+frame.Draggable         = true
+frame.BackgroundColor3  = Color3.fromRGB(30, 30, 30)
+frame.BorderSizePixel   = 0
+
+-- Title + Close ------------------------------------------------------------
+local title = Instance.new("TextLabel", frame)
+title.Size                   = UDim2.new(1, -40, 0, 20)
+title.Position               = UDim2.new(0, 10, 0, 5)
+title.Text                   = "Boost Controls"
+title.TextColor3             = Color3.new(1, 1, 1)
+title.BackgroundTransparency = 1
+title.Font                   = Enum.Font.SourceSansBold
+title.TextSize               = 16
+
+local closeBtn = Instance.new("TextButton", frame)
+closeBtn.Size                   = UDim2.new(0, 24, 0, 24)
+closeBtn.Position               = UDim2.new(1, -30, 0, 5)
+closeBtn.Text                   = "✕"
+closeBtn.TextColor3             = Color3.new(1, 0, 0)
+closeBtn.BackgroundTransparency = 1
+closeBtn.Font                   = Enum.Font.SourceSansBold
+closeBtn.TextSize               = 18
+
+-- 4) Speed, Turn, Scale, Downforce, Jump fields ----------------------------
+local function makeField(y, labelText, initValue)
+    local lbl = Instance.new("TextLabel", frame)
+    lbl.Size                   = UDim2.new(0, 60, 0, 24)
+    lbl.Position               = UDim2.new(0, 10, 0, y)
+    lbl.Text                   = labelText
+    lbl.TextColor3             = Color3.new(1, 1, 1)
+    lbl.BackgroundTransparency = 1
+    lbl.Font                   = Enum.Font.SourceSans
+    lbl.TextSize               = 14
+
+    local box = Instance.new("TextBox", frame)
+    box.Size             = UDim2.new(0, 100, 0, 24)
+    box.Position         = UDim2.new(0, 80, 0, y)
+    box.Text             = tostring(initValue)
+    box.TextColor3       = Color3.new(1, 1, 1)
+    box.BackgroundColor3= Color3.fromRGB(50, 50, 50)
+    box.BorderSizePixel = 0
+    box.ClearTextOnFocus= false
+
+    return box
+end
+
+local speedBox = makeField(35,  "Speed:", vspeed)
+speedBox.PlaceholderText = "vspeed"
+speedBox.FocusLost:Connect(function()
+    local v = tonumber(speedBox.Text)
+    if v then vspeed = v else speedBox.Text = tostring(vspeed) end
+end)
+
+local turnBox = makeField(65,  "Turn:", turnForce)
+turnBox.PlaceholderText = "turnForce"
+turnBox.FocusLost:Connect(function()
+    local t = tonumber(turnBox.Text)
+    if t then turnForce = t else turnBox.Text = tostring(turnForce) end
+end)
+
+local scaleBox = makeField(95, "Scale:", turnScale)
+scaleBox.PlaceholderText = "turnScale"
+scaleBox.FocusLost:Connect(function()
+    local s = tonumber(scaleBox.Text)
+    if s then turnScale = s else scaleBox.Text = tostring(turnScale) end
+end)
+
+local downBox = makeField(125, "Downforce:", downScale)
+downBox.PlaceholderText = "downScale"
+downBox.FocusLost:Connect(function()
+    local d = tonumber(downBox.Text)
+    if d then downScale = d else downBox.Text = tostring(downScale) end
+end)
+
+local jumpBox = makeField(155, "Jump Str:", jumpStrength)
+jumpBox.PlaceholderText = "jumpStrength"
+jumpBox.FocusLost:Connect(function()
+    local j = tonumber(jumpBox.Text)
+    if j then jumpStrength = j else jumpBox.Text = tostring(jumpStrength) end
+end)
+
+-- Instruction --------------------------------------------------------------
+local info = Instance.new("TextLabel", frame)
+info.Size                   = UDim2.new(1, -20, 0, 24)
+info.Position               = UDim2.new(0, 10, 0, 190)
+info.Text                   = "W/S = forward, A/D = turn, Shift = jump"
+info.TextColor3             = Color3.new(1, 1, 1)
+info.BackgroundTransparency = 1
+info.Font                   = Enum.Font.SourceSansItalic
+info.TextSize               = 12
+
+-- wire up Close button to disconnect everything ----------------------------
+local inputBeganConn, inputEndedConn
+closeBtn.MouseButton1Click:Connect(function()
+    if vehicleloopspeed    then vehicleloopspeed:Disconnect()    end
+    if inputBeganConn      then inputBeganConn:Disconnect()      end
+    if inputEndedConn      then inputEndedConn:Disconnect()      end
+    gui:Destroy()
+end)
+
+-- 5) Touch & Keyboard input handlers ---------------------------------------
+local touchForward = false
+inputBeganConn = UserInputService.InputBegan:Connect(function(input, gp)
+    if gp then return end
+    if input.UserInputType == Enum.UserInputType.Touch then
+        touchForward = true
+
+    elseif input.KeyCode == Enum.KeyCode.LeftShift then
+        -- find vehicle part
+        local camSub = workspace.CurrentCamera.CameraSubject
+        local part  = camSub and (camSub:IsA("Humanoid") and camSub.SeatPart or camSub:IsA("BasePart") and camSub or nil)
+        if part then
+            -- apply upward impulse
+            local mass    = part.AssemblyMass
+            local impulse = Vector3.new(0, 1, 0) * mass * jumpStrength
+            part:ApplyImpulse(impulse)
+        end
+    end
+end)
+
+inputEndedConn = UserInputService.InputEnded:Connect(function(input, gp)
+    if not gp and input.UserInputType == Enum.UserInputType.Touch then
+        touchForward = false
+    end
+end)
+
+-- 6) Main loop: forward, turning & downforce -------------------------------
+vehicleloopspeed = RunService.Stepped:Connect(function(_, dt)
+    local camSub = workspace.CurrentCamera.CameraSubject
+    local part  = camSub and (camSub:IsA("Humanoid") and camSub.SeatPart or camSub:IsA("BasePart") and camSub or nil)
+    if not part then return end
+
+    -- forward/back
+    local forward = (UserInputService:IsKeyDown(Enum.KeyCode.W) and 1 or 0)
+                  - (UserInputService:IsKeyDown(Enum.KeyCode.S) and 1 or 0)
+                  + (touchForward and 1 or 0)
+    if forward ~= 0 then
+        local mass    = part.AssemblyMass
+        local accel   = vspeed * forward
+        local impulse = part.CFrame.LookVector * mass * accel * dt
+        part:ApplyImpulse(impulse)
+    end
+
+    -- turning
+    local turn = (UserInputService:IsKeyDown(Enum.KeyCode.D) and 1 or 0)
+               - (UserInputService:IsKeyDown(Enum.KeyCode.A) and 1 or 0)
+    if turn ~= 0 then
+        local speed  = part.AssemblyLinearVelocity.Magnitude
+        local axis   = part.CFrame:VectorToWorldSpace(Vector3.new(0,1,0))
+        local torque = turnForce * speed * turnScale
+        local angAcc = -torque * turn
+        local angImp = axis * part.AssemblyMass * angAcc * dt
+        part:ApplyAngularImpulse(angImp)
+    end
+
+    -- downforce
+    local speed = part.AssemblyLinearVelocity.Magnitude
+    if speed > 0 then
+        local mass      = part.AssemblyMass
+        local downAccel = speed * downScale
+        local downImp   = Vector3.new(0, -1, 0) * mass * downAccel * dt
+        part:ApplyImpulse(downImp)
+    end
+end)
