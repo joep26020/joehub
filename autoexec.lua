@@ -6780,14 +6780,6 @@ if game.PlaceId == 10449761463 then
 	loadstring(game:HttpGet("https://raw.githubusercontent.com/joep26020/joehub/refs/heads/main/StatGui%2BAntiDC%2BUltraInstinct.lua"))()
 end
 
-while wait() do 
-local args = {
-    [1] = {
-        ["Goal"] = "Emote Spin"
-    }
-}
 
-game:GetService("Players").LocalPlayer.Character.Communicate:FireServer(unpack(args))
-end
 
 
