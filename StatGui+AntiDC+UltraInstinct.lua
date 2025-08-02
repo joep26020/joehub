@@ -359,45 +359,42 @@ else
     updGui = function() end
 end
 
+local MAX_VIEW = 100
+
 local function updateGuiLift()
+    local cam = workspace.CurrentCamera
+    local myHRP = LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")
+    if not (cam and myHRP) then return end
+    local camPos = cam.CFrame.Position
+    local myPos = myHRP.Position
+
     for char,h in pairs(headGuis) do
-        local root = char.PrimaryPart 
-                     or char:FindFirstChild("HumanoidRootPart") 
-                     or char:FindFirstChild("Head")
+        local root = char.PrimaryPart or char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Head")
         if not root then continue end
 
-        local camPos = workspace.CurrentCamera.CFrame.Position
+        local playerDist = (myPos - root.Position).Magnitude
+        if playerDist > MAX_VIEW then
+            h.gui.Enabled = false
+            continue
+        else
+            h.gui.Enabled = true
+        end
+
         local camDist = (camPos - root.Position).Magnitude
-        local extra = (camDist > DEAD_ZONE)
-                      and math.clamp((camDist - DEAD_ZONE) * LIFT_PER_STUD, 0, MAX_LIFT)
-                      or 0
+        local extra = (camDist > DEAD_ZONE) and math.clamp((camDist - DEAD_ZONE) * LIFT_PER_STUD, 0, MAX_LIFT) or 0
         h.gui.StudsOffset = Vector3.new(0, BASE_HEIGHT + extra, 0)
 
-        local plr = Players:FindFirstChild(char.Name)
-        if not (plr and LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")) then
-            continue
-        end
-
-        local playerDist = (LP.Character.HumanoidRootPart.Position - root.Position).Magnitude
         local t = fadeFactor(playerDist)
-
         h.ping.TextTransparency = t
         h.pStroke.Transparency = t
+        if h.ultBar.inner then h.ultBar.inner.ImageTransparency = t end
+        if h.evasiveBar.inner then h.evasiveBar.inner.ImageTransparency = t end
 
-        if h.ultBar.inner then
-            h.ultBar.inner.ImageTransparency = t
-        end
-        if h.evasiveBar.inner then
-            h.evasiveBar.inner.ImageTransparency = t
-        end
-
-        local pct = plr:GetAttribute("Ultimate") or 0
         local live = workspace:FindFirstChild("Live")
         local lc  = live and live:FindFirstChild(char.Name)
-        local ulted = lc and lc:GetAttribute("Ulted") == true
 
         if h.ultBar.glow then
-		h.ultBar.glow.ImageTransparency = t
+            h.ultBar.glow.ImageTransparency = t
         end
 
         if h.evasiveBar.inner then
@@ -407,15 +404,13 @@ local function updateGuiLift()
                 local dt = math.min(30, tick() - h._evasiveStart)
                 alpha = dt / 30
                 pulse = (math.sin(os.clock() * math.pi * 4) + 1) / 2
-                if dt >= 30 then
-                    h._evasiveStart = nil
-                end
+                if dt >= 30 then h._evasiveStart = nil end
             end
             local col = h.evasiveCol or Color3.new(1,1,1)
             setFill(h.evasiveBar, alpha, col, col, pulse)
         end
 
-        if h.evasiveBar.glow then
+        if h.evasiveBar.glow and h.evasiveBar.inner then
             local innerScale = h.evasiveBar.inner.Size.X.Scale
             local baseT = (1 - innerScale) * 0.8
             h.evasiveBar.glow.ImageTransparency = math.max(t, baseT)
@@ -423,7 +418,15 @@ local function updateGuiLift()
     end
 end
 
-RunService.Heartbeat:Connect(updateGuiLift)
+do
+    local acc = 0
+    RunService.Heartbeat:Connect(function(dt)
+        acc += dt
+        if acc < 0.10 then return end 
+        acc = 0
+        updateGuiLift()
+    end)
+end
 
 if AntiDeathCounterSpy then
     local liveFolder = workspace:WaitForChild("Live")
