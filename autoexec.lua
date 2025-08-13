@@ -926,36 +926,48 @@ local DetectedAnimations = {
 }
 -- Function to restore camera to player
 restoreCamera = function()
-	if camLockConn then camLockConn:Disconnect(); camLockConn = nil end
-    if overrideConnection then overrideConnection:Disconnect(); overrideConnection = nil end
-    if currentCamConn     then currentCamConn:Disconnect();     currentCamConn     = nil end
+    -- Disconnect override so no loops remain
+    if overrideConnection then
+        overrideConnection:Disconnect()
+        overrideConnection = nil
+    end
 
-    local oldCam  = workspace.CurrentCamera
+    -- Save current camera CFrame
+    local oldCam = Workspace.CurrentCamera
     local savedCF = oldCam and oldCam.CFrame
 
-    local cam = workspace.CurrentCamera
-    if not cam then
-        cam = Instance.new("Camera")
-        cam.Name   = "Camera"
-        cam.Parent = workspace
-        workspace.CurrentCamera = cam
+    -- Destroy existing “Camera” instance
+    local existingCam = Workspace:FindFirstChild("Camera")
+    if existingCam then
+        existingCam:Destroy()
     end
 
-    if savedCF then cam.CFrame = savedCF end
+    -- Create new Camera for the player
+    local cam = Instance.new("Camera")
+    cam.Name       = "Camera"
+    cam.CameraType = Enum.CameraType.Custom
+    cam.Parent     = Workspace
 
-    local char       = player.Character
+    -- Apply saved orientation/position
+    if savedCF then
+        cam.CFrame = savedCF
+    end
+
+    Workspace.CurrentCamera = cam
+
+    -- Point camera back to player
+    local char     = player.Character
     local targetHum  = char and char:FindFirstChildOfClass("Humanoid")
-    local targetPart = targetHum or (char and char:FindFirstChild("HumanoidRootPart"))
-    if not targetPart then
-        warn("Cannot restore camera: no Humanoid/HRP.")
+    local targetPart = char and char:FindFirstChild("HumanoidRootPart")
+    local target     = targetHum or targetPart
+    if not target then
+        warn("Cannot restore camera: humanoid or HumanoidRootPart missing.")
         return
     end
+    cam.CameraSubject = target
 
-    cam.CameraType    = Enum.CameraType.Custom
-    cam.CameraSubject = targetPart
     print("Camera restored to player character.")
 end
-
 
 -- Function to check if any players are nearby using the original HumanoidRootPart
 anyPlayersNearby = function()
@@ -1217,32 +1229,51 @@ end
 
 -- Camera control fixed!
 
-local overrideConnection, currentCamConn
-local setupCamera
-setupCamera = function(cloneModel)
-    if not cloneModel or not cloneModel:IsA("Model") then
-        warn("setupCamera expects a Model (clone)."); return
-    end
-    if overrideConnection then overrideConnection:Disconnect(); overrideConnection = nil end
-    if currentCamConn   then currentCamConn:Disconnect();   currentCamConn   = nil end
-
-    local cam = workspace.CurrentCamera
-    if not cam then
-        cam = Instance.new("Camera")
-        cam.Name = "Camera"
-        cam.Parent = workspace
-        workspace.CurrentCamera = cam
+local function setupCamera(clone)
+    if not clone then
+        warn("Cannot setup camera: clone is nil.")
+        return
     end
 
-    local targetHum  = cloneModel:FindFirstChildOfClass("Humanoid")
-    local targetPart = targetHum or cloneModel:FindFirstChild("HumanoidRootPart")
+    -- Disconnect previous override (if any)
+    if overrideConnection then
+        overrideConnection:Disconnect()
+        overrideConnection = nil
+    end
+
+    -- Save current camera CFrame
+    local oldCam = Workspace.CurrentCamera
+    local savedCF = oldCam and oldCam.CFrame
+
+    -- Destroy existing “Camera” instance
+    local existingCam = Workspace:FindFirstChild("Camera")
+    if existingCam then
+        existingCam:Destroy()
+    end
+
+    -- Create new Camera
+    local cam = Instance.new("Camera")
+    cam.Name       = "Camera"
+    cam.CameraType = Enum.CameraType.Custom
+    cam.Parent     = Workspace
+
+    -- Apply saved orientation/position
+    if savedCF then
+        cam.CFrame = savedCF
+    end
+
+    Workspace.CurrentCamera = cam
+
+    -- Point it at clone’s Humanoid or HumanoidRootPart
+    local targetHum  = clone:FindFirstChildOfClass("Humanoid")
+    local targetPart = targetHum or clone:FindFirstChild("HumanoidRootPart")
     if not targetPart then
-        warn("setupCamera: clone has no Humanoid/HumanoidRootPart."); return
+        warn("Cannot setup camera: no Humanoid or HumanoidRootPart on clone.")
+        return
     end
-
-    cam.CameraType    = Enum.CameraType.Custom
     cam.CameraSubject = targetPart
 
+    -- Override any external CameraSubject changes
     overrideConnection = cam:GetPropertyChangedSignal("CameraSubject"):Connect(function()
         if cam.CameraSubject ~= targetPart then
             cam.CameraType    = Enum.CameraType.Custom
@@ -1250,23 +1281,8 @@ setupCamera = function(cloneModel)
         end
     end)
 
-    currentCamConn = workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(function()
-        cam = workspace.CurrentCamera
-        if cam then
-            cam.CameraType    = Enum.CameraType.Custom
-            cam.CameraSubject = targetPart
-            if overrideConnection then overrideConnection:Disconnect() end
-            overrideConnection = cam:GetPropertyChangedSignal("CameraSubject"):Connect(function()
-                if cam.CameraSubject ~= targetPart then
-                    cam.CameraType    = Enum.CameraType.Custom
-                    cam.CameraSubject = targetPart
-                end
-            end)
-        end
-    end)
+    print("Camera set to follow clone.")
 end
-
-
 
 local Y_THRESHOLD = 422 -- Desired Y-coordinate threshold
 
@@ -2356,9 +2372,6 @@ end
 -- Only modified per user request (no original position revert, clone starts at same HRP,
 -- main char set to clone’s HRP after pick-up, and loop teleport).
 --------------------------------------------------------------------------------
-local camLockConn
--- keep this once near your other connection vars:
--- local camLockConn
 
 local function pickUpTrashCan(trashCan)
     local originalChar = player.Character
@@ -2375,30 +2388,10 @@ local function pickUpTrashCan(trashCan)
     end
     stabilizeClone(clone)
     controlClone(clone)
-
-	clone:SetPrimaryPartCFrame(originalChar.PrimaryPart.CFrame)
-
-
     -- Make sure clone is at the same spot as our original character’s HRP right away:
-    setupCamera(clone)
+    clone:SetPrimaryPartCFrame(originalChar.PrimaryPart.CFrame)
     
-    if camLockConn then camLockConn:Disconnect() end
-    camLockConn = RunService.RenderStepped:Connect(function()
-        local cam = workspace.CurrentCamera
-        if cam and clone and clone.Parent then
-            local hum = clone:FindFirstChildOfClass("Humanoid")
-            if hum then
-                cam.CameraType = Enum.CameraType.Custom
-                cam.CameraSubject = hum
-            else
-                local hrp = clone:FindFirstChild("HumanoidRootPart")
-                if hrp then
-                    cam.CameraType = Enum.CameraType.Scriptable
-                    cam.CFrame = CFrame.new(hrp.Position + Vector3.new(0, 4, -8), hrp.Position)
-                end
-            end
-        end
-    end)
+    setupCamera(cloneHumanoid or clone)
 
     local canPositionPart = trashCan:FindFirstChild("Trashcan")
     if not canPositionPart or not canPositionPart:IsA("BasePart") then
@@ -5953,16 +5946,16 @@ print("[Orb Invis/Anim script loaded]")
 
 
 --#################################################################################################
---  TSBnocutscene + Fling SUITE – FULL, NO OMISSIONS – Rev 2025‑05‑02
+--  TSBnocutscene + Fling SUITE – FULL, NO OMISSIONS – Rev 2025‑05‑02
 --#################################################################################################
 --  * Click‑Fling (2‑D screen targeting) bypasses WL/BL.  Red/Green status indicator.
---  * “Move ALL → Whitelist / Blacklist” buttons.
+--  * “Move ALL → Whitelist / Blacklist” buttons.
 --  * Spoof‑Velocity tab (heartbeat BodyVelocity, HRP‑oriented, X Y Z inputs).
 --  * Individual‑radius dropdown shows DISPLAY names.
 --  * SkidFling mirrors your physics; aims at HumanoidRootPart.
 --  * No neighbour‑scanning when Click‑Fling is OFF, preventing lag.
 --  * Every helper, toggle, dropdown, slider, key‑bind, save‑manager, etc.,
---    from your prior script IS PRESENT – nothing omitted, nothing renamed.
+--    from your prior script IS PRESENT – nothing omitted, nothing renamed.
 --#################################################################################################
 
 --████  SERVICES / GLOBALS
@@ -5980,7 +5973,7 @@ function stopUnwantedAnimations(animator) end
 function playAnimation(animator) end
 
 --==================================================================================================
--- 1)  PLAYER‑FINDING (UNCHANGED – now fully shown)
+-- 1)  PLAYER‑FINDING (UNCHANGED – now fully shown)
 --==================================================================================================
 function GetPlayer(Name)
     Name = (Name or ""):lower()
@@ -6116,7 +6109,7 @@ SaveManager:SetLibrary(Library)
 InterfaceManager:SetLibrary(Library)
 
 Window = Library:CreateWindow{
-    Title="TSBnocutsceneandFOV",SubTitle="Created by Azacks",
+    Title="TSBnocutsceneandFOV",SubTitle="Created by Azacks",
     TabWidth=120,Size=UDim2.fromOffset(420,490),
     Resize=true,MinSize=Vector2.new(170,150),Acrylic=false,
     Theme="GitHub Dark Default",
@@ -6130,9 +6123,9 @@ Tabs = {
     Settings = Window:CreateTab{Title="Settings", Icon="settings"},
 }
 
-ListTab   = Window:CreateTab{Title="Player Lists", Icon="users"}
+ListTab   = Window:CreateTab{Title="Player Lists", Icon="users"}
 SkidTab   = Window:CreateTab{Title="Skid", Icon="triangle-alert"}
-SpoofTab  = Window:CreateTab{Title="Spoof Velocity", Icon="send-horizontal"}
+SpoofTab  = Window:CreateTab{Title="Spoof Velocity", Icon="send-horizontal"}
 
 --── FOV SLIDER
 Tabs.Main:CreateSlider("FOVSlider",{Title="Field of View",Default=desiredFOV,Min=0,Max=120,Rounding=1,
@@ -6153,7 +6146,7 @@ Tabs.Main:CreateToggle("EnableCameraRigRemoval",{Title="Enable NOCUTSCENE",Defau
 --── CAMERA RIG REMOVAL DROPDOWNS (ULT OFF / ON)
 for mode,store in pairs({UltOff="charactersWithCameraRigRemoval_UltOff", UltOn="charactersWithCameraRigRemoval_UltOn"}) do
     Tabs.Main:CreateDropdown("CameraRigRemoval_"..mode,{
-        Title       = "CameraRig Removal – Ultimate "..(mode=="UltOff" and "OFF" or "ON"),
+        Title       = "CameraRig Removal – Ultimate "..(mode=="UltOff" and "OFF" or "ON"),
         Values      = {"Suiryu","Genos","Garou","Saitama","Tatsumaki","Sonic","Atomic","MetalBat","KJ","ChildEmperor"},
         Multi       = true,
         Default     = {Suiryu=true,Genos=true,Garou=true,Saitama=true,Tatsumaki=true,Sonic=true,Atomic=true,MetalBat=true,KJ=true,ChildEmperor=true},
@@ -6169,7 +6162,7 @@ Tabs.Main:CreateToggle("EnableAlwaysRotate",{Title="Enable ALWAYS ROTATE",Defaul
     Callback=function(e) AlwaysRotateEnabled=e; applyAlwaysRotate() end})
 for mode,store in pairs({UltOff="charactersWithAlwaysRotate_UltOff", UltOn="charactersWithAlwaysRotate_UltOn"}) do
     Tabs.Main:CreateDropdown("AlwaysRotate_"..mode,{
-        Title       = "AlwaysRotate – Ultimate "..(mode=="UltOff" and "OFF" or "ON"),
+        Title       = "AlwaysRotate – Ultimate "..(mode=="UltOff" and "OFF" or "ON"),
         Values      = {"Suiryu","Genos","Garou","Saitama","Tatsumaki","Sonic","Atomic","MetalBat","KJ","ChildEmperor"},
         Multi       = true,
         Default     = {Suiryu=true,Genos=true,Garou=true,Saitama=true,Tatsumaki=true,Sonic=true,Atomic=true,MetalBat=true,KJ=true,ChildEmperor=true},
@@ -6222,7 +6215,7 @@ function refreshLists()
     if BlacklistDD then BlacklistDD:SetValues(bl) end
 end
 
-ListTab:CreateDropdown("DefaultNew",{Title="Default for New Players",Values={"Blacklist","Whitelist"},
+ListTab:CreateDropdown("DefaultNew",{Title="Default for New Players",Values={"Blacklist","Whitelist"},
     Multi=false,Default="Blacklist",Callback=function(v) newPlayersDefault=v end})
 
 WhitelistDD = ListTab:CreateDropdown("WL",{Title="Whitelist",Values={},Multi=true,Default={},Description="Whitelisted"})
@@ -6250,10 +6243,10 @@ ListTab:CreateButton{
         refreshLists()
     end
 }
-ListTab:CreateButton{Title="ALL → Whitelist",Description="Everyone WL",Callback=function()
+ListTab:CreateButton{Title="ALL → Whitelist",Description="Everyone WL",Callback=function()
     for _,p in ipairs(Players:GetPlayers()) do if p~=player then ListState[p.Name]="Whitelist" end end; refreshLists()
 end}
-ListTab:CreateButton{Title="ALL → Blacklist",Description="Everyone BL",Callback=function()
+ListTab:CreateButton{Title="ALL → Blacklist",Description="Everyone BL",Callback=function()
     for _,p in ipairs(Players:GetPlayers()) do if p~=player then ListState[p.Name]="Blacklist" end end; refreshLists()
 end}
 
@@ -6688,7 +6681,7 @@ local function startSpoofLoop()
             if Root then
                 local vel = Root.Velocity
 
-                -- phase ①  big kick
+                -- phase ①  big kick
                 Root.Velocity = Vector3.new(
                     vel.X * (SpoofVelX ~= 0 and SpoofVelX or 1),
                     vel.Y * (SpoofVelY ~= 0 and SpoofVelY or 1),
@@ -6697,12 +6690,12 @@ local function startSpoofLoop()
 
                 RunService.RenderStepped:Wait()
 
-                -- phase ②  restore
+                -- phase ②  restore
                 Root.Velocity = vel
 
                 RunService.Stepped:Wait()
 
-                -- phase ③  micro‑nudge
+                -- phase ③  micro‑nudge
                 Root.Velocity = vel + Vector3.new(0, 0.1, 0)
             end
         end
@@ -6711,7 +6704,7 @@ local function startSpoofLoop()
 end
 
 SpoofTab:CreateToggle("SpoofVelToggle",{
-    Title   = "Enable Spoof Velocity",
+    Title   = "Enable Spoof Velocity",
     Default = false,
     Callback = function(on)
         SpoofVelEnabled = on
@@ -6753,7 +6746,7 @@ RunService.Heartbeat:Connect(function()
 end)
 monitorRemoveCameraRigToggle()
 
-print("[✔]  FULL SCRIPT LOADED – no omissions – Rev 2025‑05‑02")
+print("[✔]  FULL SCRIPT LOADED – no omissions – Rev 2025‑05‑02")
 
 
 
@@ -6786,7 +6779,6 @@ workspace:SetAttribute("VIPServer", true)
 if game.PlaceId == 10449761463 then
 	loadstring(game:HttpGet("https://raw.githubusercontent.com/joep26020/joehub/refs/heads/main/StatGui%2BAntiDC%2BUltraInstinct.lua"))()
 end
-
 
 
 
