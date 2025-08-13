@@ -1406,7 +1406,7 @@ local function enableTrashcanReturn()
             -- Find the last picked trashcan to teleport back to
             local currentTrashcan = getFarthestTrashCan()
             if currentTrashcan then
-                movePlayerToTrashcan(currentTrashcan)
+                print('h')
             end
         else
             trashcanConnection:Disconnect()
