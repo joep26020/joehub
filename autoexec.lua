@@ -926,48 +926,35 @@ local DetectedAnimations = {
 }
 -- Function to restore camera to player
 restoreCamera = function()
-    -- Disconnect override so no loops remain
-    if overrideConnection then
-        overrideConnection:Disconnect()
-        overrideConnection = nil
-    end
+    if overrideConnection then overrideConnection:Disconnect(); overrideConnection = nil end
+    if currentCamConn     then currentCamConn:Disconnect();     currentCamConn     = nil end
 
-    -- Save current camera CFrame
-    local oldCam = Workspace.CurrentCamera
+    local oldCam  = workspace.CurrentCamera
     local savedCF = oldCam and oldCam.CFrame
 
-    -- Destroy existing “Camera” instance
-    local existingCam = Workspace:FindFirstChild("Camera")
-    if existingCam then
-        existingCam:Destroy()
+    local cam = workspace.CurrentCamera
+    if not cam then
+        cam = Instance.new("Camera")
+        cam.Name   = "Camera"
+        cam.Parent = workspace
+        workspace.CurrentCamera = cam
     end
 
-    -- Create new Camera for the player
-    local cam = Instance.new("Camera")
-    cam.Name       = "Camera"
-    cam.CameraType = Enum.CameraType.Custom
-    cam.Parent     = Workspace
+    if savedCF then cam.CFrame = savedCF end
 
-    -- Apply saved orientation/position
-    if savedCF then
-        cam.CFrame = savedCF
-    end
-
-    Workspace.CurrentCamera = cam
-
-    -- Point camera back to player
-    local char     = player.Character
+    local char       = player.Character
     local targetHum  = char and char:FindFirstChildOfClass("Humanoid")
-    local targetPart = char and char:FindFirstChild("HumanoidRootPart")
-    local target     = targetHum or targetPart
-    if not target then
-        warn("Cannot restore camera: humanoid or HumanoidRootPart missing.")
+    local targetPart = targetHum or (char and char:FindFirstChild("HumanoidRootPart"))
+    if not targetPart then
+        warn("Cannot restore camera: no Humanoid/HRP.")
         return
     end
-    cam.CameraSubject = target
 
+    cam.CameraType    = Enum.CameraType.Custom
+    cam.CameraSubject = targetPart
     print("Camera restored to player character.")
 end
+
 
 -- Function to check if any players are nearby using the original HumanoidRootPart
 anyPlayersNearby = function()
@@ -1229,51 +1216,39 @@ end
 
 -- Camera control fixed!
 
-local function setupCamera(clone)
-    if not clone then
-        warn("Cannot setup camera: clone is nil.")
+local overrideConnection, currentCamConn
+
+local function setupCamera(cloneModel)
+    if not cloneModel or not cloneModel:IsA("Model") then
+        warn("setupCamera expects a Model (clone).")
         return
     end
 
-    -- Disconnect previous override (if any)
-    if overrideConnection then
-        overrideConnection:Disconnect()
-        overrideConnection = nil
+    -- Disconnect old listeners
+    if overrideConnection then overrideConnection:Disconnect(); overrideConnection = nil end
+    if currentCamConn     then currentCamConn:Disconnect();     currentCamConn     = nil end
+
+    -- Use the existing camera; don’t create a new one unless you must
+    local cam = workspace.CurrentCamera
+    if not cam then
+        cam = Instance.new("Camera")
+        cam.Name = "Camera"
+        cam.Parent = workspace
+        workspace.CurrentCamera = cam
     end
 
-    -- Save current camera CFrame
-    local oldCam = Workspace.CurrentCamera
-    local savedCF = oldCam and oldCam.CFrame
-
-    -- Destroy existing “Camera” instance
-    local existingCam = Workspace:FindFirstChild("Camera")
-    if existingCam then
-        existingCam:Destroy()
-    end
-
-    -- Create new Camera
-    local cam = Instance.new("Camera")
-    cam.Name       = "Camera"
-    cam.CameraType = Enum.CameraType.Custom
-    cam.Parent     = Workspace
-
-    -- Apply saved orientation/position
-    if savedCF then
-        cam.CFrame = savedCF
-    end
-
-    Workspace.CurrentCamera = cam
-
-    -- Point it at clone’s Humanoid or HumanoidRootPart
-    local targetHum  = clone:FindFirstChildOfClass("Humanoid")
-    local targetPart = targetHum or clone:FindFirstChild("HumanoidRootPart")
+    -- Find target on the clone model
+    local targetHum  = cloneModel:FindFirstChildOfClass("Humanoid")
+    local targetPart = targetHum or cloneModel:FindFirstChild("HumanoidRootPart")
     if not targetPart then
-        warn("Cannot setup camera: no Humanoid or HumanoidRootPart on clone.")
+        warn("setupCamera: clone has no Humanoid/HumanoidRootPart.")
         return
     end
+
+    cam.CameraType    = Enum.CameraType.Custom
     cam.CameraSubject = targetPart
 
-    -- Override any external CameraSubject changes
+    -- Re-assert subject if some other script changes it
     overrideConnection = cam:GetPropertyChangedSignal("CameraSubject"):Connect(function()
         if cam.CameraSubject ~= targetPart then
             cam.CameraType    = Enum.CameraType.Custom
@@ -1281,8 +1256,26 @@ local function setupCamera(clone)
         end
     end)
 
+    -- If another script swaps out CurrentCamera, grab the new one and re-bind
+    currentCamConn = workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(function()
+        cam = workspace.CurrentCamera
+        if cam then
+            cam.CameraType    = Enum.CameraType.Custom
+            cam.CameraSubject = targetPart
+            -- refresh the subject-change guard on the new camera
+            if overrideConnection then overrideConnection:Disconnect() end
+            overrideConnection = cam:GetPropertyChangedSignal("CameraSubject"):Connect(function()
+                if cam.CameraSubject ~= targetPart then
+                    cam.CameraType    = Enum.CameraType.Custom
+                    cam.CameraSubject = targetPart
+                end
+            end)
+        end
+    end)
+
     print("Camera set to follow clone.")
 end
+
 
 local Y_THRESHOLD = 422 -- Desired Y-coordinate threshold
 
@@ -2391,7 +2384,7 @@ local function pickUpTrashCan(trashCan)
     -- Make sure clone is at the same spot as our original character’s HRP right away:
     clone:SetPrimaryPartCFrame(originalChar.PrimaryPart.CFrame)
     
-    setupCamera(cloneHumanoid or clone)
+    setupCamera(clone)
 
     local canPositionPart = trashCan:FindFirstChild("Trashcan")
     if not canPositionPart or not canPositionPart:IsA("BasePart") then
