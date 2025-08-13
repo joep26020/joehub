@@ -926,6 +926,7 @@ local DetectedAnimations = {
 }
 -- Function to restore camera to player
 restoreCamera = function()
+	if camLockConn then camLockConn:Disconnect(); camLockConn = nil end
     if overrideConnection then overrideConnection:Disconnect(); overrideConnection = nil end
     if currentCamConn     then currentCamConn:Disconnect();     currentCamConn     = nil end
 
@@ -2365,7 +2366,7 @@ end
 -- Only modified per user request (no original position revert, clone starts at same HRP,
 -- main char set to clone’s HRP after pick-up, and loop teleport).
 --------------------------------------------------------------------------------
-
+local camLockConn
 local function pickUpTrashCan(trashCan)
     local originalChar = player.Character
     if not originalChar or not originalChar.PrimaryPart then return end
@@ -2384,7 +2385,23 @@ local function pickUpTrashCan(trashCan)
     -- Make sure clone is at the same spot as our original character’s HRP right away:
     clone:SetPrimaryPartCFrame(originalChar.PrimaryPart.CFrame)
     
-    setupCamera(clone)
+    if camLockConn then camLockConn:Disconnect() end
+    camLockConn = RunService.RenderStepped:Connect(function()
+        local cam = workspace.CurrentCamera
+        if cam and clone and clone.Parent then
+            local hum = clone:FindFirstChildOfClass("Humanoid")
+            if hum then
+                cam.CameraType = Enum.CameraType.Custom
+                cam.CameraSubject = hum
+            else
+                local hrp = clone:FindFirstChild("HumanoidRootPart")
+                if hrp then
+                    cam.CameraType = Enum.CameraType.Scriptable
+                    cam.CFrame = CFrame.new(hrp.Position + Vector3.new(0, 4, -8), hrp.Position)
+                end
+            end
+        end
+    end)
 
     local canPositionPart = trashCan:FindFirstChild("Trashcan")
     if not canPositionPart or not canPositionPart:IsA("BasePart") then
