@@ -1229,59 +1229,40 @@ end
 
 -- Camera control fixed!
 
-local function setupCamera(clone)
-    if not clone then
-        warn("Cannot setup camera: clone is nil.")
+function setupCamera(subject)
+    if not subject then
+        warn("Cannot setup camera: subject is nil.")
         return
     end
 
-    -- Disconnect previous override (if any)
-    if overrideConnection then
-        overrideConnection:Disconnect()
-        overrideConnection = nil
+    -- Normalize to model
+    local model = subject
+    if subject:IsA("Humanoid") or subject:IsA("BasePart") then
+        model = subject:IsA("Humanoid") and subject.Parent or subject.Parent
+    end
+    if not model or not model:IsA("Model") then
+        warn("setupCamera: expected a Model (with Humanoid/HRP).")
+        return
     end
 
-    -- Save current camera CFrame
-    local oldCam = Workspace.CurrentCamera
-    local savedCF = oldCam and oldCam.CFrame
-
-    -- Destroy existing “Camera” instance
-    local existingCam = Workspace:FindFirstChild("Camera")
-    if existingCam then
-        existingCam:Destroy()
-    end
-
-    -- Create new Camera
-    local cam = Instance.new("Camera")
-    cam.Name       = "Camera"
+    local cam = workspace.CurrentCamera
     cam.CameraType = Enum.CameraType.Custom
-    cam.Parent     = Workspace
 
-    -- Apply saved orientation/position
-    if savedCF then
-        cam.CFrame = savedCF
-    end
-
-    Workspace.CurrentCamera = cam
-
-    -- Point it at clone’s Humanoid or HumanoidRootPart
-    local targetHum  = clone:FindFirstChildOfClass("Humanoid")
-    local targetPart = targetHum or clone:FindFirstChild("HumanoidRootPart")
+    local targetHum  = model:FindFirstChildOfClass("Humanoid")
+    local targetPart = targetHum or model:FindFirstChild("HumanoidRootPart")
     if not targetPart then
-        warn("Cannot setup camera: no Humanoid or HumanoidRootPart on clone.")
+        warn("Cannot setup camera: no Humanoid or HumanoidRootPart on model.")
         return
     end
+
     cam.CameraSubject = targetPart
 
-    -- Override any external CameraSubject changes
+    if overrideConnection then overrideConnection:Disconnect() end
     overrideConnection = cam:GetPropertyChangedSignal("CameraSubject"):Connect(function()
         if cam.CameraSubject ~= targetPart then
-            cam.CameraType    = Enum.CameraType.Custom
             cam.CameraSubject = targetPart
         end
     end)
-
-    print("Camera set to follow clone.")
 end
 
 local Y_THRESHOLD = 422 -- Desired Y-coordinate threshold
