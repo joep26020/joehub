@@ -2440,42 +2440,62 @@ local function pickUpTrashCan(trashCan)
 
     local srcHRP = originalChar:FindFirstChild("HumanoidRootPart")
     if not srcHRP then return end
-    local savedCF = srcHRP.CFrame  -- snapshot BEFORE anything moves
+
+    -- Snapshot BEFORE anything moves (prevents clone-at-trashcan issue)
+    local savedCF = srcHRP.CFrame
+
+    -- Temporarily pause any external movers like auto-trash / return-to-trashcan
+    local wasAutoTrashOn = autoTrashGrabEnabled
+    local wasReturnOn    = returnToTrashcanEnabled
+    if wasAutoTrashOn then
+        autoTrashGrabEnabled = false
+        if setAllTrashCansCollide then setAllTrashCansCollide(true) end
+    end
+    if wasReturnOn and disableTrashcanReturn then
+        disableTrashcanReturn()
+    end
 
     if aimAssistEnabled then aimAssistEnabled = false end
 
-    -- Create clone first and force it to the pre-move position
+    -- Create clone first and force to the pre-move position
     local clone = createClone(originalChar)
     if not clone or not clone.PrimaryPart then
         warn("Clone failed to create in pickUpTrashCan")
+        -- restore toggles before exit
+        if wasAutoTrashOn then
+            autoTrashGrabEnabled = true
+            if setAllTrashCansCollide then setAllTrashCansCollide(false) end
+        end
+        if wasReturnOn and enableTrashcanReturn then enableTrashcanReturn() end
         return
     end
+
     stabilizeClone(clone)
 
-    -- hard place at the original spot (even if main got pulled already)
+    -- Hard place at the saved spot (even if main already moved)
     if clone.PivotTo then clone:PivotTo(savedCF) else clone:SetPrimaryPartCFrame(savedCF) end
 
-    -- one-tick anchor to avoid immediate external pulls
+    -- One-tick anchor so nothing yanks the clone this frame
     do
         local pp = clone.PrimaryPart
         if pp then
             local wasAnchored = pp.Anchored
             pp.Anchored = true
-			wait(.03)
-            task.defer(function()
+            task.spawn(function()
+                RunService.Heartbeat:Wait()
                 if clone and clone.PrimaryPart then clone.PrimaryPart.Anchored = wasAnchored end
             end)
         end
     end
 
+    controlClone(clone)
     setupCamera(clone)
     pcall(function() syncAnimations(originalChar, clone) end)
 
-    -- Mirror sFLY forces
-    local dstHRP = clone:FindFirstChild("HumanoidRootPart")
-    local stopMirroring = mirrorFlyForces(srcHRP, dstHRP)
+    -- Mirror sFLY forces to the clone
+    local stopMirroring = mirrorFlyForces(srcHRP, clone:FindFirstChild("HumanoidRootPart"))
 
-    -- Only now move main toward the trashcan
+    -- Only now start moving main toward trashcan
     local canConnection = RunService.Heartbeat:Connect(function()
         movePlayerToTrashcan(trashCan)
     end)
@@ -2486,21 +2506,31 @@ local function pickUpTrashCan(trashCan)
     if canConnection then canConnection:Disconnect() end
     if stopMirroring then stopMirroring() end
 
-    if player.Character and player.Character:FindFirstChild("HumanoidRootPart") and dstHRP then
-        player.Character.HumanoidRootPart.CFrame = dstHRP.CFrame
+    if player.Character and player.Character:FindFirstChild("HumanoidRootPart") and clone:FindFirstChild("HumanoidRootPart") then
+        player.Character.HumanoidRootPart.CFrame = clone.HumanoidRootPart.CFrame
     end
 
-    if cloneConnections[clone] then
+    if cloneConnections and cloneConnections[clone] then
         cloneConnections[clone]:Disconnect()
         cloneConnections[clone] = nil
     end
-    clone:Destroy()
+    if clone then clone:Destroy() end
 
     restoreCamera()
     if not userAimAssistToggledOff then aimAssistEnabled = true end
 
+    -- Restore any paused loops
+    if wasAutoTrashOn then
+        autoTrashGrabEnabled = true
+        if setAllTrashCansCollide then setAllTrashCansCollide(false) end
+    end
+    if wasReturnOn and enableTrashcanReturn then
+        enableTrashcanReturn()
+    end
+
     return pickedUp
 end
+
 
 
 --------------------------------------------------------------------------------
