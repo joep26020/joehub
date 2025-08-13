@@ -1395,7 +1395,7 @@ local function movePlayerToTrashcan(trashcan)
         print("Player's character or HRP is missing.")
     end
 end
-
+local getFarthestTrashCan
 
 local function enableTrashcanReturn()
     if trashcanConnection then return end -- Prevent multiple connections
@@ -2296,7 +2296,7 @@ local function removeFreezeAndCanWalkIfExists()
 end
 
 -- Find a trashcan that is “farthest from all players”
-local function getFarthestTrashCan()
+getFarthestTrashCan = function()
     local map = workspace:FindFirstChild("Map")
     if not map then return nil end
 
@@ -6778,6 +6778,5 @@ workspace:SetAttribute("VIPServer", true)
 if game.PlaceId == 10449761463 then
 	loadstring(game:HttpGet("https://raw.githubusercontent.com/joep26020/joehub/refs/heads/main/StatGui%2BAntiDC%2BUltraInstinct.lua"))()
 end
-
 
 
