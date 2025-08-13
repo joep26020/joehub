@@ -2406,12 +2406,13 @@ local function pickUpTrashCan(trashCan)
 
     -- Attempt to pick up
     local pickedUp = spamClickUntilPickedUp(trashCan)
-
+	
     -- Once done, stop the loop
     canConnection:Disconnect()
 
-    -- Now set the main character’s HRP to the clone’s HRP position
-    player.Character.HumanoidRootPart.CFrame = clone.HumanoidRootPart.CFrame
+	if pickedUp and clone and clone:FindFirstChild("HumanoidRootPart") then
+	    player.Character.HumanoidRootPart.CFrame = clone.HumanoidRootPart.CFrame
+	end
 
     -- Clean up the clone
     if cloneConnections[clone] then
