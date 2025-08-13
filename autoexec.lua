@@ -2377,6 +2377,10 @@ end
 local function mirrorFlyForces(sourceHRP, destHRP)
     if not (sourceHRP and destHRP) then return function() end end
 
+    local hum = destHRP.Parent and destHRP.Parent:FindFirstChildOfClass("Humanoid")
+    local restorePS = hum and hum.PlatformStand or nil
+    if hum then hum.PlatformStand = true end  -- let BV control motion
+
     local function copyGyro(src, dst)
         if not dst then
             dst = Instance.new("BodyGyro")
@@ -2384,12 +2388,10 @@ local function mirrorFlyForces(sourceHRP, destHRP)
             dst.Parent = destHRP
         end
         dst.P = src.P
-        dst.MaxTorque = src.MaxTorque
-        -- Handle both CFrame/cframe usages
-        local ok = pcall(function() dst.CFrame = src.CFrame end)
-        if not ok and src.cframe then
-            dst.CFrame = src.cframe
-        end
+        dst.D = src.D
+        dst.MaxTorque = src.MaxTorque or src.maxTorque
+        local cf = src.CFrame or src.cframe
+        if cf then dst.CFrame = cf end
         return dst
     end
 
@@ -2399,86 +2401,81 @@ local function mirrorFlyForces(sourceHRP, destHRP)
             dst.Name = "FlyMirrorBodyVelocity"
             dst.Parent = destHRP
         end
-        dst.MaxForce = src.MaxForce
-        dst.Velocity = src.Velocity
+        dst.P = src.P
+        dst.MaxForce = src.MaxForce or src.maxForce
+        dst.Velocity = src.Velocity or src.velocity
         return dst
     end
 
-    local hbConn, addConn, remConn
-    hbConn = RunService.Heartbeat:Connect(function()
-        if not sourceHRP.Parent or not destHRP.Parent then return end
+    local hbConn = RunService.Heartbeat:Connect(function()
+        if not (sourceHRP.Parent and destHRP.Parent) then return end
 
         local sBG = sourceHRP:FindFirstChildOfClass("BodyGyro")
         local dBG = destHRP:FindFirstChild("FlyMirrorBodyGyro")
+        if sBG then dBG = copyGyro(sBG, dBG) elseif dBG then dBG:Destroy() end
 
         local sBV = sourceHRP:FindFirstChildOfClass("BodyVelocity")
         local dBV = destHRP:FindFirstChild("FlyMirrorBodyVelocity")
-
-        if sBG then
-            dBG = copyGyro(sBG, dBG)
-        elseif dBG then
-            dBG:Destroy()
-        end
-
         if sBV then
             dBV = copyVel(sBV, dBV)
+            -- ensure clone actually translates, even if Humanoid resists BV
+            destHRP.AssemblyLinearVelocity = sourceHRP.AssemblyLinearVelocity
         elseif dBV then
             dBV:Destroy()
         end
     end)
 
-    addConn = sourceHRP.ChildAdded:Connect(function()
-        -- Just let Heartbeat copy new forces on next tick
-    end)
-    remConn = sourceHRP.ChildRemoved:Connect(function(child)
-        if child:IsA("BodyGyro") then
-            local d = destHRP:FindFirstChild("FlyMirrorBodyGyro")
-            if d then d:Destroy() end
-        elseif child:IsA("BodyVelocity") then
-            local d = destHRP:FindFirstChild("FlyMirrorBodyVelocity")
-            if d then d:Destroy() end
-        end
-    end)
-
     return function()
         if hbConn then hbConn:Disconnect() end
-        if addConn then addConn:Disconnect() end
-        if remConn then remConn:Disconnect() end
-        local dBG = destHRP:FindFirstChild("FlyMirrorBodyGyro")
-        if dBG then dBG:Destroy() end
-        local dBV = destHRP:FindFirstChild("FlyMirrorBodyVelocity")
-        if dBV then dBV:Destroy() end
+        local dBG = destHRP:FindFirstChild("FlyMirrorBodyGyro"); if dBG then dBG:Destroy() end
+        local dBV = destHRP:FindFirstChild("FlyMirrorBodyVelocity"); if dBV then dBV:Destroy() end
+        if hum and restorePS ~= nil then hum.PlatformStand = restorePS end
     end
 end
+
 
 local function pickUpTrashCan(trashCan)
     local originalChar = player.Character
     if not originalChar or not originalChar.PrimaryPart then return end
 
-    -- Disable aim assist while we’re doing controlled movement, like in the detector flow
-    if aimAssistEnabled then
-        aimAssistEnabled = false
-    end
+    local srcHRP = originalChar:FindFirstChild("HumanoidRootPart")
+    if not srcHRP then return end
+    local savedCF = srcHRP.CFrame  -- snapshot BEFORE anything moves
 
-    -- Create clone first (before main moves) just like handleDetectedAnimation
+    if aimAssistEnabled then aimAssistEnabled = false end
+
+    -- Create clone first and force it to the pre-move position
     local clone = createClone(originalChar)
     if not clone or not clone.PrimaryPart then
         warn("Clone failed to create in pickUpTrashCan")
         return
     end
     stabilizeClone(clone)
+
+    -- hard place at the original spot (even if main got pulled already)
+    if clone.PivotTo then clone:PivotTo(savedCF) else clone:SetPrimaryPartCFrame(savedCF) end
+
+    -- one-tick anchor to avoid immediate external pulls
+    do
+        local pp = clone.PrimaryPart
+        if pp then
+            local wasAnchored = pp.Anchored
+            pp.Anchored = true
+            task.defer(function()
+                if clone and clone.PrimaryPart then clone.PrimaryPart.Anchored = wasAnchored end
+            end)
+        end
+    end
+
     controlClone(clone)
     setupCamera(clone)
-    local okAnim, animConn = pcall(function()
-        return syncAnimations(originalChar, clone)
-    end)
+    pcall(function() syncAnimations(originalChar, clone) end)
 
-    -- Mirror fly forces (BG/BV) while they exist on the original HRP
-    local srcHRP = originalChar:FindFirstChild("HumanoidRootPart")
+    -- Mirror sFLY forces
     local dstHRP = clone:FindFirstChild("HumanoidRootPart")
     local stopMirroring = mirrorFlyForces(srcHRP, dstHRP)
 
-    -- Now start moving main toward trashcan
+    -- Only now move main toward the trashcan
     local canConnection = RunService.Heartbeat:Connect(function()
         movePlayerToTrashcan(trashCan)
     end)
@@ -2486,33 +2483,24 @@ local function pickUpTrashCan(trashCan)
     local pickedUp = spamClickUntilPickedUp(trashCan)
 
     -- Cleanup
-    canConnection:Disconnect()
-    stopMirroring()
-    if okAnim and animConn then
-        animConn:Disconnect()
+    if canConnection then canConnection:Disconnect() end
+    if stopMirroring then stopMirroring() end
+
+    if player.Character and player.Character:FindFirstChild("HumanoidRootPart") and dstHRP then
+        player.Character.HumanoidRootPart.CFrame = dstHRP.CFrame
     end
 
-    -- Port main char to clone spot
-    if player.Character and player.Character:FindFirstChild("HumanoidRootPart") and clone:FindFirstChild("HumanoidRootPart") then
-        player.Character.HumanoidRootPart.CFrame = clone.HumanoidRootPart.CFrame
-    end
-
-    -- Kill any per-clone control connection you track
     if cloneConnections[clone] then
         cloneConnections[clone]:Disconnect()
         cloneConnections[clone] = nil
     end
     clone:Destroy()
 
-    -- Restore camera & aim assist if user didn’t toggle off
     restoreCamera()
-    if not userAimAssistToggledOff then
-        aimAssistEnabled = true
-    end
+    if not userAimAssistToggledOff then aimAssistEnabled = true end
 
     return pickedUp
 end
-
 
 
 --------------------------------------------------------------------------------
