@@ -2461,13 +2461,13 @@ local function pickUpTrashCan(trashCan)
         if pp then
             local wasAnchored = pp.Anchored
             pp.Anchored = true
+			wait(.03)
             task.defer(function()
                 if clone and clone.PrimaryPart then clone.PrimaryPart.Anchored = wasAnchored end
             end)
         end
     end
 
-    controlClone(clone)
     setupCamera(clone)
     pcall(function() syncAnimations(originalChar, clone) end)
 
