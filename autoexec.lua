@@ -2367,6 +2367,9 @@ end
 -- main char set to clone’s HRP after pick-up, and loop teleport).
 --------------------------------------------------------------------------------
 local camLockConn
+-- keep this once near your other connection vars:
+-- local camLockConn
+
 local function pickUpTrashCan(trashCan)
     local originalChar = player.Character
     if not originalChar or not originalChar.PrimaryPart then return end
@@ -2375,66 +2378,86 @@ local function pickUpTrashCan(trashCan)
         aimAssistEnabled = false
     end
 
+    -- clone + prep
     local clone = createClone(originalChar)
     local cloneHumanoid = clone:FindFirstChildOfClass("Humanoid")
     if cloneHumanoid then
         cloneHumanoid:ChangeState(Enum.HumanoidStateType.Running)
+        cloneHumanoid.WalkSpeed = scale
+        cloneHumanoid.JumpPower = 100
     end
     stabilizeClone(clone)
     controlClone(clone)
-    -- Make sure clone is at the same spot as our original character’s HRP right away:
-    setupCamera(clone)
-    
-    if camLockConn then camLockConn:Disconnect() end
+    clone:SetPrimaryPartCFrame(originalChar.PrimaryPart.CFrame)
+
+    -- === RenderStepped: drive clone movement from local humanoid (same pattern) ===
+    local moveConnection
+    if cloneHumanoid and humanoid then
+        moveConnection = RunService.RenderStepped:Connect(function()
+            if cloneHumanoid and humanoid then
+                cloneHumanoid:Move(humanoid.MoveDirection * 50)
+                cloneHumanoid.Jump = humanoid.Jump
+            end
+        end)
+    end
+
+    -- === Camera: setup + hard lock each frame (quick + robust) ===
+    setupCamera(clone)  -- keep your watchers
+    if camLockConn then camLockConn:Disconnect(); camLockConn = nil end
     camLockConn = RunService.RenderStepped:Connect(function()
         local cam = workspace.CurrentCamera
-        if cam and clone and clone.Parent then
-            local hum = clone:FindFirstChildOfClass("Humanoid")
-            if hum then
-                cam.CameraType = Enum.CameraType.Custom
-                cam.CameraSubject = hum
-            else
-                local hrp = clone:FindFirstChild("HumanoidRootPart")
-                if hrp then
-                    cam.CameraType = Enum.CameraType.Scriptable
-                    cam.CFrame = CFrame.new(hrp.Position + Vector3.new(0, 4, -8), hrp.Position)
-                end
+        if not (cam and clone and clone.Parent) then return end
+        local hum = clone:FindFirstChildOfClass("Humanoid")
+        if hum then
+            if cam.CameraType ~= Enum.CameraType.Custom then cam.CameraType = Enum.CameraType.Custom end
+            if cam.CameraSubject ~= hum then cam.CameraSubject = hum end
+        else
+            local hrp = clone:FindFirstChild("HumanoidRootPart")
+            if hrp then
+                cam.CameraType = Enum.CameraType.Scriptable
+                cam.CFrame = CFrame.new(hrp.Position + Vector3.new(0, 4, -8), hrp.Position)
             end
         end
     end)
 
+    -- verify target part exists
     local canPositionPart = trashCan:FindFirstChild("Trashcan")
     if not canPositionPart or not canPositionPart:IsA("BasePart") then
+        if moveConnection then moveConnection:Disconnect(); moveConnection = nil end
+        if camLockConn   then camLockConn:Disconnect();   camLockConn   = nil end
         clone:Destroy()
         restoreCamera()
         return
     end
 
-    -- Instead of a single teleport, use Heartbeat to keep teleporting to trashcan:
+    -- keep snapping to the trashcan while we try to pick it up
     local canConnection = RunService.Heartbeat:Connect(function()
         movePlayerToTrashcan(trashCan)
     end)
 
-    -- Attempt to pick up
     local pickedUp = spamClickUntilPickedUp(trashCan)
 
-    -- Once done, stop the loop
+    -- stop loops
     canConnection:Disconnect()
+    if moveConnection then moveConnection:Disconnect(); moveConnection = nil end
+    if camLockConn   then camLockConn:Disconnect();   camLockConn   = nil end
 
-    -- Now set the main character’s HRP to the clone’s HRP position
-    player.Character.HumanoidRootPart.CFrame = clone.HumanoidRootPart.CFrame
+    -- move real char to clone spot
+    if player.Character
+        and player.Character:FindFirstChild("HumanoidRootPart")
+        and clone:FindFirstChild("HumanoidRootPart") then
+        player.Character.HumanoidRootPart.CFrame = clone.HumanoidRootPart.CFrame
+    end
 
-    -- Clean up the clone
+    -- cleanup
     if cloneConnections[clone] then
         cloneConnections[clone]:Disconnect()
         cloneConnections[clone] = nil
     end
     clone:Destroy()
 
-    -- Restore camera
+    -- restore camera + aim assist
     restoreCamera()
-
-    -- Re-enable aim assist if the user didn’t toggle it off
     if not userAimAssistToggledOff then
         aimAssistEnabled = true
     end
