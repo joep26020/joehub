@@ -2383,7 +2383,7 @@ local function pickUpTrashCan(trashCan)
     stabilizeClone(clone)
     controlClone(clone)
     -- Make sure clone is at the same spot as our original character’s HRP right away:
-    clone:SetPrimaryPartCFrame(originalChar.PrimaryPart.CFrame)
+    setupCamera(clone)
     
     if camLockConn then camLockConn:Disconnect() end
     camLockConn = RunService.RenderStepped:Connect(function()
