@@ -2378,8 +2378,7 @@ local function mirrorFlyForces(sourceHRP, destHRP)
     if not (sourceHRP and destHRP) then return function() end end
 
     local hum = destHRP.Parent and destHRP.Parent:FindFirstChildOfClass("Humanoid")
-    local restorePS = hum and hum.PlatformStand or nil
-    if hum then hum.PlatformStand = true end  -- let BV control motion
+    local savedPS = hum and hum.PlatformStand or nil
 
     local function copyGyro(src, dst)
         if not dst then
@@ -2407,21 +2406,46 @@ local function mirrorFlyForces(sourceHRP, destHRP)
         return dst
     end
 
-    local hbConn = RunService.Heartbeat:Connect(function()
+    local hbConn
+    hbConn = RunService.Heartbeat:Connect(function()
+        -- bail if either root is gone
         if not (sourceHRP.Parent and destHRP.Parent) then return end
 
         local sBG = sourceHRP:FindFirstChildOfClass("BodyGyro")
-        local dBG = destHRP:FindFirstChild("FlyMirrorBodyGyro")
-        if sBG then dBG = copyGyro(sBG, dBG) elseif dBG then dBG:Destroy() end
-
         local sBV = sourceHRP:FindFirstChildOfClass("BodyVelocity")
+        local dBG = destHRP:FindFirstChild("FlyMirrorBodyGyro")
         local dBV = destHRP:FindFirstChild("FlyMirrorBodyVelocity")
+        local usingForces = (sBG ~= nil) or (sBV ~= nil)
+
+        -- Mirror/clear forces
+        if sBG then dBG = copyGyro(sBG, dBG) elseif dBG then dBG:Destroy() end
         if sBV then
             dBV = copyVel(sBV, dBV)
-            -- ensure clone actually translates, even if Humanoid resists BV
+            -- also mirror linear velocity so motion actually happens
             destHRP.AssemblyLinearVelocity = sourceHRP.AssemblyLinearVelocity
         elseif dBV then
             dBV:Destroy()
+        end
+
+        -- State handling so the clone doesn't flop
+        if hum then
+            if usingForces then
+                if hum.PlatformStand ~= true then hum.PlatformStand = true end
+                -- Don't fight the forces with Humanoid states
+            else
+                -- No forces -> normal character
+                if hum.PlatformStand == true then hum.PlatformStand = false end
+                if hum:GetState() ~= Enum.HumanoidStateType.Running then
+                    hum:ChangeState(Enum.HumanoidStateType.Running)
+                end
+                hum.AutoRotate = true
+                hum.Sit = false
+
+                -- Keep clone upright and facing same direction as source without teleporting position
+                local srcCF = sourceHRP.CFrame
+                destHRP.AssemblyAngularVelocity = Vector3.new()
+                destHRP.CFrame = CFrame.lookAt(destHRP.Position, destHRP.Position + srcCF.LookVector)
+            end
         end
     end)
 
@@ -2429,7 +2453,7 @@ local function mirrorFlyForces(sourceHRP, destHRP)
         if hbConn then hbConn:Disconnect() end
         local dBG = destHRP:FindFirstChild("FlyMirrorBodyGyro"); if dBG then dBG:Destroy() end
         local dBV = destHRP:FindFirstChild("FlyMirrorBodyVelocity"); if dBV then dBV:Destroy() end
-        if hum and restorePS ~= nil then hum.PlatformStand = restorePS end
+        if hum and savedPS ~= nil then hum.PlatformStand = savedPS end
     end
 end
 
@@ -2440,33 +2464,40 @@ local function pickUpTrashCan(trashCan)
 
     local srcHRP = originalChar:FindFirstChild("HumanoidRootPart")
     if not srcHRP then return end
-    local savedCF = srcHRP.CFrame  -- snapshot BEFORE anything moves
+
+    -- ✅ Save the MODEL pivot (more robust than HRP CFrame)
+    local savedPivot = originalChar:GetPivot()
 
     if aimAssistEnabled then aimAssistEnabled = false end
 
-    -- Create clone first and force it to the pre-move position
+    -- Create clone at the exact saved pivot
     local clone = createClone(originalChar)
     if not clone or not clone.PrimaryPart then
-        warn("Clone failed to create in pickUpTrashCan")
-        return
+        warn("Clone failed to create in pickUpTrashCan"); return
     end
     stabilizeClone(clone)
 
-    -- hard place at the original spot (even if main got pulled already)
-    if clone.PivotTo then clone:PivotTo(savedCF) else clone:SetPrimaryPartCFrame(savedCF) end
-    setupCamera(clone)
+    -- Force placement by model pivot (prevents HRP-vs-pivot mismatch)
+    clone:PivotTo(savedPivot)
 
+    -- Make sure its Humanoid isn't sitting or platform-standing initially
+    local ch = clone:FindFirstChildOfClass("Humanoid")
+    if ch then
+        ch.PlatformStand = false
+        ch.Sit = false
+        ch:ChangeState(Enum.HumanoidStateType.Running)
+    end
+
+    setupCamera(clone)
     pcall(function() syncAnimations(originalChar, clone) end)
 
-	wait(.05)
-
-    -- Only now move main toward the trashcan
+    -- Now start moving the MAIN character; we delayed this until after clone is placed
     local canConnection = RunService.Heartbeat:Connect(function()
         movePlayerToTrashcan(trashCan)
     end)
-    -- Mirror sFLY forces
-    local dstHRP = clone:FindFirstChild("HumanoidRootPart")
-    local stopMirroring = mirrorFlyForces(srcHRP, dstHRP)
+
+    -- Mirror sFLY forces (or fall back to normal running per the fix above)
+    local stopMirroring = mirrorFlyForces(srcHRP, clone:FindFirstChild("HumanoidRootPart"))
 
     local pickedUp = spamClickUntilPickedUp(trashCan)
 
@@ -2474,8 +2505,8 @@ local function pickUpTrashCan(trashCan)
     if canConnection then canConnection:Disconnect() end
     if stopMirroring then stopMirroring() end
 
-    if player.Character and player.Character:FindFirstChild("HumanoidRootPart") and dstHRP then
-        player.Character.HumanoidRootPart.CFrame = dstHRP.CFrame
+    if player.Character and player.Character:FindFirstChild("HumanoidRootPart") and clone:FindFirstChild("HumanoidRootPart") then
+        player.Character.HumanoidRootPart.CFrame = clone.HumanoidRootPart.CFrame
     end
 
     if cloneConnections[clone] then
