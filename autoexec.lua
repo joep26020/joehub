@@ -2391,7 +2391,7 @@ local function pickUpTrashCan(trashCan)
     -- Make sure clone is at the same spot as our original character’s HRP right away:
     clone:SetPrimaryPartCFrame(originalChar.PrimaryPart.CFrame)
     
-    workspace.CurrentCamera.CameraSubject = clone:FindFirstChild("Humanoid") or clone
+    setupCamera(cloneHumanoid or clone)
 
     local canPositionPart = trashCan:FindFirstChild("Trashcan")
     if not canPositionPart or not canPositionPart:IsA("BasePart") then
