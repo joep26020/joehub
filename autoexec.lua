@@ -2374,6 +2374,11 @@ end
 --------------------------------------------------------------------------------
 
 local function pickUpTrashCan(trashCan)
+    character = player.Character
+    if not character or not character:FindFirstChild("HumanoidRootPart") then
+        character = player.CharacterAdded:Wait()
+        character:WaitForChild("HumanoidRootPart")
+    end
     local originalChar = player.Character
     if not originalChar or not originalChar.PrimaryPart then return end
 
@@ -2381,21 +2386,43 @@ local function pickUpTrashCan(trashCan)
         aimAssistEnabled = false
     end
 
-    local clone = createClone(originalChar)
-    local cloneHumanoid = clone:FindFirstChildOfClass("Humanoid")
+    local cloneCharacter = createClone(originalChar)
+    local cloneHumanoid = cloneCharacter:FindFirstChildOfClass("Humanoid")
     if cloneHumanoid then
         cloneHumanoid:ChangeState(Enum.HumanoidStateType.Running)
     end
-    stabilizeClone(clone)
-    controlClone(clone)
+    stabilizeClone(cloneCharacter)
+
+    local cloneHumanoid = cloneCharacter:FindFirstChildOfClass("Humanoid")
+    local cloneHRP = cloneCharacter:FindFirstChild("HumanoidRootPart")
+
+    -- Remove controlClone call and use proper humanoid movement
+    cloneHumanoid.WalkSpeed = scale -- Ensure proper movement speed
+    cloneHumanoid.JumpPower = 100
+
+    -- Connect input directly to clone humanoid
+    local moveConnection
+    moveConnection = RunService.RenderStepped:Connect(function()
+        if cloneHumanoid and humanoid then
+            cloneHumanoid:Move(humanoid.MoveDirection * 50) -- Boost movement if needed
+            cloneHumanoid.Jump = humanoid.Jump
+        end
+    end)
+
+    local success, animationPlayedConn = pcall(function()
+        return syncAnimations(character, cloneCharacter)
+    end)
+
+    local connectionsToDisconnect = {animationPlayedConn}
+
     -- Make sure clone is at the same spot as our original character’s HRP right away:
-    clone:SetPrimaryPartCFrame(originalChar.PrimaryPart.CFrame)
+    cloneCharacter:SetPrimaryPartCFrame(originalChar.PrimaryPart.CFrame)
     
-    setupCamera(clone)
+    setupCamera(cloneCharacter)
 
     local canPositionPart = trashCan:FindFirstChild("Trashcan")
     if not canPositionPart or not canPositionPart:IsA("BasePart") then
-        clone:Destroy()
+        cloneCharacter:Destroy()
         return
     end
 
@@ -2410,8 +2437,8 @@ local function pickUpTrashCan(trashCan)
     -- Once done, stop the loop
     canConnection:Disconnect()
 
-	if pickedUp and clone and clone:FindFirstChild("HumanoidRootPart") then
-	    player.Character.HumanoidRootPart.CFrame = clone.HumanoidRootPart.CFrame
+	if pickedUp and cloneCharacter and cloneCharacter:FindFirstChild("HumanoidRootPart") then
+	    player.Character.HumanoidRootPart.CFrame = cloneCharacter.HumanoidRootPart.CFrame
 	end
 
     -- Clean up the clone
@@ -2419,7 +2446,10 @@ local function pickUpTrashCan(trashCan)
         cloneConnections[clone]:Disconnect()
         cloneConnections[clone] = nil
     end
-    clone:Destroy()
+	if cloneCharacter then
+		print("Clone destroyed.")
+		cleanupClone(cloneCharacter)
+	end
 
     -- Restore camera
     restoreCamera()
