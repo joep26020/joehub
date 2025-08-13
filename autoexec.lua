@@ -2451,7 +2451,6 @@ local function mirrorFlyForces(sourceHRP, destHRP)
     end
 end
 
--- REPLACEMENT: acts like handleDetectedAnimation for animation sync + mirrors sFLY forces
 local function pickUpTrashCan(trashCan)
     local originalChar = player.Character
     if not originalChar or not originalChar.PrimaryPart then return end
@@ -2461,35 +2460,25 @@ local function pickUpTrashCan(trashCan)
         aimAssistEnabled = false
     end
 
-    -- Build the clone exactly like your helper does
+    -- Create clone first (before main moves) just like handleDetectedAnimation
     local clone = createClone(originalChar)
     if not clone or not clone.PrimaryPart then
         warn("Clone failed to create in pickUpTrashCan")
         return
     end
-
-    -- Stabilize + (optional) control function you already use
     stabilizeClone(clone)
-    -- You can keep your existing controlClone(clone) OR drive humanoid like handleDetectedAnimation does.
-    -- controlClone(clone)
-
-    -- Make the clone start at your current HRP
-    clone:SetPrimaryPartCFrame(originalChar.PrimaryPart.CFrame)
-
-    -- Camera -> clone (your fixed override)
+    controlClone(clone)
     setupCamera(clone)
-
-    -- ✨ NEW: animation sync exactly like handleDetectedAnimation
     local okAnim, animConn = pcall(function()
         return syncAnimations(originalChar, clone)
     end)
 
-    -- ✨ NEW: mirror fly forces (BG/BV) while they exist on the original HRP
+    -- Mirror fly forces (BG/BV) while they exist on the original HRP
     local srcHRP = originalChar:FindFirstChild("HumanoidRootPart")
     local dstHRP = clone:FindFirstChild("HumanoidRootPart")
     local stopMirroring = mirrorFlyForces(srcHRP, dstHRP)
 
-    -- Keep snapping to the can while we spam click (your existing approach)
+    -- Now start moving main toward trashcan
     local canConnection = RunService.Heartbeat:Connect(function()
         movePlayerToTrashcan(trashCan)
     end)
@@ -2499,12 +2488,11 @@ local function pickUpTrashCan(trashCan)
     -- Cleanup
     canConnection:Disconnect()
     stopMirroring()
-
     if okAnim and animConn then
         animConn:Disconnect()
     end
 
-    -- Port main char to clone spot (your current behavior)
+    -- Port main char to clone spot
     if player.Character and player.Character:FindFirstChild("HumanoidRootPart") and clone:FindFirstChild("HumanoidRootPart") then
         player.Character.HumanoidRootPart.CFrame = clone.HumanoidRootPart.CFrame
     end
