@@ -2480,12 +2480,7 @@ local function pickUpTrashCan(trashCan)
 
     -- Make sure its Humanoid isn't sitting or platform-standing initially
     local ch = clone:FindFirstChildOfClass("Humanoid")
-    if ch then
-        ch.PlatformStand = false
-        ch.Sit = false
-        ch:ChangeState(Enum.HumanoidStateType.Running)
-    end
-
+	controlClone(clone)
     setupCamera(clone)
     pcall(function() syncAnimations(originalChar, clone) end)
 
