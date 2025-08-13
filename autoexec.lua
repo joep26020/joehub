@@ -2372,87 +2372,85 @@ end
 -- Only modified per user request (no original position revert, clone starts at same HRP,
 -- main char set to clone’s HRP after pick-up, and loop teleport).
 --------------------------------------------------------------------------------
-
--- Mirrors BodyGyro/BodyVelocity from sourceHRP -> destHRP while they exist.
+-- Mirrors BodyGyro/BodyVelocity from sourceHRP -> destHRP.
+-- When NO forces exist on source: clone behaves like a normal humanoid (Running).
 local function mirrorFlyForces(sourceHRP, destHRP)
     if not (sourceHRP and destHRP) then return function() end end
 
     local hum = destHRP.Parent and destHRP.Parent:FindFirstChildOfClass("Humanoid")
     local savedPS = hum and hum.PlatformStand or nil
 
-    local function copyGyro(src, dst)
-        if not dst then
-            dst = Instance.new("BodyGyro")
-            dst.Name = "FlyMirrorBodyGyro"
-            dst.Parent = destHRP
+    local dBG, dBV
+
+    local function applyForces(sBG, sBV)
+        -- BodyGyro
+        if sBG then
+            if not dBG then
+                dBG = Instance.new("BodyGyro")
+                dBG.Name = "FlyMirrorBodyGyro"
+                dBG.Parent = destHRP
+            end
+            dBG.P = sBG.P
+            dBG.D = sBG.D
+            dBG.MaxTorque = sBG.MaxTorque or sBG.maxTorque
+            local cf = sBG.CFrame or sBG.cframe
+            if cf then dBG.CFrame = cf end
+        elseif dBG then
+            dBG:Destroy(); dBG = nil
         end
-        dst.P = src.P
-        dst.D = src.D
-        dst.MaxTorque = src.MaxTorque or src.maxTorque
-        local cf = src.CFrame or src.cframe
-        if cf then dst.CFrame = cf end
-        return dst
-    end
 
-    local function copyVel(src, dst)
-        if not dst then
-            dst = Instance.new("BodyVelocity")
-            dst.Name = "FlyMirrorBodyVelocity"
-            dst.Parent = destHRP
-        end
-        dst.P = src.P
-        dst.MaxForce = src.MaxForce or src.maxForce
-        dst.Velocity = src.Velocity or src.velocity
-        return dst
-    end
-
-    local hbConn
-    hbConn = RunService.Heartbeat:Connect(function()
-        -- bail if either root is gone
-        if not (sourceHRP.Parent and destHRP.Parent) then return end
-
-        local sBG = sourceHRP:FindFirstChildOfClass("BodyGyro")
-        local sBV = sourceHRP:FindFirstChildOfClass("BodyVelocity")
-        local dBG = destHRP:FindFirstChild("FlyMirrorBodyGyro")
-        local dBV = destHRP:FindFirstChild("FlyMirrorBodyVelocity")
-        local usingForces = (sBG ~= nil) or (sBV ~= nil)
-
-        -- Mirror/clear forces
-        if sBG then dBG = copyGyro(sBG, dBG) elseif dBG then dBG:Destroy() end
+        -- BodyVelocity
         if sBV then
-            dBV = copyVel(sBV, dBV)
-            -- also mirror linear velocity so motion actually happens
+            if not dBV then
+                dBV = Instance.new("BodyVelocity")
+                dBV.Name = "FlyMirrorBodyVelocity"
+                dBV.Parent = destHRP
+            end
+            dBV.P = sBV.P
+            dBV.MaxForce = sBV.MaxForce or sBV.maxForce
+            dBV.Velocity = sBV.Velocity or sBV.velocity
+            -- let BV actually move the clone like the source
             destHRP.AssemblyLinearVelocity = sourceHRP.AssemblyLinearVelocity
         elseif dBV then
-            dBV:Destroy()
+            dBV:Destroy(); dBV = nil
         end
 
-        -- State handling so the clone doesn't flop
-        if hum then
-            if usingForces then
-                if hum.PlatformStand ~= true then hum.PlatformStand = true end
-                -- Don't fight the forces with Humanoid states
-            else
-                -- No forces -> normal character
-                if hum.PlatformStand == true then hum.PlatformStand = false end
-                if hum:GetState() ~= Enum.HumanoidStateType.Running then
-                    hum:ChangeState(Enum.HumanoidStateType.Running)
-                end
-                hum.AutoRotate = true
-                hum.Sit = false
+        if hum and hum.PlatformStand ~= true then hum.PlatformStand = true end
+    end
 
-                -- Keep clone upright and facing same direction as source without teleporting position
-                local srcCF = sourceHRP.CFrame
-                destHRP.AssemblyAngularVelocity = Vector3.new()
-                destHRP.CFrame = CFrame.lookAt(destHRP.Position, destHRP.Position + srcCF.LookVector)
-            end
+    local function releaseForces()
+        if dBG then dBG:Destroy(); dBG = nil end
+        if dBV then dBV:Destroy(); dBV = nil end
+        if hum then
+            if hum.PlatformStand == true then hum.PlatformStand = false end
+            hum:ChangeState(Enum.HumanoidStateType.Running)
+            -- Leave the clone alone otherwise: no CFrame/velocity/orientation overrides.
+        end
+    end
+
+    -- Initialize once based on current source state
+    do
+        local sBG = sourceHRP:FindFirstChildOfClass("BodyGyro")
+        local sBV = sourceHRP:FindFirstChildOfClass("BodyVelocity")
+        if sBG or sBV then applyForces(sBG, sBV) else releaseForces() end
+    end
+
+    local hbConn = RunService.Heartbeat:Connect(function()
+        if not (sourceHRP.Parent and destHRP.Parent) then return end
+        local sBG = sourceHRP:FindFirstChildOfClass("BodyGyro")
+        local sBV = sourceHRP:FindFirstChildOfClass("BodyVelocity")
+
+        if sBG or sBV then
+            applyForces(sBG, sBV)
+        else
+            releaseForces()
         end
     end)
 
     return function()
         if hbConn then hbConn:Disconnect() end
-        local dBG = destHRP:FindFirstChild("FlyMirrorBodyGyro"); if dBG then dBG:Destroy() end
-        local dBV = destHRP:FindFirstChild("FlyMirrorBodyVelocity"); if dBV then dBV:Destroy() end
+        if dBG then dBG:Destroy() end
+        if dBV then dBV:Destroy() end
         if hum and savedPS ~= nil then hum.PlatformStand = savedPS end
     end
 end
