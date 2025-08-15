@@ -133,7 +133,7 @@ local animationReplacements = {
             startTime = 0,
             duration = nil,
             playUntilEnd = true,
-            chance = 15,
+            chance = 0,
         },
         {
             intendedID = "105811521074269",
@@ -157,7 +157,7 @@ local animationReplacements = {
             startTime = 1,
             duration = 2.4,
             playUntilEnd = false,
-            chance = 15,
+            chance = 30,
         },
     },
 
