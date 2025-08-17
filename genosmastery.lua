@@ -170,7 +170,7 @@ local animationReplacements = {
     ["12618271998"] = {  -- blitzshot / blitz2
         {
             name   = "blitzshot",
-            chance = 50,
+            chance = 0,
             steps  = {
                 {
                     intendedID   = "16139108718",
@@ -188,7 +188,7 @@ local animationReplacements = {
         },
         {
             name   = "blitz2",
-            chance = 50,
+            chance = 0,
             steps  = {
                 {
                     intendedID   = "17275150809",
@@ -197,7 +197,7 @@ local animationReplacements = {
                     startAfter   = 0,
                     playUntilEnd = false,
                     endOnList     = { "12618292188" },
-                    intervals    = {{startTime = 0, startSpeed = 1, endSpeed = 0.01, endTime = 1}},
+                    intervals    = {{startTime = 0, startSpeed = 1.4, endSpeed = 0.01, endTime = 1}},
                 },
             },
         },
