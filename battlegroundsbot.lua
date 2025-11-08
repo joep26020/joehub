@@ -771,7 +771,6 @@ function Bot.new()
     self.blocking = false
     self.blockThread = nil
     self.lastBlockTime = 0
-    self.nextSideDashTime = 0
     self.moveKeyState = {
         [Enum.KeyCode.W] = false,
         [Enum.KeyCode.A] = false,
@@ -780,7 +779,6 @@ function Bot.new()
     }
     self.currentStrafe = 0
     self.lastStrafeSwitch = 0
-    self.autoStart = true
 
     self.gui:setStatus("Status: idle")
     self.gui:setTarget("Target: none")
@@ -1636,25 +1634,14 @@ function Bot:neutralMovement(target: EnemyRecord?)
     local forward = 0
     local right = 0
 
-    if distance >= 35 then
+    if distance > Config.NeutralSpacingMax then
         forward = 1
         self.currentStrafe = 0
-        if now - self.lastForwardDash > 0.9 then
+        if now - self.lastForwardDash > 1 then
             pressBinding("ForwardDash")
             self.lastForwardDash = now
             self.nextSideDashTime = now + 0.35
         end
-    elseif distance >= 23 then
-        forward = 1
-        self.currentStrafe = 0
-        if now >= self.nextSideDashTime then
-            local rotateDir = math.random() < 0.5 and "left" or "right"
-            self:performSideDash(rotateDir, target)
-            self.nextSideDashTime = now + math.random(45, 95) / 100
-        end
-    elseif distance > Config.NeutralSpacingMax then
-        forward = 1
-        self.currentStrafe = 0
     elseif distance < Config.NeutralSpacingMin * 0.6 then
         forward = -1
         self.currentStrafe = 0
@@ -1666,12 +1653,16 @@ function Bot:neutralMovement(target: EnemyRecord?)
         forward = 0.55
         if now - self.lastStrafeSwitch > 0.9 then
             self.currentStrafe = math.random() < 0.5 and -1 or 1
+            if math.random() < 0.45 then
+                local dir = self.currentStrafe < 0 and "left" or "right"
+                self:performSideDash(dir)
+            end
             self.lastStrafeSwitch = now
         end
         right = self.currentStrafe
     end
 
-    if distance < Config.ComboConfirmDistance - 0.2 and now - self.lastBasicAttack > Config.M1ChainInterval then
+    if distance < Config.ComboConfirmDistance - 0.2 and now - self.lastBasicAttack > 0.65 then
         pressBinding("M1", Config.InputHoldShort)
         self.lastBasicAttack = now
     end
