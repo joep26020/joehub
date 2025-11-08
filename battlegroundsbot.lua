@@ -22,10 +22,10 @@ local Config = {
     EvasiveCooldown = 26,
     ActionBindings = {
         M1 = { type = "MouseButton", button = Enum.UserInputType.MouseButton1 },
-        Shove = { type = "Key", key = Enum.KeyCode.R },
-        ConsecutivePunches = { type = "Key", key = Enum.KeyCode.E },
-        Uppercut = { type = "Key", key = Enum.KeyCode.F },
-        NormalPunch = { type = "Key", key = Enum.KeyCode.G },
+        Shove = { type = "Key", key = Enum.KeyCode.Three },
+        ConsecutivePunches = { type = "Key", key = Enum.KeyCode.Two },
+        Uppercut = { type = "Key", key = Enum.KeyCode.Four },
+        NormalPunch = { type = "Key", key = Enum.KeyCode.One },
         Block = { type = "Key", key = Enum.KeyCode.F },
         SideDash = { type = "Key", key = Enum.KeyCode.Q },
         ForwardDash = { type = "Key", key = Enum.KeyCode.C },
@@ -35,6 +35,7 @@ local Config = {
     InputTap = 0.045,
     InputHoldShort = 0.12,
     InputHoldMedium = 0.22,
+    M1ChainInterval = 0.4,
     DataFolder = "battlegroundbot",
 }
 
@@ -619,11 +620,11 @@ local ComboLibrary: { ComboDefinition } = {
         maximumRange = 8,
         steps = {
             { kind = "aim" },
-            { kind = "press", action = "M1", hold = Config.InputHoldShort, wait = 0.12 },
+            { kind = "press", action = "M1", hold = Config.InputHoldShort, wait = Config.M1ChainInterval },
             { kind = "press", action = "Shove", wait = 0.32 },
             { kind = "press", action = "SideDash", direction = "right", wait = 0.08 },
             { kind = "press", action = "ConsecutivePunches", wait = 0.55 },
-            { kind = "press", action = "M1", wait = 0.18 },
+            { kind = "press", action = "M1", wait = Config.M1ChainInterval },
             { kind = "press", action = "NormalPunch" },
         },
         traits = { "guardbreak", "pressure" },
@@ -636,8 +637,8 @@ local ComboLibrary: { ComboDefinition } = {
         maximumRange = 8,
         steps = {
             { kind = "aim" },
-            { kind = "press", action = "M1", hold = Config.InputHoldShort, wait = 0.12 },
-            { kind = "press", action = "M1", hold = Config.InputHoldShort, wait = 0.12 },
+            { kind = "press", action = "M1", hold = Config.InputHoldShort, wait = Config.M1ChainInterval },
+            { kind = "press", action = "M1", hold = Config.InputHoldShort, wait = Config.M1ChainInterval },
             { kind = "press", action = "Shove", wait = 0.3 },
             { kind = "press", action = "SideDash", direction = "left", wait = 0.08 },
             { kind = "press", action = "Uppercut" },
@@ -652,14 +653,14 @@ local ComboLibrary: { ComboDefinition } = {
         maximumRange = 8,
         steps = {
             { kind = "aim" },
-            { kind = "press", action = "M1", hold = Config.InputHoldShort, wait = 0.1 },
-            { kind = "press", action = "M1", hold = Config.InputHoldShort, wait = 0.1 },
-            { kind = "press", action = "M1", hold = Config.InputHoldShort, wait = 0.18 },
+            { kind = "press", action = "M1", hold = Config.InputHoldShort, wait = Config.M1ChainInterval },
+            { kind = "press", action = "M1", hold = Config.InputHoldShort, wait = Config.M1ChainInterval },
+            { kind = "press", action = "M1", hold = Config.InputHoldShort, wait = Config.M1ChainInterval },
             { kind = "press", action = "Uppercut", wait = 0.35 },
             { kind = "press", action = "SideDash", direction = "right", wait = 0.12 },
-            { kind = "press", action = "M1", wait = 0.16 },
+            { kind = "press", action = "M1", wait = Config.M1ChainInterval },
             { kind = "press", action = "ConsecutivePunches", wait = 0.45 },
-            { kind = "press", action = "M1", wait = 0.12 },
+            { kind = "press", action = "M1", wait = Config.M1ChainInterval },
             { kind = "press", action = "NormalPunch" },
         },
         traits = { "burst", "requires_evasive" },
@@ -671,9 +672,9 @@ local ComboLibrary: { ComboDefinition } = {
         maximumRange = 8,
         steps = {
             { kind = "aim" },
-            { kind = "press", action = "M1", hold = Config.InputHoldShort, wait = 0.12 },
+            { kind = "press", action = "M1", hold = Config.InputHoldShort, wait = Config.M1ChainInterval },
             { kind = "press", action = "SideDash", direction = "right", wait = 0.1 },
-            { kind = "press", action = "M1", hold = Config.InputHoldShort, wait = 0.16 },
+            { kind = "press", action = "M1", hold = Config.InputHoldShort, wait = Config.M1ChainInterval },
             { kind = "press", action = "ConsecutivePunches", wait = 0.45 },
             { kind = "press", action = "Uppercut" },
         },
@@ -686,10 +687,10 @@ local ComboLibrary: { ComboDefinition } = {
         maximumRange = 8,
         steps = {
             { kind = "aim" },
-            { kind = "press", action = "M1", hold = Config.InputHoldShort, wait = 0.12 },
+            { kind = "press", action = "M1", hold = Config.InputHoldShort, wait = Config.M1ChainInterval },
             { kind = "press", action = "Shove", wait = 0.28 },
-            { kind = "press", action = "M1", hold = Config.InputHoldShort, wait = 0.16 },
-            { kind = "press", action = "M1", hold = Config.InputHoldShort, wait = 0.16 },
+            { kind = "press", action = "M1", hold = Config.InputHoldShort, wait = Config.M1ChainInterval },
+            { kind = "press", action = "M1", hold = Config.InputHoldShort, wait = Config.M1ChainInterval },
             { kind = "press", action = "NormalPunch" },
         },
         traits = { "guardbreak", "fast" },
@@ -899,6 +900,14 @@ function Bot:connectCharacter(char: Model)
             self.evasiveReady = ready
         end)
     end
+
+    if self.autoStart and self.alive and not self.running then
+        task.defer(function()
+            if self.autoStart and self.alive and not self.running then
+                self:start()
+            end
+        end)
+    end
 end
 
 function Bot:getEvasiveAttribute()
@@ -997,6 +1006,7 @@ function Bot:start()
         return
     end
 
+    self.autoStart = true
     self.running = true
     self.sessionFile = self.learningStore:startSession()
     self.sessionStart = os.clock()
@@ -1010,6 +1020,7 @@ function Bot:stop()
         self:clearMoveKeys()
         return
     end
+    self.autoStart = false
     self.running = false
     self:clearMoveKeys()
     if self.humanoid then
@@ -1231,19 +1242,32 @@ function Bot:selectTarget(): EnemyRecord?
     return best
 end
 
-function Bot:performSideDash(direction: string?)
+function Bot:performSideDash(direction: string?, target: EnemyRecord?)
     local binding = Config.ActionBindings.SideDash
     if not binding or binding.type ~= "Key" then
         return
     end
-    local dirKey: Enum.KeyCode
-    if direction == "left" then
-        dirKey = Enum.KeyCode.A
-    elseif direction == "right" then
-        dirKey = Enum.KeyCode.D
-    else
-        dirKey = math.random() < 0.5 and Enum.KeyCode.A or Enum.KeyCode.D
+    local rotateDirection = direction
+    if rotateDirection ~= "left" and rotateDirection ~= "right" then
+        rotateDirection = math.random() < 0.5 and "left" or "right"
     end
+
+    local dirKey: Enum.KeyCode = Enum.KeyCode.D
+    if rotateDirection == "right" then
+        dirKey = Enum.KeyCode.A
+    elseif rotateDirection == "left" then
+        dirKey = Enum.KeyCode.D
+    end
+
+    if target and target.hrp and self.rootPart then
+        local targetPos = target.hrp.Position
+        local myPos = self.rootPart.Position
+        local lookAt = CFrame.lookAt(myPos, Vector3.new(targetPos.X, myPos.Y, targetPos.Z))
+        local yaw = rotateDirection == "right" and math.pi / 2 or -math.pi / 2
+        self.rootPart.CFrame = lookAt * CFrame.Angles(0, yaw, 0)
+        self:alignCameraForMovement()
+    end
+
     VirtualInputManager:SendKeyEvent(true, dirKey, false, game)
     task.wait(0.02)
     VirtualInputManager:SendKeyEvent(true, binding.key, false, game)
@@ -1459,7 +1483,7 @@ function Bot:executeCombo(combo: ComboDefinition, target: EnemyRecord)
                 task.wait(0.05)
             elseif step.kind == "press" and step.action then
                 if step.action == "SideDash" then
-                    self:performSideDash(step.direction)
+                    self:performSideDash(step.direction, target)
                 elseif step.hold and step.hold > Config.InputTap then
                     pressAndHold(step.action, step.hold)
                 else
@@ -1616,6 +1640,7 @@ function Bot:neutralMovement(target: EnemyRecord?)
         if now - self.lastForwardDash > 1 then
             pressBinding("ForwardDash")
             self.lastForwardDash = now
+            self.nextSideDashTime = now + 0.35
         end
     elseif distance < Config.NeutralSpacingMin * 0.6 then
         forward = -1
