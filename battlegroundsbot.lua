@@ -40,9 +40,9 @@ local Config = {
         M1 = { type = "MouseButton", button = Enum.UserInputType.MouseButton1 },
         Shove = { type = "Key", key = Enum.KeyCode.R },
         ConsecutivePunches = { type = "Key", key = Enum.KeyCode.E },
-        Uppercut = { type = "Key", key = Enum.KeyCode.F },
+        Uppercut = { type = "Key", key = Enum.KeyCode.T },
         NormalPunch = { type = "Key", key = Enum.KeyCode.G },
-        Block = { type = "Key", key = Enum.KeyCode.Q },
+        Block = { type = "Key", key = Enum.KeyCode.F },
         SideDash = { type = "Key", key = Enum.KeyCode.Z },
         ForwardDash = { type = "Key", key = Enum.KeyCode.C },
         BackDash = { type = "Key", key = Enum.KeyCode.X },
@@ -114,6 +114,24 @@ local function pressBinding(name, hold)
         task.wait(hold or Config.InputTap)
         VirtualInputManager:SendMouseButtonEvent(0, 0, binding.button, false, game, 0)
     end
+end
+
+local function tapDirectional(keyCode: Enum.KeyCode, duration: number?)
+    duration = duration or 0.2
+    VirtualInputManager:SendKeyEvent(true, keyCode, false, game)
+    task.delay(duration, function()
+        VirtualInputManager:SendKeyEvent(false, keyCode, false, game)
+    end)
+end
+
+local function holdDirectional(keyCode: Enum.KeyCode, duration: number)
+    VirtualInputManager:SendKeyEvent(true, keyCode, false, game)
+    task.wait(duration)
+    VirtualInputManager:SendKeyEvent(false, keyCode, false, game)
+end
+
+local function setKeyState(keyCode: Enum.KeyCode, isDown: boolean)
+    VirtualInputManager:SendKeyEvent(isDown, keyCode, false, game)
 end
 
 local function pressAndHold(name, duration)
@@ -582,6 +600,8 @@ export type ComboStep = {
     action: string?,
     hold: number?,
     wait: number?,
+    duration: number?,
+    direction: Enum.KeyCode?,
 }
 
 type ComboDefinition = {
@@ -590,6 +610,9 @@ type ComboDefinition = {
     requiresNoEvasive: boolean?,
     minimumRange: number?,
     maximumRange: number?,
+    punishBlock: boolean?,
+    punishDash: boolean?,
+    styleBias: { [string]: number }?,
     steps: { ComboStep },
 }
 
@@ -600,6 +623,8 @@ local ComboLibrary: { ComboDefinition } = {
         requiresNoEvasive = false,
         minimumRange = 0,
         maximumRange = 15,
+        punishBlock = true,
+        styleBias = { defensive = 1.2 },
         steps = {
             { kind = "aim" },
             { kind = "press", action = "M1", hold = Config.InputHoldShort, wait = 0.12 },
@@ -616,6 +641,8 @@ local ComboLibrary: { ComboDefinition } = {
         requiresNoEvasive = false,
         minimumRange = 0,
         maximumRange = 13,
+        punishBlock = true,
+        styleBias = { aggressive = 1.1, defensive = 1.15 },
         steps = {
             { kind = "aim" },
             { kind = "press", action = "M1", hold = Config.InputHoldShort, wait = 0.12 },
@@ -631,6 +658,7 @@ local ComboLibrary: { ComboDefinition } = {
         requiresNoEvasive = true,
         minimumRange = 0,
         maximumRange = 12,
+        styleBias = { aggressive = 1.25 },
         steps = {
             { kind = "aim" },
             { kind = "press", action = "M1", hold = Config.InputHoldShort, wait = 0.1 },
@@ -644,11 +672,72 @@ local ComboLibrary: { ComboDefinition } = {
             { kind = "press", action = "NormalPunch" },
         },
     },
+    {
+        id = "saitama_mix_feint",
+        name = "Mix: Feint block > dash > CP > NP",
+        minimumRange = 4,
+        maximumRange = 18,
+        punishBlock = true,
+        styleBias = { defensive = 1.45 },
+        steps = {
+            { kind = "aim" },
+            { kind = "block", duration = 0.25, wait = 0.05 },
+            { kind = "press", action = "ForwardDash", wait = 0.1 },
+            { kind = "press", action = "Shove", wait = 0.26 },
+            { kind = "press", action = "ConsecutivePunches", wait = 0.52 },
+            { kind = "press", action = "M1", wait = 0.16 },
+            { kind = "press", action = "NormalPunch" },
+        },
+    },
+    {
+        id = "saitama_dashpunish",
+        name = "Anti-mobility: Side catch > Upper",
+        minimumRange = 3,
+        maximumRange = 17,
+        punishDash = true,
+        styleBias = { mobile = 1.6, aggressive = 1.2 },
+        steps = {
+            { kind = "press", action = "SideDash", wait = 0.06 },
+            { kind = "aim" },
+            { kind = "press", action = "M1", hold = Config.InputHoldShort, wait = 0.12 },
+            { kind = "press", action = "M1", wait = 0.12 },
+            { kind = "press", action = "Uppercut", wait = 0.32 },
+            { kind = "press", action = "ConsecutivePunches", wait = 0.42 },
+            { kind = "press", action = "NormalPunch" },
+        },
+    },
+    {
+        id = "saitama_pressure",
+        name = "Pressure: Dash in > shove loop",
+        minimumRange = 2,
+        maximumRange = 16,
+        styleBias = { aggressive = 1.4 },
+        steps = {
+            { kind = "press", action = "ForwardDash", wait = 0.08 },
+            { kind = "aim" },
+            { kind = "press", action = "M1", hold = Config.InputHoldShort, wait = 0.12 },
+            { kind = "press", action = "Shove", wait = 0.28 },
+            { kind = "move", direction = Enum.KeyCode.A, duration = 0.18, wait = 0.05 },
+            { kind = "press", action = "M1", wait = 0.1 },
+            { kind = "press", action = "ConsecutivePunches", wait = 0.5 },
+            { kind = "press", action = "Uppercut" },
+        },
+    },
 }
 
 -- Bot Controller ------------------------------------------------------------
 local Bot = {}
 Bot.__index = Bot
+
+type EnemyBehavior = {
+    attackScore: number,
+    blockScore: number,
+    dashScore: number,
+    lastAttackTime: number,
+    lastBlockTime: number,
+    lastDashTime: number,
+    hitsLanded: number,
+}
 
 type EnemyRecord = {
     model: Model,
@@ -660,6 +749,10 @@ type EnemyRecord = {
     threatScore: number,
     player: Player?,
     lastKnownHealth: number,
+    behavior: EnemyBehavior,
+    style: string?,
+    connections: { RBXScriptConnection },
+    listenersAttached: boolean,
 }
 
 function Bot.new()
@@ -685,6 +778,19 @@ function Bot.new()
     self.evasiveReady = true
     self.evasiveTimer = 0
     self.shouldPanicEvasive = false
+    self.lastMoveCommand = 0
+    self.lastStrafeCommand = 0
+    self.lastForwardDash = 0
+    self.lastBackDash = 0
+    self.lastBasicAttack = 0
+    self.lastAttackerName = nil
+    self.liveFolder = workspace:WaitForChild("Live")
+    self.liveCharacter = self.liveFolder:FindFirstChild(LocalPlayer.Name)
+    self.blocking = false
+    self.blockReleaseDeadline = 0
+    self.counterWindow = 0
+    self.lastReactiveDash = 0
+    self.defensiveMode = false
 
     self.gui:setStatus("Status: idle")
     self.gui:setTarget("Target: none")
@@ -699,15 +805,21 @@ function Bot.new()
         self:connectCharacter(char)
     end)
 
-    local liveFolder = workspace:WaitForChild("Live")
-    for _, model in ipairs(liveFolder:GetChildren()) do
+    for _, model in ipairs(self.liveFolder:GetChildren()) do
         self:addEnemy(model)
     end
-    liveFolder.ChildAdded:Connect(function(model)
-        self:addEnemy(model)
+    self.liveFolder.ChildAdded:Connect(function(model)
+        if model.Name == LocalPlayer.Name then
+            self.liveCharacter = model
+        else
+            self:addEnemy(model)
+        end
     end)
-    liveFolder.ChildRemoved:Connect(function(model)
+    self.liveFolder.ChildRemoved:Connect(function(model)
         self.enemies[model] = nil
+        if model == self.liveCharacter then
+            self.liveCharacter = nil
+        end
     end)
 
     self.heartbeatConn = RunService.Heartbeat:Connect(function(dt)
@@ -721,6 +833,9 @@ function Bot:destroy()
     if self.heartbeatConn then
         self.heartbeatConn:Disconnect()
         self.heartbeatConn = nil
+    end
+    if self.blocking then
+        self:setBlocking(false)
     end
     if self.gui then
         self.gui:destroy()
@@ -793,6 +908,15 @@ function Bot:addEnemy(model: Model)
     if model.Name == LocalPlayer.Name then
         return
     end
+    local behavior: EnemyBehavior = {
+        attackScore = 0,
+        blockScore = 0,
+        dashScore = 0,
+        lastAttackTime = 0,
+        lastBlockTime = 0,
+        lastDashTime = 0,
+        hitsLanded = 0,
+    }
     local record: EnemyRecord = {
         model = model,
         humanoid = model:FindFirstChildOfClass("Humanoid"),
@@ -803,12 +927,23 @@ function Bot:addEnemy(model: Model)
         threatScore = 0,
         player = Players:FindFirstChild(model.Name),
         lastKnownHealth = 100,
+        behavior = behavior,
+        style = "balanced",
+        connections = {},
+        listenersAttached = false,
     }
     if record.humanoid then
         record.lastKnownHealth = record.humanoid.Health
-        record.humanoid:GetPropertyChangedSignal("Health"):Connect(function()
-            record.lastKnownHealth = record.humanoid and record.humanoid.Health or record.lastKnownHealth
-        end)
+    end
+
+    self:attachEnemyListeners(record)
+
+    if record.humanoid then
+        table.insert(record.connections, record.humanoid:GetPropertyChangedSignal("Health"):Connect(function()
+            if record.humanoid then
+                record.lastKnownHealth = record.humanoid.Health
+            end
+        end))
     end
 
     local function onDescendant(desc)
@@ -821,13 +956,14 @@ function Bot:addEnemy(model: Model)
     for _, desc in ipairs(model:GetDescendants()) do
         onDescendant(desc)
     end
-    model.DescendantAdded:Connect(onDescendant)
+    table.insert(record.connections, model.DescendantAdded:Connect(onDescendant))
 
-    model.AncestryChanged:Connect(function(_, parent)
+    table.insert(record.connections, model.AncestryChanged:Connect(function(_, parent)
         if parent == nil then
+            self:cleanupEnemy(record)
             self.enemies[model] = nil
         end
-    end)
+    end))
 
     self.enemies[model] = record
 end
@@ -858,6 +994,9 @@ function Bot:stop()
     if self.humanoid then
         self.humanoid.AutoRotate = true
     end
+    if self.blocking then
+        self:setBlocking(false)
+    end
     self.gui:setStatus("Status: idle")
     self.gui:setCombo("Combo: none")
     self.learningStore:log("session_stop", { duration = os.clock() - self.sessionStart })
@@ -879,6 +1018,187 @@ function Bot:resetLearning()
     self.learningStore:log("learning_reset", { ts = os.time() })
 end
 
+function Bot:setBlocking(enable: boolean)
+    local binding = Config.ActionBindings.Block
+    if not binding or binding.type ~= "Key" then
+        return
+    end
+    if self.blocking == enable then
+        return
+    end
+    self.blocking = enable
+    setKeyState(binding.key, enable)
+    if not enable then
+        self.blockReleaseDeadline = 0
+    end
+end
+
+function Bot:cleanupEnemy(record: EnemyRecord)
+    if not record or not record.connections then
+        return
+    end
+    for _, conn in ipairs(record.connections) do
+        if typeof(conn) == "RBXScriptConnection" then
+            conn:Disconnect()
+        elseif conn and conn.Disconnect then
+            conn:Disconnect()
+        end
+    end
+    table.clear(record.connections)
+    record.listenersAttached = false
+end
+
+function Bot:registerEnemyAction(record: EnemyRecord, kind: string)
+    local behavior = record and record.behavior
+    if not behavior then
+        return
+    end
+    local now = tick()
+    if kind == "attack" then
+        behavior.attackScore = behavior.attackScore * 0.7 + 1
+        behavior.lastAttackTime = now
+        behavior.hitsLanded = behavior.hitsLanded * 0.6 + 1
+    elseif kind == "block" then
+        behavior.blockScore = behavior.blockScore * 0.65 + 1
+        behavior.lastBlockTime = now
+    elseif kind == "dash" then
+        behavior.dashScore = behavior.dashScore * 0.68 + 1
+        behavior.lastDashTime = now
+    end
+end
+
+function Bot:handleEnemyAnimation(record: EnemyRecord, track: AnimationTrack)
+    if not track then
+        return
+    end
+    local name = ""
+    local animation = track.Animation
+    if animation and animation.Name then
+        name = string.lower(animation.Name)
+    elseif track.Name then
+        name = string.lower(track.Name)
+    end
+    if name == "" then
+        return
+    end
+    if string.find(name, "block") or string.find(name, "guard") then
+        self:registerEnemyAction(record, "block")
+    end
+    if string.find(name, "dash") or string.find(name, "step") or string.find(name, "evade") then
+        self:registerEnemyAction(record, "dash")
+    end
+    if string.find(name, "punch") or string.find(name, "attack") or string.find(name, "swing") or string.find(name, "combo") then
+        self:registerEnemyAction(record, "attack")
+    end
+end
+
+function Bot:attachEnemyListeners(record: EnemyRecord)
+    if not record or record.listenersAttached then
+        return
+    end
+    record.listenersAttached = true
+    local humanoid = record.humanoid or record.model:FindFirstChildOfClass("Humanoid")
+    if not humanoid then
+        record.listenersAttached = false
+        return
+    end
+    record.humanoid = humanoid
+    local function connectAnimator(animator)
+        if not animator then
+            return
+        end
+        local animConn = animator.AnimationPlayed:Connect(function(track)
+            self:handleEnemyAnimation(record, track)
+        end)
+        table.insert(record.connections, animConn)
+    end
+    local animator = humanoid:FindFirstChildOfClass("Animator")
+    if animator then
+        connectAnimator(animator)
+    end
+    table.insert(record.connections, humanoid.ChildAdded:Connect(function(child)
+        if child:IsA("Animator") then
+            connectAnimator(child)
+        end
+    end))
+    table.insert(record.connections, humanoid.HealthChanged:Connect(function(health)
+        local last = record.lastKnownHealth or health
+        local delta = last - health
+        if delta > 1 then
+            if record.behavior then
+                record.behavior.blockScore *= 0.85
+                record.behavior.attackScore *= 0.9
+            end
+        end
+        record.lastKnownHealth = health
+    end))
+end
+
+function Bot:getEnemyRecordByName(name: string): EnemyRecord?
+    for _, record in pairs(self.enemies) do
+        if record.model.Name == name then
+            return record
+        end
+    end
+    return nil
+end
+
+function Bot:defensiveChecks(dt: number)
+    local now = tick()
+    local highestThreat = 0
+    local threatRecord: EnemyRecord? = nil
+    for _, record in pairs(self.enemies) do
+        if record.model.Parent and record.hrp then
+            local distance = record.distance or math.huge
+            if distance < 18 then
+                local behavior = record.behavior
+                local attackUrgency = 0
+                local dashUrgency = 0
+                if behavior then
+                    attackUrgency = math.max(0, 1.4 - (now - behavior.lastAttackTime)) * (behavior.attackScore + behavior.hitsLanded * 0.5)
+                    dashUrgency = math.max(0, 1.2 - (now - behavior.lastDashTime)) * (behavior.dashScore + 0.2)
+                end
+                local lastHitBonus = (self.lastAttackerName and record.model.Name == self.lastAttackerName) and 0.6 or 0
+                local threat = attackUrgency + dashUrgency + lastHitBonus
+                if threat > highestThreat then
+                    highestThreat = threat
+                    threatRecord = record
+                end
+            end
+        end
+    end
+    local shouldBlock = highestThreat > 0.75
+    if shouldBlock then
+        if not self.blocking then
+            self:setBlocking(true)
+        end
+        self.blockReleaseDeadline = os.clock() + 0.45
+        self.defensiveMode = true
+        if highestThreat > 1.35 and threatRecord and threatRecord.distance < 10 then
+            if os.clock() - self.lastReactiveDash > 1 then
+                if threatRecord.distance < 6 and os.clock() - self.lastBackDash > 1 then
+                    pressBinding("BackDash")
+                    self.lastBackDash = os.clock()
+                else
+                    pressBinding("SideDash")
+                end
+                self.lastReactiveDash = os.clock()
+            end
+        end
+        return true
+    else
+        if self.blocking and os.clock() > self.blockReleaseDeadline then
+            self:setBlocking(false)
+            self.counterWindow = os.clock()
+        end
+        if self.blocking then
+            return true
+        end
+        self.defensiveMode = false
+        return false
+    end
+end
+
 function Bot:update(dt: number)
     if not self.character or not self.humanoid or not self.rootPart then
         return
@@ -890,6 +1210,7 @@ function Bot:update(dt: number)
 
     self:updateEvasiveState(dt)
     self:updateEnemyData(dt)
+    self:updateLastAttacker()
 
     if not self.running then
         return
@@ -909,6 +1230,8 @@ function Bot:update(dt: number)
         return
     end
 
+    local defending = self:defensiveChecks(dt)
+
     local target = self:selectTarget()
     if not target then
         self.currentTarget = nil
@@ -921,14 +1244,17 @@ function Bot:update(dt: number)
     self.gui:setTarget(string.format("Target: %s (%.0f hp)", target.model.Name, target.lastKnownHealth))
     self:applyAim(target.hrp)
 
-    if self:shouldStartCombo(target) then
-        local combo = self:chooseCombo(target)
-        if combo then
-            self:executeCombo(combo, target)
+    if (not defending) or (self.counterWindow > 0 and os.clock() - self.counterWindow < 0.6) then
+        if self:shouldStartCombo(target) then
+            local combo = self:chooseCombo(target)
+            if combo then
+                self:executeCombo(combo, target)
+                return
+            end
         end
-    else
-        self:neutralMovement(target)
     end
+
+    self:neutralMovement(target)
 end
 
 function Bot:updateEvasiveState(dt: number)
@@ -955,14 +1281,28 @@ function Bot:updateEnemyData(dt: number)
     local now = tick()
     for model, record in pairs(self.enemies) do
         if model.Parent == nil then
+            self:cleanupEnemy(record)
             self.enemies[model] = nil
         else
             record.hrp = record.hrp or model:FindFirstChild("HumanoidRootPart")
             record.humanoid = record.humanoid or model:FindFirstChildOfClass("Humanoid")
+            if not record.listenersAttached and record.humanoid then
+                self:attachEnemyListeners(record)
+            end
             if record.hrp then
                 record.distance = (record.hrp.Position - myPos).Magnitude
             else
                 record.distance = math.huge
+            end
+            local behavior = record.behavior
+            if behavior then
+                local attackDecay = math.exp(-dt * 1.15)
+                local blockDecay = math.exp(-dt * 0.9)
+                local dashDecay = math.exp(-dt * 1)
+                behavior.attackScore *= attackDecay
+                behavior.blockScore *= blockDecay
+                behavior.dashScore *= dashDecay
+                behavior.hitsLanded *= math.exp(-dt * 0.8)
             end
             local evasiveFromBridge = self.bridge:getEvasive(model)
             if evasiveFromBridge ~= nil then
@@ -981,6 +1321,30 @@ function Bot:updateEnemyData(dt: number)
                 local distanceFactor = math.clamp(40 - record.distance, -40, 40)
                 local evasiveFactor = record.hasEvasive and -25 or 15
                 record.threatScore = hpFactor + distanceFactor + evasiveFactor
+                if self.lastAttackerName and record.model.Name == self.lastAttackerName then
+                    record.threatScore += 120
+                end
+                if behavior then
+                    local attackPressure = behavior.attackScore
+                    local blockDiscipline = behavior.blockScore
+                    local mobility = behavior.dashScore
+                    local style = "balanced"
+                    local highest = attackPressure
+                    style = "aggressive"
+                    if blockDiscipline > highest then
+                        highest = blockDiscipline
+                        style = "defensive"
+                    end
+                    if mobility > highest then
+                        highest = mobility
+                        style = "mobile"
+                    end
+                    if highest < 0.35 then
+                        style = "balanced"
+                    end
+                    record.style = style
+                    record.threatScore += attackPressure * 18 + blockDiscipline * 9 + mobility * 12
+                end
             end
         end
     end
@@ -1006,6 +1370,13 @@ function Bot:applyAim(targetHRP: BasePart?)
     if not targetHRP or not self.rootPart then
         return
     end
+    if self.humanoid then
+        local state = self.humanoid:GetState()
+        if state == Enum.HumanoidStateType.FallingDown then
+            self.humanoid.AutoRotate = true
+            return
+        end
+    end
     if not self.bridge:aim(self.rootPart, targetHRP) then
         aimWithCFrame(self.rootPart, targetHRP)
     end
@@ -1024,7 +1395,13 @@ function Bot:shouldStartCombo(target: EnemyRecord)
     if target.distance > Config.ComboConfirmDistance then
         return false
     end
-    if not self.humanoid or self.humanoid.MoveDirection.Magnitude > 0.2 then
+    if self.blocking and os.clock() < self.blockReleaseDeadline then
+        return false
+    end
+    if self.defensiveMode and (self.counterWindow == 0 or os.clock() - self.counterWindow > 0.5) then
+        return false
+    end
+    if not self.humanoid or self.humanoid.MoveDirection.Magnitude > 0.35 then
         return false
     end
     if target.humanoid and target.humanoid.FloorMaterial == Enum.Material.Air then
@@ -1050,7 +1427,23 @@ function Bot:chooseCombo(target: EnemyRecord): ComboDefinition?
         local successes = stats.successes
         local successRate = (successes + 1) / (attempts + 2)
         local distanceBias = math.max(0.1, 1 - math.abs((target.distance - ((combo.minimumRange or 0) + (combo.maximumRange or 20)) / 2) / 20))
-        table.insert(available, { combo = combo, weight = successRate * distanceBias })
+        local weight = successRate * distanceBias
+        if combo.styleBias and target.style then
+            weight *= combo.styleBias[target.style] or 1
+        end
+        local behavior = target.behavior
+        if behavior then
+            if combo.punishBlock and behavior.blockScore > 0.6 then
+                weight *= 1.2 + math.min(0.6, behavior.blockScore)
+            end
+            if combo.punishDash and behavior.dashScore > 0.5 then
+                weight *= 1.1 + math.min(0.5, behavior.dashScore)
+            end
+            if combo.requiresNoEvasive and not target.hasEvasive and behavior.attackScore > 0.8 then
+                weight *= 1.15
+            end
+        end
+        table.insert(available, { combo = combo, weight = weight })
     end
     if #available == 0 then
         return nil
@@ -1065,6 +1458,10 @@ function Bot:executeCombo(combo: ComboDefinition, target: EnemyRecord)
     if self.actionThread then
         return
     end
+    if self.blocking then
+        self:setBlocking(false)
+    end
+    self.counterWindow = 0
     self.currentCombo = combo
     self.lastComboAttempt = os.clock()
     self.gui:setCombo("Combo: " .. combo.name)
@@ -1098,6 +1495,29 @@ function Bot:executeCombo(combo: ComboDefinition, target: EnemyRecord)
                 else
                     task.wait(Config.InputTap)
                 end
+            elseif step.kind == "block" then
+                local duration = step.duration or 0.3
+                self:setBlocking(true)
+                self.blockReleaseDeadline = os.clock() + duration
+                task.wait(duration)
+                if os.clock() >= self.blockReleaseDeadline then
+                    self:setBlocking(false)
+                end
+                if step.wait and step.wait > 0 then
+                    task.wait(step.wait)
+                end
+            elseif step.kind == "release_block" then
+                self:setBlocking(false)
+                if step.wait and step.wait > 0 then
+                    task.wait(step.wait)
+                end
+            elseif step.kind == "move" and step.direction then
+                holdDirectional(step.direction, step.duration or 0.2)
+                if step.wait and step.wait > 0 then
+                    task.wait(step.wait)
+                else
+                    task.wait(Config.InputTap)
+                end
             elseif step.kind == "wait" then
                 task.wait(step.wait or Config.InputTap)
             end
@@ -1106,6 +1526,7 @@ function Bot:executeCombo(combo: ComboDefinition, target: EnemyRecord)
             self.gui:setCombo("Combo: none")
             self.currentCombo = nil
             self.actionThread = nil
+            self:setBlocking(false)
             return
         end
         task.wait(0.65)
@@ -1122,6 +1543,7 @@ function Bot:executeCombo(combo: ComboDefinition, target: EnemyRecord)
         self.gui:setCombo("Combo: none")
         self.currentCombo = nil
         self.actionThread = nil
+        self:setBlocking(false)
         self.gui:updateLearningList(self.learningStore.learning)
     end)
     self.actionThread = thread
@@ -1132,14 +1554,59 @@ function Bot:neutralMovement(target: EnemyRecord?)
         return
     end
     local distance = target.distance
+    local now = os.clock()
+    local behavior = target.behavior
+    if behavior and behavior.blockScore > 0.8 and now - self.lastBasicAttack > 0.9 then
+        if now - self.lastMoveCommand > 0.3 then
+            self:setBlocking(true)
+            self.blockReleaseDeadline = os.clock() + 0.2
+            task.delay(0.25, function()
+                if self.blocking and os.clock() > self.blockReleaseDeadline then
+                    self:setBlocking(false)
+                end
+            end)
+            self.lastMoveCommand = now
+        end
+    end
     if distance > Config.NeutralSpacingMax then
-        pressBinding("ForwardDash")
-    elseif distance < Config.NeutralSpacingMin then
-        pressBinding("BackDash")
+        if now - self.lastForwardDash > 1 then
+            pressBinding("ForwardDash")
+            self.lastForwardDash = now
+        end
+        if now - self.lastMoveCommand > 0.15 then
+            tapDirectional(Enum.KeyCode.W, 0.28)
+            self.lastMoveCommand = now
+        end
+    elseif distance < Config.NeutralSpacingMin * 0.6 then
+        if behavior and behavior.attackScore > 0.8 and os.clock() - self.lastBackDash > 0.8 then
+            pressBinding("BackDash")
+            self.lastBackDash = os.clock()
+        end
+        if now - self.lastMoveCommand > 0.15 then
+            tapDirectional(Enum.KeyCode.S, 0.2)
+            self.lastMoveCommand = now
+        end
+        if now - self.lastBackDash > 0.8 then
+            pressBinding("BackDash")
+            self.lastBackDash = now
+        end
     else
-        -- strafe lightly to stay unpredictable
-        if math.random() < 0.5 then
-            pressBinding("SideDash")
+        if now - self.lastStrafeCommand > 0.9 then
+            local strafeKey = math.random() < 0.5 and Enum.KeyCode.A or Enum.KeyCode.D
+            tapDirectional(strafeKey, 0.18)
+            if math.random() < 0.45 then
+                pressBinding("SideDash")
+            end
+            self.lastStrafeCommand = now
+        end
+        local aggression = behavior and behavior.attackScore or 0
+        if distance < Config.ComboConfirmDistance - 1 and now - self.lastBasicAttack > 1.1 then
+            if aggression > 0.7 and os.clock() - self.lastForwardDash > 0.7 then
+                pressBinding("ForwardDash")
+                self.lastForwardDash = os.clock()
+            end
+            pressBinding("M1", Config.InputHoldShort)
+            self.lastBasicAttack = now
         end
     end
 end
@@ -1153,6 +1620,26 @@ function Bot:attemptEvasive(reason: string)
     pressBinding("Evasive", Config.InputTap)
     self.learningStore:log("evasive", { reason = reason, t = os.clock() })
     return true
+end
+
+function Bot:updateLastAttacker()
+    if not self.liveCharacter then
+        self.liveCharacter = self.liveFolder and self.liveFolder:FindFirstChild(LocalPlayer.Name) or nil
+    end
+    if not self.liveCharacter then
+        return
+    end
+    local attacker = self.liveCharacter:GetAttribute("LastHit")
+    if attacker == nil then
+        attacker = self.liveCharacter:GetAttribute("lastHit")
+    end
+    if typeof(attacker) == "string" and attacker ~= "" then
+        self.lastAttackerName = attacker
+        local record = self:getEnemyRecordByName(attacker)
+        if record then
+            self:registerEnemyAction(record, "attack")
+        end
+    end
 end
 
 -- Initialization -------------------------------------------------------------
