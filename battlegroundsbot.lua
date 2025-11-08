@@ -94,9 +94,13 @@ local function pressBinding(name, hold)
         task.wait(hold or Config.InputTap)
         VirtualInputManager:SendKeyEvent(false, binding.key, false, game)
     elseif binding.type == "MouseButton" then
-        VirtualInputManager:SendMouseButtonEvent(0, 0, binding.button, true, game, 0)
+        local button = binding.button
+        if typeof(button) == "EnumItem" then
+            button = button.Value
+        end
+        VirtualInputManager:SendMouseButtonEvent(0, 0, button, true, game, 0)
         task.wait(hold or Config.InputTap)
-        VirtualInputManager:SendMouseButtonEvent(0, 0, binding.button, false, game, 0)
+        VirtualInputManager:SendMouseButtonEvent(0, 0, button, false, game, 0)
     end
 end
 
@@ -119,9 +123,13 @@ local function pressAndHold(name, duration)
         task.wait(duration)
         VirtualInputManager:SendKeyEvent(false, binding.key, false, game)
     elseif binding.type == "MouseButton" then
-        VirtualInputManager:SendMouseButtonEvent(0, 0, binding.button, true, game, 0)
+        local button = binding.button
+        if typeof(button) == "EnumItem" then
+            button = button.Value
+        end
+        VirtualInputManager:SendMouseButtonEvent(0, 0, button, true, game, 0)
         task.wait(duration)
-        VirtualInputManager:SendMouseButtonEvent(0, 0, binding.button, false, game, 0)
+        VirtualInputManager:SendMouseButtonEvent(0, 0, button, false, game, 0)
     end
 end
 
