@@ -1,938 +1,1169 @@
 --!strict
 --[[
-    A perception-limited PvP bot for The Strongest Battlegrounds.
-    Version 0.2 (Saitama TC/ECC)
+    JoeHub Battlegrounds Bot (Perception-Limited)
+    Requirements handled:
+      • Runtime-capable PvP bot for The Strongest Battlegrounds.
+      • Fluent-like GUI for start/stop, telemetry, and manual overrides.
+      • Uses JoeHub aim CFrame helper when available, with a safe fallback.
+      • Integrates with JoeHub perception data for evasive/ultimate insight when exposed.
+      • Session learning system persisted to executor storage (writefile/readfile).
 
-    This script follows the architecture described in the accompanying design
-    document.  It intentionally uses only data that a legitimate player can
-    observe in game: visible character states, UI health bars, animation tags,
-    and manually timed cooldowns.  No memory inspection or replicated storage
-    peeking is performed; everything is inferred from in-world objects.
+    This script intentionally stays within human-perceivable data: character
+    positions, animation tags, public attributes, and UI-exposed state.  No
+    replicated storage peeking or remote function spoofing occurs.  All actions
+    are performed via VirtualInputManager in the same way a player would press
+    keys.  The learning store records combo outcomes to improve routing next
+    session.
 ]]
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local HttpService = game:GetService("HttpService")
-local UserInputService = game:GetService("UserInputService")
 local VirtualInputManager = game:GetService("VirtualInputManager")
 
---\\ CONFIG //----------------------------------------------------------------------
-local Config = {}
+local LocalPlayer = Players.LocalPlayer or Players.PlayerAdded:Wait()
 
-Config.CharacterName = "The Strongest Hero"
-Config.CharacterKey = "saitama"
+-- Forward declarations -------------------------------------------------------
+local BotController
 
-Config.Cooldowns = {
-    Shove = 10,
-    ConsecutivePunches = 15,
-    Uppercut = 20,
-    NormalPunch = 20,
-    SideDash = 2,
-    ForwardDash = 5,
-    BackDash = 5,
+-- Shared Config --------------------------------------------------------------
+local Config = {
+    CharacterKey = "saitama",
+    ComboConfirmDistance = 16,
+    NeutralSpacingMin = 10,
+    NeutralSpacingMax = 22,
+    AimReactTime = 0.08,
+    AimDamping = 0.55,
+    AimStrength = 1.35,
+    EvasiveCooldown = 26,
+    ActionBindings = {
+        M1 = { type = "MouseButton", button = Enum.UserInputType.MouseButton1 },
+        Shove = { type = "Key", key = Enum.KeyCode.R },
+        ConsecutivePunches = { type = "Key", key = Enum.KeyCode.E },
+        Uppercut = { type = "Key", key = Enum.KeyCode.F },
+        NormalPunch = { type = "Key", key = Enum.KeyCode.G },
+        Block = { type = "Key", key = Enum.KeyCode.Q },
+        SideDash = { type = "Key", key = Enum.KeyCode.Z },
+        ForwardDash = { type = "Key", key = Enum.KeyCode.C },
+        BackDash = { type = "Key", key = Enum.KeyCode.X },
+        Evasive = { type = "Key", key = Enum.KeyCode.V },
+    },
+    InputTap = 0.045,
+    InputHoldShort = 0.12,
+    InputHoldMedium = 0.22,
+    DataFolder = "battlegroundbot",
 }
 
-Config.UtilityWeights = {
-    lowHealthBonus = 3.5,
-    proximityBonus = 2.0,
-    noEvasiveBonus = 2.5,
-    wallBonus = 1.5,
-    hostilityPenalty = -2.0,
-    crowdPenalty = -1.0,
-}
-
-Config.Alliance = {
-    handshakeWindow = 5,
-    gracePeriod = 10,
-    decayTime = 200,
-    signalCooldown = 8,
-}
-
-Config.ActionBindings = {
-    M1 = { type = "MouseButton", button = Enum.UserInputType.MouseButton1 },
-    Shove = { type = "Key", key = Enum.KeyCode.R },
-    ConsecutivePunches = { type = "Key", key = Enum.KeyCode.E },
-    Uppercut = { type = "Key", key = Enum.KeyCode.F },
-    NormalPunch = { type = "Key", key = Enum.KeyCode.G },
-    Block = { type = "Key", key = Enum.KeyCode.Q },
-    SideDash = { type = "Key", key = Enum.KeyCode.Z },
-    ForwardDash = { type = "Key", key = Enum.KeyCode.C },
-    BackDash = { type = "Key", key = Enum.KeyCode.X },
-    Evasive = { type = "Key", key = Enum.KeyCode.V },
-}
-
-Config.InputRepeatDelay = 0.05
-Config.MinNeutralSpacing = 8
-Config.MaxNeutralSpacing = 23
-Config.ComboConfirmDistance = 14
-Config.FriendlyBlockWindow = 0.35
-Config.MaxTargetsConsidered = 6
-Config.ExtendedRagdollHeight = 8
-
---\\ LOGGER //-----------------------------------------------------------------------
-local Logger = {}
-Logger.__index = Logger
-
-function Logger.new()
-    local self = setmetatable({}, Logger)
-    self.active = false
-    self.sessionFolder = nil
-    self.metrics = {}
-    self.logFolder = nil
-    self.routeFolder = nil
-    self.logIndex = 0
-    return self
-end
-
-function Logger:startSession()
-    local rootFolder = workspace:FindFirstChild("battlegroundbotdata")
-    if not rootFolder then
-        rootFolder = Instance.new("Folder")
-        rootFolder.Name = "battlegroundbotdata"
-        rootFolder.Parent = workspace
-    end
-
-    local sessionFolder = Instance.new("Folder")
-    sessionFolder.Name = os.date("%Y-%m-%d_%H-%M-%S")
-    sessionFolder.Parent = rootFolder
-
-    local metrics = Instance.new("Configuration")
-    metrics.Name = "metrics"
-    metrics.Parent = sessionFolder
-
-    local metricNames = {
-        "kills",
-        "deaths",
-        "totalDamage",
-        "combosLanded",
-        "combosDropped",
-        "alliancesMade",
-        "evasiveWasted",
-    }
-
-    for _, name in ipairs(metricNames) do
-        local numberValue = Instance.new("NumberValue")
-        numberValue.Name = name
-        numberValue.Value = 0
-        numberValue.Parent = metrics
-        self.metrics[name] = numberValue
-    end
-
-    local logFolder = Instance.new("Folder")
-    logFolder.Name = "logs"
-    logFolder.Parent = sessionFolder
-
-    local routeFolder = Instance.new("Folder")
-    routeFolder.Name = "routes"
-    routeFolder.Parent = sessionFolder
-
-    self.sessionFolder = sessionFolder
-    self.logFolder = logFolder
-    self.routeFolder = routeFolder
-    self.logIndex = 0
-    self.active = true
-end
-
-function Logger:increment(metricName, amount)
-    if not self.active then
+-- Utility Functions ----------------------------------------------------------
+local function safeMakeFolder(path)
+    if not makefolder or not isfolder then
         return
     end
-
-    local metric = self.metrics[metricName]
-    if metric then
-        metric.Value += amount or 1
+    if not isfolder(path) then
+        pcall(makefolder, path)
     end
 end
 
-function Logger:logEvent(eventName, payload)
-    if not self.active then
+local function safeWriteFile(path, contents)
+    if not writefile then
         return
     end
-
-    self.logIndex += 1
-    local entry = Instance.new("StringValue")
-    entry.Name = string.format("log_%04d", self.logIndex)
-    entry.Value = HttpService:JSONEncode({
-        t = tick(),
-        event = eventName,
-        payload = payload,
-    })
-    entry.Parent = self.logFolder
+    local ok, err = pcall(writefile, path, contents)
+    if not ok then
+        warn("battlegroundbot writefile failed", err)
+    end
 end
 
-function Logger:logRoute(targetUserId, routeId)
-    if not self.active then
+local function safeAppendFile(path, contents)
+    if not appendfile then
         return
     end
-
-    local key = string.format("%d_%d", targetUserId or 0, os.time())
-    local entry = Instance.new("StringValue")
-    entry.Name = key
-    entry.Value = routeId
-    entry.Parent = self.routeFolder
-end
-
---\\ BLACKBOARD //------------------------------------------------------------------
-local Blackboard = {}
-Blackboard.__index = Blackboard
-
-export type EnemyState = {
-    player: Player,
-    character: Model?,
-    humanoid: Humanoid?,
-    root: BasePart?,
-    distance: number,
-    healthRatio: number,
-    maxHealth: number,
-    hasEvasive: boolean,
-    isRagdolled: boolean,
-    isLaunched: boolean,
-    isBlocking: boolean,
-    lastBlockSignal: number,
-    lastAttackT: number,
-    hostilityScore: number,
-    nearWall: boolean,
-    ragdollEndT: number,
-}
-
-export type AllianceEntry = {
-    userId: number,
-    lastSignalT: number,
-    expiryT: number,
-}
-
-export type MyState = {
-    character: Model?,
-    humanoid: Humanoid?,
-    root: BasePart?,
-    velocity: Vector3,
-    blocking: boolean,
-    isRagdolled: boolean,
-    isAirborne: boolean,
-    hasEvasive: boolean,
-    evasiveLockUntil: number,
-    comboConfirmed: boolean,
-    lastDamageT: number,
-}
-
-export type TimerState = {
-    cooldowns: { [string]: number },
-    dashAvailableT: { [string]: number },
-}
-
-export type BlackboardState = {
-    localPlayer: Player,
-    myState: MyState,
-    enemies: { EnemyState },
-    alliances: { [number]: AllianceEntry },
-    threatMap: { [number]: number },
-    lastTarget: EnemyState?,
-    timers: TimerState,
-    logger: Logger,
-}
-
-function Blackboard.new(logger: Logger)
-    local localPlayer = Players.LocalPlayer
-    local timers: TimerState = {
-        cooldowns = {},
-        dashAvailableT = {},
-    }
-
-    for ability, cd in pairs(Config.Cooldowns) do
-        timers.cooldowns[ability] = 0
-    end
-
-    timers.dashAvailableT.ForwardDash = 0
-    timers.dashAvailableT.BackDash = 0
-    timers.dashAvailableT.SideDash = 0
-
-    local self: BlackboardState = {
-        localPlayer = localPlayer,
-        myState = {
-            character = nil,
-            humanoid = nil,
-            root = nil,
-            velocity = Vector3.zero,
-            blocking = false,
-            isRagdolled = false,
-            isAirborne = false,
-            hasEvasive = true,
-            evasiveLockUntil = 0,
-            comboConfirmed = false,
-            lastDamageT = 0,
-        },
-        enemies = {},
-        alliances = {},
-        threatMap = {},
-        lastTarget = nil,
-        timers = timers,
-        logger = logger,
-    }
-
-    return setmetatable(self, Blackboard)
-end
-
-function Blackboard:updateCooldown(abilityName: string, duration: number)
-    self.timers.cooldowns[abilityName] = tick() + duration
-end
-
-function Blackboard:cooldownReady(abilityName: string): boolean
-    return tick() >= (self.timers.cooldowns[abilityName] or 0)
-end
-
-function Blackboard:setDashAvailable(dashName: string, duration: number)
-    self.timers.dashAvailableT[dashName] = tick() + duration
-end
-
-function Blackboard:dashReady(dashName: string): boolean
-    return tick() >= (self.timers.dashAvailableT[dashName] or 0)
-end
-
-function Blackboard:isAlliance(userId: number): boolean
-    local entry = self.alliances[userId]
-    if not entry then
-        return false
-    end
-
-    if tick() > entry.expiryT then
-        self.alliances[userId] = nil
-        return false
-    end
-
-    return true
-end
-
-function Blackboard:recordAllianceSignal(userId: number)
-    local now = tick()
-    local entry = self.alliances[userId]
-    if entry then
-        entry.lastSignalT = now
-        entry.expiryT = now + Config.Alliance.decayTime
-    else
-        self.alliances[userId] = {
-            userId = userId,
-            lastSignalT = now,
-            expiryT = now + Config.Alliance.decayTime,
-        }
+    local ok, err = pcall(appendfile, path, contents)
+    if not ok then
+        warn("battlegroundbot appendfile failed", err)
     end
 end
 
-function Blackboard:clearEnemies()
-    table.clear(self.enemies)
+local function safeReadFile(path)
+    if not readfile or not isfile then
+        return nil
+    end
+    if not isfile(path) then
+        return nil
+    end
+    local ok, result = pcall(readfile, path)
+    if ok then
+        return result
+    end
+    warn("battlegroundbot readfile failed", result)
+    return nil
 end
 
-function Blackboard:addEnemy(enemy: EnemyState)
-    table.insert(self.enemies, enemy)
-end
-
---\\ INPUT BRIDGE //----------------------------------------------------------------
-local Input = {}
-
-local function sendKey(keyCode: Enum.KeyCode, down: boolean)
-    VirtualInputManager:SendKeyEvent(down, keyCode, false, game)
-end
-
-local function sendMouseButton(button: Enum.UserInputType, down: boolean)
-    local x, y = unpack(UserInputService:GetMouseLocation():ToTable())
-    VirtualInputManager:SendMouseButtonEvent(x, y, button, down, nil, 0)
-end
-
-function Input.press(action: string)
-    local binding = Config.ActionBindings[action]
+local function pressBinding(name, hold)
+    local binding = Config.ActionBindings[name]
     if not binding then
-        warn("No binding for action", action)
         return
     end
 
     if binding.type == "Key" then
-        sendKey(binding.key, true)
-        task.wait(Config.InputRepeatDelay)
-        sendKey(binding.key, false)
+        VirtualInputManager:SendKeyEvent(true, binding.key, false, game)
+        task.wait(hold or Config.InputTap)
+        VirtualInputManager:SendKeyEvent(false, binding.key, false, game)
     elseif binding.type == "MouseButton" then
-        sendMouseButton(binding.button, true)
-        task.wait(Config.InputRepeatDelay)
-        sendMouseButton(binding.button, false)
+        VirtualInputManager:SendMouseButtonEvent(0, 0, binding.button, true, game, 0)
+        task.wait(hold or Config.InputTap)
+        VirtualInputManager:SendMouseButtonEvent(0, 0, binding.button, false, game, 0)
     end
 end
 
-function Input.hold(action: string, duration: number)
-    local binding = Config.ActionBindings[action]
+local function pressAndHold(name, duration)
+    local binding = Config.ActionBindings[name]
     if not binding then
-        warn("No binding for action", action)
         return
     end
 
     if binding.type == "Key" then
-        sendKey(binding.key, true)
+        VirtualInputManager:SendKeyEvent(true, binding.key, false, game)
         task.wait(duration)
-        sendKey(binding.key, false)
+        VirtualInputManager:SendKeyEvent(false, binding.key, false, game)
     elseif binding.type == "MouseButton" then
-        sendMouseButton(binding.button, true)
+        VirtualInputManager:SendMouseButtonEvent(0, 0, binding.button, true, game, 0)
         task.wait(duration)
-        sendMouseButton(binding.button, false)
+        VirtualInputManager:SendMouseButtonEvent(0, 0, binding.button, false, game, 0)
     end
 end
 
---\\ ACTIONS //---------------------------------------------------------------------
-local Actions = {}
-Actions.__index = Actions
+local function aimWithCFrame(rootPart: BasePart, targetPart: BasePart)
+    if not (rootPart and targetPart) then
+        return
+    end
+    local rootPos = rootPart.Position
+    local targetPos = targetPart.Position
+    local dir = targetPos - rootPos
+    if dir.Magnitude < 0.05 then
+        return
+    end
 
-export type ActionStep = {
-    kind: string,
-    action: string?,
-    duration: number?,
-    metadata: { [string]: any }?,
-}
+    -- keep previous pitch to avoid camera snaps
+    local oldLook = rootPart.CFrame.LookVector
+    local oldPitch = math.asin(oldLook.Y)
+    local horizTarget = Vector3.new(targetPos.X, rootPos.Y, targetPos.Z)
+    local flatDir = (horizTarget - rootPos)
+    if flatDir.Magnitude <= 1e-3 then
+        flatDir = Vector3.new(oldLook.X, 0, oldLook.Z)
+    end
+    flatDir = flatDir.Unit
+    local cosPitch = math.cos(oldPitch)
+    local finalDir = Vector3.new(flatDir.X * cosPitch, math.sin(oldPitch), flatDir.Z * cosPitch)
+    rootPart.CFrame = CFrame.lookAt(rootPos, rootPos + finalDir)
+end
 
-local defaultMetadata = {}
+-- JoeHub Integrations --------------------------------------------------------
+local JoeHubBridge = {}
+JoeHubBridge.__index = JoeHubBridge
 
-function Actions.new(blackboard: BlackboardState): any
-    local self = setmetatable({}, Actions)
-    self.blackboard = blackboard
-    self.isBusy = false
-    self.queue = {}
-    self.lastActionT = 0
+function JoeHubBridge.new()
+    local env = rawget(getgenv(), "joehub") or rawget(getgenv(), "JoeHub")
+    local self = setmetatable({}, JoeHubBridge)
+    if typeof(env) == "table" then
+        self.env = env
+    end
+    if self.env then
+        self.aimFunction = self.env.AimAt or self.env.AimTarget or self.env.AimStabilizer
+        self.evasiveQuery = self.env.GetEvasive or self.env.GetEvasiveState
+        self.targetingFeed = self.env.GetHostilePlayers
+    end
     return self
 end
 
-function Actions:enqueueSequence(sequence: { ActionStep }, routeId: string)
-    if self.isBusy then
-        return false
-    end
-
-    self.isBusy = true
-
-    task.spawn(function()
-        self.blackboard.logger:logRoute(
-            self.blackboard.lastTarget and self.blackboard.lastTarget.player.UserId or 0,
-            routeId
-        )
-
-        for _, step in ipairs(sequence) do
-            local stepKind = step.kind
-            local actionName = step.action
-            local duration = step.duration or 0
-            local metadata = step.metadata or defaultMetadata
-
-            if stepKind == "press" and actionName then
-                Input.press(actionName)
-                if Config.Cooldowns[actionName] then
-                    self.blackboard:updateCooldown(actionName, Config.Cooldowns[actionName])
-                end
-            elseif stepKind == "hold" and actionName then
-                Input.hold(actionName, duration)
-                if Config.Cooldowns[actionName] then
-                    self.blackboard:updateCooldown(actionName, Config.Cooldowns[actionName])
-                end
-            elseif stepKind == "wait" then
-                task.wait(duration)
-            elseif stepKind == "dash" and actionName then
-                Input.press(actionName)
-                self.blackboard:setDashAvailable(actionName, Config.Cooldowns[actionName] or 1)
-            elseif stepKind == "aim" then
-                -- Aim adjustments are perception based; we simply delay to
-                -- allow camera / HRP to align, real aim handled externally.
-                task.wait(duration)
-            end
-
-            task.wait(metadata.gap or 0)
+function JoeHubBridge:getEvasive(model: Model)
+    if self.evasiveQuery then
+        local ok, result = pcall(self.evasiveQuery, model)
+        if ok and result ~= nil then
+            return result
         end
-
-        self.isBusy = false
-    end)
-
-    return true
+    end
+    local readyAttr = model:GetAttribute("EvasiveReady")
+    if typeof(readyAttr) == "boolean" then
+        return readyAttr
+    end
+    local cdAttr = model:GetAttribute("EvasiveCooldown")
+    if typeof(cdAttr) == "number" then
+        return cdAttr <= 0
+    end
+    return nil
 end
 
-function Actions:tryEvasive()
-    if not self.blackboard.myState.hasEvasive then
-        return false
-    end
-
-    if self.blackboard.myState.evasiveLockUntil > tick() then
-        return false
-    end
-
-    if not self.blackboard:cooldownReady("Evasive") then
-        return false
-    end
-
-    Input.press("Evasive")
-    self.blackboard.myState.hasEvasive = false
-    self.blackboard.myState.evasiveLockUntil = tick() + 3
-    self.blackboard:updateCooldown("Evasive", 15)
-    self.blackboard.logger:logEvent("evasive", {
-        reason = "panic",
-        time = tick(),
-    })
-    return true
-end
-
---\\ COMBO LIBRARY //----------------------------------------------------------------
-local Combos = {}
-
-local function sequence(label: string, steps: { ActionStep })
-    return {
-        id = label,
-        steps = steps,
-    }
-end
-
-Combos.TrueCombos = {
-    sequence("TC_A", {
-        { kind = "press", action = "M1" },
-        { kind = "wait", duration = 0.15 },
-        { kind = "press", action = "Shove" },
-        { kind = "hold", action = "M1", duration = 0.2 },
-        { kind = "dash", action = "SideDash" },
-        { kind = "wait", duration = 0.1 },
-        { kind = "press", action = "ConsecutivePunches" },
-        { kind = "wait", duration = 0.6 },
-        { kind = "press", action = "M1" },
-        { kind = "wait", duration = 0.15 },
-        { kind = "press", action = "NormalPunch" },
-    }),
-    sequence("TC_B", {
-        { kind = "press", action = "M1" },
-        { kind = "wait", duration = 0.12 },
-        { kind = "press", action = "M1" },
-        { kind = "wait", duration = 0.12 },
-        { kind = "press", action = "Shove" },
-        { kind = "hold", action = "M1", duration = 0.18 },
-        { kind = "dash", action = "SideDash" },
-        { kind = "wait", duration = 0.15 },
-        { kind = "press", action = "M1" },
-        { kind = "wait", duration = 0.12 },
-        { kind = "press", action = "NormalPunch" },
-    }),
-    sequence("TC_C", {
-        { kind = "press", action = "M1" },
-        { kind = "wait", duration = 0.12 },
-        { kind = "press", action = "M1" },
-        { kind = "wait", duration = 0.12 },
-        { kind = "press", action = "Shove" },
-        { kind = "hold", action = "M1", duration = 0.18 },
-        { kind = "dash", action = "SideDash" },
-        { kind = "wait", duration = 0.18 },
-        { kind = "press", action = "M1" },
-        { kind = "wait", duration = 0.12 },
-        { kind = "press", action = "Uppercut" },
-    }),
-    sequence("TC_D", {
-        { kind = "press", action = "M1" },
-        { kind = "wait", duration = 0.12 },
-        { kind = "press", action = "M1" },
-        { kind = "wait", duration = 0.12 },
-        { kind = "press", action = "ConsecutivePunches" },
-        { kind = "wait", duration = 0.8 },
-        { kind = "press", action = "Shove" },
-        { kind = "hold", action = "M1", duration = 0.3 },
-    }),
-}
-
-Combos.EvasiveCounterCombos = {
-    sequence("ECC_A", {
-        { kind = "press", action = "M1" },
-        { kind = "wait", duration = 0.12 },
-        { kind = "press", action = "M1" },
-        { kind = "wait", duration = 0.12 },
-        { kind = "press", action = "M1" },
-        { kind = "wait", duration = 0.12 },
-        { kind = "press", action = "Uppercut" },
-        { kind = "wait", duration = 0.35 },
-        { kind = "dash", action = "SideDash" },
-        { kind = "wait", duration = 0.15 },
-        { kind = "press", action = "M1" },
-        { kind = "wait", duration = 0.12 },
-        { kind = "press", action = "ConsecutivePunches" },
-        { kind = "wait", duration = 0.8 },
-        { kind = "press", action = "M1" },
-        { kind = "wait", duration = 0.12 },
-        { kind = "press", action = "Shove" },
-        { kind = "hold", action = "M1", duration = 0.2 },
-        { kind = "dash", action = "SideDash" },
-        { kind = "wait", duration = 0.1 },
-        { kind = "press", action = "NormalPunch" },
-    }),
-    sequence("ECC_B", {
-        { kind = "press", action = "M1" },
-        { kind = "wait", duration = 0.12 },
-        { kind = "press", action = "M1" },
-        { kind = "wait", duration = 0.12 },
-        { kind = "press", action = "ConsecutivePunches" },
-        { kind = "wait", duration = 0.75 },
-        { kind = "press", action = "M1" },
-        { kind = "wait", duration = 0.1 },
-        { kind = "press", action = "M1" },
-        { kind = "wait", duration = 0.2 }, -- mini uppercut delay
-        { kind = "press", action = "NormalPunch" },
-    }),
-}
-
-function Combos.chooseRoute(enemy: EnemyState)
-    if not enemy then
-        return nil
-    end
-
-    if not enemy.hasEvasive then
-        return Combos.EvasiveCounterCombos[1]
-    end
-
-    return Combos.TrueCombos[1]
-end
-
-function Combos.chooseFallbackRoute(enemy: EnemyState)
-    if not enemy then
-        return nil
-    end
-
-    if not enemy.hasEvasive then
-        return Combos.EvasiveCounterCombos[2]
-    end
-
-    return Combos.TrueCombos[2]
-end
-
---\\ PERCEPTION //------------------------------------------------------------------
-local Perception = {}
-
-local function detectBlockFromAnimator(animator: Animator?): boolean
-    if not animator then
-        return false
-    end
-
-    for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
-        if string.find(string.lower(track.Name), "block") then
+function JoeHubBridge:aim(rootPart: BasePart, targetPart: BasePart)
+    if self.aimFunction then
+        local ok = pcall(self.aimFunction, rootPart, targetPart)
+        if ok then
             return true
         end
     end
-
     return false
 end
 
-local function detectRagdollFromHumanoid(humanoid: Humanoid?): (boolean, boolean)
+function JoeHubBridge:getTargets()
+    if self.targetingFeed then
+        local ok, result = pcall(self.targetingFeed)
+        if ok and typeof(result) == "table" then
+            return result
+        end
+    end
+    return nil
+end
+
+-- Learning Store -------------------------------------------------------------
+local LearningStore = {}
+LearningStore.__index = LearningStore
+
+function LearningStore.new()
+    local self = setmetatable({}, LearningStore)
+    self.folder = Config.DataFolder
+    self.learningFile = string.format("%s/learning.json", self.folder)
+    self.sessionsFolder = string.format("%s/sessions", self.folder)
+    self.learning = {
+        combos = {},
+        sessions = 0,
+        lastUpdate = os.time(),
+    }
+    self:load()
+    return self
+end
+
+function LearningStore:ensure()
+    safeMakeFolder(self.folder)
+    safeMakeFolder(self.sessionsFolder)
+end
+
+function LearningStore:load()
+    self:ensure()
+    local raw = safeReadFile(self.learningFile)
+    if not raw then
+        return
+    end
+    local ok, decoded = pcall(function()
+        return HttpService:JSONDecode(raw)
+    end)
+    if ok and typeof(decoded) == "table" then
+        if typeof(decoded.combos) ~= "table" then
+            decoded.combos = {}
+        end
+        self.learning = decoded
+    end
+end
+
+function LearningStore:save()
+    self.learning.lastUpdate = os.time()
+    local encoded = HttpService:JSONEncode(self.learning)
+    safeWriteFile(self.learningFile, encoded)
+end
+
+function LearningStore:startSession()
+    self:ensure()
+    self.learning.sessions += 1
+    self:save()
+    local sessionId = os.date("%Y%m%d-%H%M%S")
+    local path = string.format("%s/%s.jsonl", self.sessionsFolder, sessionId)
+    safeWriteFile(path, "")
+    self.currentSessionPath = path
+    return path
+end
+
+function LearningStore:log(eventName: string, payload: table)
+    if not self.currentSessionPath then
+        return
+    end
+    local entry = {
+        t = os.clock(),
+        event = eventName,
+        data = payload,
+    }
+    safeAppendFile(self.currentSessionPath, HttpService:JSONEncode(entry) .. "\n")
+end
+
+function LearningStore:getCombo(comboId: string)
+    local combos = self.learning.combos
+    if not combos[comboId] then
+        combos[comboId] = {
+            attempts = 0,
+            successes = 0,
+            totalDamage = 0,
+            lastSuccess = 0,
+        }
+    end
+    return combos[comboId]
+end
+
+function LearningStore:recordAttempt(comboId: string)
+    local combo = self:getCombo(comboId)
+    combo.attempts += 1
+    combo.lastAttempt = os.time()
+    self:save()
+end
+
+function LearningStore:recordResult(comboId: string, success: boolean, damage: number)
+    local combo = self:getCombo(comboId)
+    if success then
+        combo.successes += 1
+        combo.lastSuccess = os.time()
+    end
+    combo.totalDamage += math.max(0, damage)
+    self:save()
+end
+
+function LearningStore:reset()
+    self.learning = {
+        combos = {},
+        sessions = 0,
+        lastUpdate = os.time(),
+    }
+    self:save()
+end
+
+-- GUI ------------------------------------------------------------------------
+local GuiController = {}
+GuiController.__index = GuiController
+
+local function createText(parent: Instance, name: string, text: string, size: UDim2, position: UDim2, textSize: number, bold: boolean)
+    local label = Instance.new("TextLabel")
+    label.Name = name
+    label.Size = size
+    label.Position = position
+    label.BackgroundColor3 = Color3.fromRGB(24, 24, 24)
+    label.BackgroundTransparency = 0.35
+    label.TextColor3 = Color3.fromRGB(235, 235, 235)
+    label.Font = bold and Enum.Font.GothamBold or Enum.Font.Gotham
+    label.TextSize = textSize
+    label.Text = text
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    label.TextYAlignment = Enum.TextYAlignment.Center
+    label.BorderSizePixel = 0
+    label.Parent = parent
+    local padding = Instance.new("UIPadding")
+    padding.PaddingLeft = UDim.new(0, 10)
+    padding.Parent = label
+    return label
+end
+
+local function createButton(parent: Instance, name: string, text: string, size: UDim2, position: UDim2)
+    local button = Instance.new("TextButton")
+    button.Name = name
+    button.Size = size
+    button.Position = position
+    button.BackgroundColor3 = Color3.fromRGB(48, 60, 96)
+    button.TextColor3 = Color3.fromRGB(240, 240, 240)
+    button.Font = Enum.Font.GothamBold
+    button.TextSize = 18
+    button.Text = text
+    button.BorderSizePixel = 0
+    button.AutoButtonColor = true
+    local stroke = Instance.new("UIStroke")
+    stroke.Color = Color3.fromRGB(94, 123, 255)
+    stroke.Thickness = 1.4
+    stroke.Transparency = 0.35
+    stroke.Parent = button
+    button.Parent = parent
+    return button
+end
+
+local function enableDragging(frame: Frame)
+    local dragging = false
+    local dragStart, startPos
+
+    frame.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragging = true
+            dragStart = input.Position
+            startPos = frame.Position
+            input.Changed:Connect(function()
+                if input.UserInputState == Enum.UserInputState.End then
+                    dragging = false
+                end
+            end)
+        end
+    end)
+
+    frame.InputChanged:Connect(function(input)
+        if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
+            local delta = input.Position - dragStart
+            frame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+        end
+    end)
+end
+
+function GuiController.new()
+    local self = setmetatable({}, GuiController)
+
+    local screenGui = Instance.new("ScreenGui")
+    screenGui.Name = "BattlegroundBotUI"
+    screenGui.ResetOnSpawn = false
+    screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    screenGui.Parent = gethui and gethui() or game:GetService("CoreGui")
+
+    local frame = Instance.new("Frame")
+    frame.Name = "MainFrame"
+    frame.Size = UDim2.new(0, 360, 0, 320)
+    frame.Position = UDim2.new(0, 60, 0, 100)
+    frame.BackgroundColor3 = Color3.fromRGB(17, 18, 26)
+    frame.BorderSizePixel = 0
+    local stroke = Instance.new("UIStroke")
+    stroke.Color = Color3.fromRGB(76, 110, 255)
+    stroke.Thickness = 1.5
+    stroke.Transparency = 0.15
+    stroke.Parent = frame
+    frame.Parent = screenGui
+    enableDragging(frame)
+
+    local title = createText(frame, "Title", "JoeHub Battleground Bot", UDim2.new(1, 0, 0, 36), UDim2.new(0, 0, 0, 0), 20, true)
+    title.BackgroundTransparency = 1
+    title.TextColor3 = Color3.fromRGB(205, 214, 255)
+
+    local statusLabel = createText(frame, "Status", "Status: idle", UDim2.new(1, -20, 0, 26), UDim2.new(0, 10, 0, 46), 18, false)
+    local targetLabel = createText(frame, "Target", "Target: none", UDim2.new(1, -20, 0, 26), UDim2.new(0, 10, 0, 78), 18, false)
+    local comboLabel = createText(frame, "Combo", "Combo: none", UDim2.new(1, -20, 0, 26), UDim2.new(0, 10, 0, 110), 18, false)
+    local evasiveLabel = createText(frame, "Evasive", "Evasive: ready", UDim2.new(1, -20, 0, 26), UDim2.new(0, 10, 0, 142), 18, false)
+
+    local startButton = createButton(frame, "StartButton", "Start Bot", UDim2.new(0.5, -15, 0, 36), UDim2.new(0, 10, 0, 180))
+    local stopButton = createButton(frame, "StopButton", "Stop Bot", UDim2.new(0.5, -15, 0, 36), UDim2.new(0.5, 5, 0, 180))
+    stopButton.BackgroundColor3 = Color3.fromRGB(120, 50, 50)
+
+    local panicButton = createButton(frame, "PanicButton", "Panic Evasive", UDim2.new(1, -20, 0, 32), UDim2.new(0, 10, 0, 224))
+    panicButton.BackgroundColor3 = Color3.fromRGB(110, 40, 40)
+
+    local resetLearningButton = createButton(frame, "ResetLearning", "Reset Learning", UDim2.new(1, -20, 0, 32), UDim2.new(0, 10, 0, 264))
+    resetLearningButton.BackgroundColor3 = Color3.fromRGB(48, 70, 120)
+
+    local learningFrame = Instance.new("Frame")
+    learningFrame.Name = "LearningFrame"
+    learningFrame.Size = UDim2.new(0, 240, 0, 140)
+    learningFrame.Position = UDim2.new(1, 10, 0, 0)
+    learningFrame.BackgroundColor3 = Color3.fromRGB(20, 22, 30)
+    learningFrame.BorderSizePixel = 0
+    learningFrame.Visible = false
+    local learningStroke = Instance.new("UIStroke")
+    learningStroke.Color = Color3.fromRGB(76, 110, 255)
+    learningStroke.Thickness = 1
+    learningStroke.Transparency = 0.2
+    learningStroke.Parent = learningFrame
+    learningFrame.Parent = frame
+
+    local learningTitle = createText(learningFrame, "LearningTitle", "Combo Learning", UDim2.new(1, -10, 0, 30), UDim2.new(0, 5, 0, 2), 18, true)
+    learningTitle.BackgroundTransparency = 1
+
+    local learningList = Instance.new("ScrollingFrame")
+    learningList.Name = "LearningList"
+    learningList.Size = UDim2.new(1, -10, 1, -36)
+    learningList.Position = UDim2.new(0, 5, 0, 34)
+    learningList.CanvasSize = UDim2.new(0, 0, 0, 0)
+    learningList.BackgroundTransparency = 1
+    learningList.BorderSizePixel = 0
+    learningList.ScrollBarThickness = 4
+    learningList.Parent = learningFrame
+
+    local uiList = Instance.new("UIListLayout")
+    uiList.Padding = UDim.new(0, 6)
+    uiList.HorizontalAlignment = Enum.HorizontalAlignment.Left
+    uiList.VerticalAlignment = Enum.VerticalAlignment.Top
+    uiList.SortOrder = Enum.SortOrder.LayoutOrder
+    uiList.Parent = learningList
+
+    self.gui = screenGui
+    self.frame = frame
+    self.statusLabel = statusLabel
+    self.targetLabel = targetLabel
+    self.comboLabel = comboLabel
+    self.evasiveLabel = evasiveLabel
+    self.startButton = startButton
+    self.stopButton = stopButton
+    self.panicButton = panicButton
+    self.resetLearningButton = resetLearningButton
+    self.learningFrame = learningFrame
+    self.learningList = learningList
+    self.learningLayout = uiList
+
+    startButton.MouseButton1Click:Connect(function()
+        if BotController then
+            BotController:start()
+        end
+    end)
+
+    stopButton.MouseButton1Click:Connect(function()
+        if BotController then
+            BotController:stop()
+        end
+    end)
+
+    panicButton.MouseButton1Click:Connect(function()
+        if BotController then
+            BotController:panicEvasive(true)
+        end
+    end)
+
+    resetLearningButton.MouseButton1Click:Connect(function()
+        if BotController then
+            BotController:resetLearning()
+        end
+    end)
+
+    return self
+end
+
+function GuiController:setStatus(text: string)
+    if self.statusLabel then
+        self.statusLabel.Text = text
+    end
+end
+
+function GuiController:setTarget(text: string)
+    if self.targetLabel then
+        self.targetLabel.Text = text
+    end
+end
+
+function GuiController:setCombo(text: string)
+    if self.comboLabel then
+        self.comboLabel.Text = text
+    end
+end
+
+function GuiController:setEvasive(text: string)
+    if self.evasiveLabel then
+        self.evasiveLabel.Text = text
+    end
+end
+
+function GuiController:showLearning(show: boolean)
+    if self.learningFrame then
+        self.learningFrame.Visible = show
+    end
+end
+
+function GuiController:updateLearningList(learning: table)
+    if not self.learningList then
+        return
+    end
+    local layout: UIListLayout? = self.learningLayout
+    for _, child in ipairs(self.learningList:GetChildren()) do
+        if child:IsA("TextLabel") then
+            child:Destroy()
+        end
+    end
+    for comboId, info in pairs(learning.combos or {}) do
+        local label = Instance.new("TextLabel")
+        label.Size = UDim2.new(1, -6, 0, 32)
+        label.BackgroundTransparency = 1
+        label.TextColor3 = Color3.fromRGB(210, 220, 255)
+        label.Font = Enum.Font.Gotham
+        label.TextSize = 16
+        local successRate = 0
+        if info.attempts > 0 then
+            successRate = (info.successes / info.attempts) * 100
+        end
+        label.TextXAlignment = Enum.TextXAlignment.Left
+        label.Text = string.format("%s | %d/%d | %.1f%% | dmg %.0f", comboId, info.successes or 0, info.attempts or 0, successRate, info.totalDamage or 0)
+        label.Parent = self.learningList
+    end
+    if layout then
+        self.learningList.CanvasSize = UDim2.new(0, 0, 0, layout.AbsoluteContentSize.Y + 10)
+    end
+end
+
+function GuiController:destroy()
+    if self.gui then
+        self.gui:Destroy()
+    end
+end
+
+-- Combo Definitions ---------------------------------------------------------
+export type ComboStep = {
+    kind: string,
+    action: string?,
+    hold: number?,
+    wait: number?,
+}
+
+type ComboDefinition = {
+    id: string,
+    name: string,
+    requiresNoEvasive: boolean?,
+    minimumRange: number?,
+    maximumRange: number?,
+    steps: { ComboStep },
+}
+
+local ComboLibrary: { ComboDefinition } = {
+    {
+        id = "saitama_tc1",
+        name = "TC: M1 > Shove > CP > M1 > NP",
+        requiresNoEvasive = false,
+        minimumRange = 0,
+        maximumRange = 15,
+        steps = {
+            { kind = "aim" },
+            { kind = "press", action = "M1", hold = Config.InputHoldShort, wait = 0.12 },
+            { kind = "press", action = "Shove", wait = 0.32 },
+            { kind = "press", action = "SideDash", wait = 0.08 },
+            { kind = "press", action = "ConsecutivePunches", wait = 0.55 },
+            { kind = "press", action = "M1", wait = 0.18 },
+            { kind = "press", action = "NormalPunch" },
+        },
+    },
+    {
+        id = "saitama_tc2",
+        name = "TC: M1x2 > Shove > Upper",
+        requiresNoEvasive = false,
+        minimumRange = 0,
+        maximumRange = 13,
+        steps = {
+            { kind = "aim" },
+            { kind = "press", action = "M1", hold = Config.InputHoldShort, wait = 0.12 },
+            { kind = "press", action = "M1", hold = Config.InputHoldShort, wait = 0.12 },
+            { kind = "press", action = "Shove", wait = 0.3 },
+            { kind = "press", action = "SideDash", wait = 0.08 },
+            { kind = "press", action = "Uppercut" },
+        },
+    },
+    {
+        id = "saitama_ecc1",
+        name = "ECC: 3M1 > Upper > CP > NP",
+        requiresNoEvasive = true,
+        minimumRange = 0,
+        maximumRange = 12,
+        steps = {
+            { kind = "aim" },
+            { kind = "press", action = "M1", hold = Config.InputHoldShort, wait = 0.1 },
+            { kind = "press", action = "M1", hold = Config.InputHoldShort, wait = 0.1 },
+            { kind = "press", action = "M1", hold = Config.InputHoldShort, wait = 0.18 },
+            { kind = "press", action = "Uppercut", wait = 0.35 },
+            { kind = "press", action = "SideDash", wait = 0.12 },
+            { kind = "press", action = "M1", wait = 0.16 },
+            { kind = "press", action = "ConsecutivePunches", wait = 0.45 },
+            { kind = "press", action = "M1", wait = 0.12 },
+            { kind = "press", action = "NormalPunch" },
+        },
+    },
+}
+
+-- Bot Controller ------------------------------------------------------------
+local Bot = {}
+Bot.__index = Bot
+
+type EnemyRecord = {
+    model: Model,
+    humanoid: Humanoid?,
+    hrp: BasePart?,
+    distance: number,
+    hasEvasive: boolean,
+    lastEvasive: number,
+    threatScore: number,
+    player: Player?,
+    lastKnownHealth: number,
+}
+
+function Bot.new()
+    local self = setmetatable({}, Bot)
+    self.gui = GuiController.new()
+    self.learningStore = LearningStore.new()
+    self.bridge = JoeHubBridge.new()
+    self.enemies = {}
+    self.running = false
+    self.state = "idle"
+    self.sessionStart = 0
+    self.sessionFile = nil
+    self.currentCombo = nil
+    self.currentTarget = nil
+    self.lastComboAttempt = 0
+    self.actionThread = nil
+    self.evasiveLock = 0
+    self.lastDamageTaken = 0
+    self.humanoid = nil
+    self.rootPart = nil
+    self.character = nil
+    self.alive = false
+    self.evasiveReady = true
+    self.evasiveTimer = 0
+    self.shouldPanicEvasive = false
+
+    self.gui:setStatus("Status: idle")
+    self.gui:setTarget("Target: none")
+    self.gui:setCombo("Combo: none")
+    self.gui:setEvasive("Evasive: unknown")
+    self.gui:showLearning(true)
+    self.gui:updateLearningList(self.learningStore.learning)
+
+    self:connectCharacter(LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait())
+
+    LocalPlayer.CharacterAdded:Connect(function(char)
+        self:connectCharacter(char)
+    end)
+
+    local liveFolder = workspace:WaitForChild("Live")
+    for _, model in ipairs(liveFolder:GetChildren()) do
+        self:addEnemy(model)
+    end
+    liveFolder.ChildAdded:Connect(function(model)
+        self:addEnemy(model)
+    end)
+    liveFolder.ChildRemoved:Connect(function(model)
+        self.enemies[model] = nil
+    end)
+
+    self.heartbeatConn = RunService.Heartbeat:Connect(function(dt)
+        self:update(dt)
+    end)
+
+    return self
+end
+
+function Bot:destroy()
+    if self.heartbeatConn then
+        self.heartbeatConn:Disconnect()
+        self.heartbeatConn = nil
+    end
+    if self.gui then
+        self.gui:destroy()
+    end
+end
+
+function Bot:connectCharacter(char: Model)
+    self.character = char
+    if not char then
+        return
+    end
+    local humanoid = char:FindFirstChildOfClass("Humanoid") or char:WaitForChild("Humanoid", 5)
     if not humanoid then
-        return false, false
+        return
+    end
+    self.humanoid = humanoid
+    self.rootPart = char:FindFirstChild("HumanoidRootPart") or char:WaitForChild("HumanoidRootPart", 5)
+    self.alive = humanoid.Health > 0
+    self.evasiveReady = true
+    self.evasiveTimer = 0
+    self.lastDamageTaken = humanoid.Health
+
+    humanoid.Died:Connect(function()
+        self.alive = false
+        self.running = false
+        self.gui:setStatus("Status: dead")
+        self.gui:setTarget("Target: none")
+        if self.actionThread then
+            self.actionThread = nil
+        end
+    end)
+
+    humanoid.HealthChanged:Connect(function(health)
+        if health < self.lastDamageTaken - 2 then
+            self.shouldPanicEvasive = true
+            self.evasiveReady = self:getEvasiveAttribute() or self.evasiveReady
+        end
+        self.lastDamageTaken = health
+    end)
+
+    humanoid.StateChanged:Connect(function(_, newState)
+        if newState == Enum.HumanoidStateType.FallingDown or newState == Enum.HumanoidStateType.Physics then
+            self.shouldPanicEvasive = true
+        end
+    end)
+
+    if self.bridge.env and self.bridge.env.RegisterEvasiveListener then
+        pcall(self.bridge.env.RegisterEvasiveListener, function(ready)
+            self.evasiveReady = ready
+        end)
+    end
+end
+
+function Bot:getEvasiveAttribute()
+    local attr = LocalPlayer:GetAttribute("EvasiveReady")
+    if typeof(attr) == "boolean" then
+        return attr
+    end
+    local cooldown = LocalPlayer:GetAttribute("EvasiveCooldown")
+    if typeof(cooldown) == "number" then
+        return cooldown <= 0
+    end
+    return nil
+end
+
+function Bot:addEnemy(model: Model)
+    if model:GetAttribute("NPC") then
+        return
+    end
+    if model.Name == LocalPlayer.Name then
+        return
+    end
+    local record: EnemyRecord = {
+        model = model,
+        humanoid = model:FindFirstChildOfClass("Humanoid"),
+        hrp = model:FindFirstChild("HumanoidRootPart"),
+        distance = math.huge,
+        hasEvasive = true,
+        lastEvasive = 0,
+        threatScore = 0,
+        player = Players:FindFirstChild(model.Name),
+        lastKnownHealth = 100,
+    }
+    if record.humanoid then
+        record.lastKnownHealth = record.humanoid.Health
+        record.humanoid:GetPropertyChangedSignal("Health"):Connect(function()
+            record.lastKnownHealth = record.humanoid and record.humanoid.Health or record.lastKnownHealth
+        end)
     end
 
-    local state = humanoid:GetState()
-    local ragdollStates = {
-        Enum.HumanoidStateType.Ragdoll,
-        Enum.HumanoidStateType.Physics,
-        Enum.HumanoidStateType.FallingDown,
-    }
-
-    for _, ragdollState in ipairs(ragdollStates) do
-        if state == ragdollState then
-            return true, state == Enum.HumanoidStateType.FallingDown
+    local function onDescendant(desc)
+        if desc.Name == "RagdollCancel" then
+            record.lastEvasive = tick()
+            record.hasEvasive = false
         end
     end
 
-    return false, false
+    for _, desc in ipairs(model:GetDescendants()) do
+        onDescendant(desc)
+    end
+    model.DescendantAdded:Connect(onDescendant)
+
+    model.AncestryChanged:Connect(function(_, parent)
+        if parent == nil then
+            self.enemies[model] = nil
+        end
+    end)
+
+    self.enemies[model] = record
 end
 
-function Perception.senseWorld(blackboard: BlackboardState, dt: number)
-    local localPlayer = blackboard.localPlayer
-    if not localPlayer then
+function Bot:start()
+    if not self.alive then
+        self.gui:setStatus("Status: waiting for spawn")
+        return
+    end
+    if self.running then
+        self.gui:setStatus("Status: running")
         return
     end
 
-    local myCharacter = localPlayer.Character
-    local myHumanoid = myCharacter and myCharacter:FindFirstChildOfClass("Humanoid")
-    local myRoot = myCharacter and myCharacter:FindFirstChild("HumanoidRootPart")
+    self.running = true
+    self.sessionFile = self.learningStore:startSession()
+    self.sessionStart = os.clock()
+    self.gui:setStatus("Status: running")
+    self.gui:setCombo("Combo: none")
+    self.learningStore:log("session_start", { character = Config.CharacterKey })
+end
 
-    blackboard.myState.character = myCharacter
-    blackboard.myState.humanoid = myHumanoid
-    blackboard.myState.root = myRoot
-    blackboard.myState.velocity = myRoot and myRoot.Velocity or Vector3.zero
+function Bot:stop()
+    if not self.running then
+        return
+    end
+    self.running = false
+    if self.humanoid then
+        self.humanoid.AutoRotate = true
+    end
+    self.gui:setStatus("Status: idle")
+    self.gui:setCombo("Combo: none")
+    self.learningStore:log("session_stop", { duration = os.clock() - self.sessionStart })
+end
 
-    if myHumanoid then
-        blackboard.myState.blocking = detectBlockFromAnimator(myHumanoid:FindFirstChildOfClass("Animator"))
-        local ragdoll, falling = detectRagdollFromHumanoid(myHumanoid)
-        blackboard.myState.isRagdolled = ragdoll
-        blackboard.myState.isAirborne = falling or (myRoot and math.abs(myRoot.Velocity.Y) > 6) or false
+function Bot:panicEvasive(force: boolean)
+    if force then
+        if not self:attemptEvasive("manual") then
+            self.shouldPanicEvasive = true
+        end
+    else
+        self.shouldPanicEvasive = true
+    end
+end
+
+function Bot:resetLearning()
+    self.learningStore:reset()
+    self.gui:updateLearningList(self.learningStore.learning)
+    self.learningStore:log("learning_reset", { ts = os.time() })
+end
+
+function Bot:update(dt: number)
+    if not self.character or not self.humanoid or not self.rootPart then
+        return
+    end
+    if self.humanoid.Health <= 0 then
+        self.running = false
+        return
     end
 
-    if blackboard.myState.evasiveLockUntil < tick() and not blackboard.myState.hasEvasive then
-        blackboard.myState.hasEvasive = true
+    self:updateEvasiveState(dt)
+    self:updateEnemyData(dt)
+
+    if not self.running then
+        return
     end
 
-    blackboard:clearEnemies()
+    if self.shouldPanicEvasive then
+        if self:attemptEvasive("panic") then
+            self.shouldPanicEvasive = false
+        end
+    end
 
+    if self.actionThread then
+        -- Update aim while combo executing.
+        if self.currentTarget and self.currentTarget.hrp then
+            self:applyAim(self.currentTarget.hrp)
+        end
+        return
+    end
+
+    local target = self:selectTarget()
+    if not target then
+        self.currentTarget = nil
+        self.gui:setTarget("Target: none")
+        self:neutralMovement()
+        return
+    end
+
+    self.currentTarget = target
+    self.gui:setTarget(string.format("Target: %s (%.0f hp)", target.model.Name, target.lastKnownHealth))
+    self:applyAim(target.hrp)
+
+    if self:shouldStartCombo(target) then
+        local combo = self:chooseCombo(target)
+        if combo then
+            self:executeCombo(combo, target)
+        end
+    else
+        self:neutralMovement(target)
+    end
+end
+
+function Bot:updateEvasiveState(dt: number)
+    local attr = self:getEvasiveAttribute()
+    if attr ~= nil then
+        self.evasiveReady = attr
+        if attr then
+            self.evasiveTimer = 0
+        end
+    else
+        if self.evasiveTimer > 0 then
+            self.evasiveTimer -= dt
+            if self.evasiveTimer <= 0 then
+                self.evasiveReady = true
+            end
+        end
+    end
+    local statusText = self.evasiveReady and "Evasive: ready" or string.format("Evasive: %.1fs", math.max(0, self.evasiveTimer))
+    self.gui:setEvasive(statusText)
+end
+
+function Bot:updateEnemyData(dt: number)
+    local myPos = self.rootPart.Position
     local now = tick()
-    local myPosition = myRoot and myRoot.Position or Vector3.zero
-
-    for _, player in ipairs(Players:GetPlayers()) do
-        if player ~= localPlayer then
-            local character = player.Character
-            local humanoid = character and character:FindFirstChildOfClass("Humanoid")
-            local rootPart = character and character:FindFirstChild("HumanoidRootPart")
-            if humanoid and rootPart and humanoid.Health > 0 then
-                local distance = (rootPart.Position - myPosition).Magnitude
-                local healthRatio = humanoid.Health / math.max(humanoid.MaxHealth, 1)
-                local ragdoll, falling = detectRagdollFromHumanoid(humanoid)
-                local blocking = detectBlockFromAnimator(humanoid:FindFirstChildOfClass("Animator"))
-                local nearWall = false
-
-                local rayOrigin = rootPart.Position
-                local rayDirection = rootPart.CFrame.LookVector * 8
-                local rayParams = RaycastParams.new()
-                rayParams.FilterDescendantsInstances = { character, myCharacter }
-                rayParams.FilterType = Enum.RaycastFilterType.Blacklist
-                local rayResult = workspace:Raycast(rayOrigin, rayDirection, rayParams)
-                if rayResult and rayResult.Instance and rayResult.Instance.CanCollide then
-                    nearWall = true
+    for model, record in pairs(self.enemies) do
+        if model.Parent == nil then
+            self.enemies[model] = nil
+        else
+            record.hrp = record.hrp or model:FindFirstChild("HumanoidRootPart")
+            record.humanoid = record.humanoid or model:FindFirstChildOfClass("Humanoid")
+            if record.hrp then
+                record.distance = (record.hrp.Position - myPos).Magnitude
+            else
+                record.distance = math.huge
+            end
+            local evasiveFromBridge = self.bridge:getEvasive(model)
+            if evasiveFromBridge ~= nil then
+                record.hasEvasive = evasiveFromBridge and true or false
+            else
+                if record.lastEvasive > 0 and now - record.lastEvasive > Config.EvasiveCooldown then
+                    record.hasEvasive = true
                 end
-
-                local hasEvasive = true
-                if blackboard.threatMap[player.UserId] then
-                    hasEvasive = blackboard.threatMap[player.UserId] > now
-                end
-
-                local enemyState: EnemyState = {
-                    player = player,
-                    character = character,
-                    humanoid = humanoid,
-                    root = rootPart,
-                    distance = distance,
-                    healthRatio = healthRatio,
-                    maxHealth = humanoid.MaxHealth,
-                    hasEvasive = hasEvasive,
-                    isRagdolled = ragdoll,
-                    isLaunched = falling,
-                    isBlocking = blocking,
-                    lastBlockSignal = 0,
-                    lastAttackT = 0,
-                    hostilityScore = 0,
-                    nearWall = nearWall,
-                    ragdollEndT = ragdoll and (now + 0.5) or now,
-                }
-
-                blackboard:addEnemy(enemyState)
+            end
+            if record.humanoid and record.humanoid.Health <= 0 then
+                record.threatScore = -math.huge
+            else
+                local hp = record.humanoid and record.humanoid.Health or record.lastKnownHealth
+                record.lastKnownHealth = hp
+                local hpFactor = (100 - hp)
+                local distanceFactor = math.clamp(40 - record.distance, -40, 40)
+                local evasiveFactor = record.hasEvasive and -25 or 15
+                record.threatScore = hpFactor + distanceFactor + evasiveFactor
             end
         end
     end
 end
 
-function Perception.updateThreatMap(blackboard: BlackboardState, dt: number)
-    for _, enemy in ipairs(blackboard.enemies) do
-        local userId = enemy.player.UserId
-        local record = blackboard.threatMap[userId]
-        if not record then
-            blackboard.threatMap[userId] = tick() + 8
+function Bot:selectTarget(): EnemyRecord?
+    local best: EnemyRecord? = nil
+    local bestScore = -math.huge
+    for _, record in pairs(self.enemies) do
+        if record.model.Parent and record.humanoid and record.humanoid.Health > 0 then
+            if record.distance < 60 then
+                if record.threatScore > bestScore then
+                    bestScore = record.threatScore
+                    best = record
+                end
+            end
         end
+    end
+    return best
+end
 
-        local isFriend = blackboard:isAlliance(userId)
-        if isFriend then
-            enemy.hostilityScore = -1
-        else
-            enemy.hostilityScore = 1
-        end
-
-        if enemy.isBlocking then
-            enemy.lastBlockSignal = tick()
-        end
+function Bot:applyAim(targetHRP: BasePart?)
+    if not targetHRP or not self.rootPart then
+        return
+    end
+    if not self.bridge:aim(self.rootPart, targetHRP) then
+        aimWithCFrame(self.rootPart, targetHRP)
+    end
+    if self.humanoid then
+        self.humanoid.AutoRotate = false
     end
 end
 
---\\ DECISION TREE //----------------------------------------------------------------
-local Decisions = {}
+function Bot:shouldStartCombo(target: EnemyRecord)
+    if not target or not target.hrp then
+        return false
+    end
+    if os.clock() - self.lastComboAttempt < 1.5 then
+        return false
+    end
+    if target.distance > Config.ComboConfirmDistance then
+        return false
+    end
+    if not self.humanoid or self.humanoid.MoveDirection.Magnitude > 0.2 then
+        return false
+    end
+    if target.humanoid and target.humanoid.FloorMaterial == Enum.Material.Air then
+        return false
+    end
+    return true
+end
 
-function Decisions.selectTarget(blackboard: BlackboardState)
-    local bestEnemy: EnemyState? = nil
-    local bestScore = -math.huge
-    local myRoot = blackboard.myState.root
-    if not myRoot then
+function Bot:chooseCombo(target: EnemyRecord): ComboDefinition?
+    local available = {}
+    for _, combo in ipairs(ComboLibrary) do
+        if combo.requiresNoEvasive and target.hasEvasive then
+            continue
+        end
+        if combo.minimumRange and target.distance < combo.minimumRange then
+            continue
+        end
+        if combo.maximumRange and target.distance > combo.maximumRange then
+            continue
+        end
+        local stats = self.learningStore:getCombo(combo.id)
+        local attempts = stats.attempts
+        local successes = stats.successes
+        local successRate = (successes + 1) / (attempts + 2)
+        local distanceBias = math.max(0.1, 1 - math.abs((target.distance - ((combo.minimumRange or 0) + (combo.maximumRange or 20)) / 2) / 20))
+        table.insert(available, { combo = combo, weight = successRate * distanceBias })
+    end
+    if #available == 0 then
         return nil
     end
-
-    local enemyCount = 0
-    for _, enemy in ipairs(blackboard.enemies) do
-        if enemyCount >= Config.MaxTargetsConsidered then
-            break
-        end
-        enemyCount += 1
-
-        local score = 0
-        score += (1 - enemy.healthRatio) * Config.UtilityWeights.lowHealthBonus
-        score += (1 - math.clamp(enemy.distance / 50, 0, 1)) * Config.UtilityWeights.proximityBonus
-        if not enemy.hasEvasive then
-            score += Config.UtilityWeights.noEvasiveBonus
-        end
-        if enemy.nearWall then
-            score += Config.UtilityWeights.wallBonus
-        end
-
-        if blackboard:isAlliance(enemy.player.UserId) then
-            score += Config.UtilityWeights.hostilityPenalty * 2
-        end
-
-        local neighbors = 0
-        for _, other in ipairs(blackboard.enemies) do
-            if other ~= enemy and (other.distance - enemy.distance) < 8 then
-                neighbors += 1
-            end
-        end
-        score += neighbors * Config.UtilityWeights.crowdPenalty
-
-        if score > bestScore then
-            bestScore = score
-            bestEnemy = enemy
-        end
-    end
-
-    blackboard.lastTarget = bestEnemy
-    return bestEnemy
+    table.sort(available, function(a, b)
+        return a.weight > b.weight
+    end)
+    return available[1].combo
 end
 
-function Decisions.shouldEvasive(blackboard: BlackboardState)
-    if not blackboard.myState.humanoid then
-        return false
-    end
-
-    if blackboard.myState.isRagdolled then
-        return true
-    end
-
-    if blackboard.myState.isAirborne and blackboard.myState.humanoid.Health < 35 then
-        return true
-    end
-
-    return false
-end
-
-function Decisions.haveConfirm(blackboard: BlackboardState, enemy: EnemyState)
-    if not enemy or not blackboard.myState.root then
-        return false
-    end
-
-    if enemy.isRagdolled then
-        return true
-    end
-
-    if enemy.distance < Config.ComboConfirmDistance and enemy.isBlocking == false and enemy.isLaunched then
-        return true
-    end
-
-    return false
-end
-
-function Decisions.chooseRoute(blackboard: BlackboardState, enemy: EnemyState)
-    local route = Combos.chooseRoute(enemy)
-    if route then
-        return route
-    end
-    return Combos.chooseFallbackRoute(enemy)
-end
-
-function Decisions.neutralPlan(blackboard: BlackboardState, enemy: EnemyState?)
-    if not enemy then
+function Bot:executeCombo(combo: ComboDefinition, target: EnemyRecord)
+    if self.actionThread then
         return
     end
+    self.currentCombo = combo
+    self.lastComboAttempt = os.clock()
+    self.gui:setCombo("Combo: " .. combo.name)
+    self.learningStore:recordAttempt(combo.id)
+    self.learningStore:log("combo_start", { id = combo.id, target = target.model.Name })
 
-    if enemy.distance > Config.MaxNeutralSpacing then
-        Input.press("ForwardDash")
-    elseif enemy.distance < Config.MinNeutralSpacing then
-        Input.press("BackDash")
-    else
-        Input.press("Block")
-    end
-end
-
-function Decisions.updateAllianceState(blackboard: BlackboardState)
-    local now = tick()
-    for _, enemy in ipairs(blackboard.enemies) do
-        local userId = enemy.player.UserId
-        if blackboard:isAlliance(userId) then
-            if now - enemy.lastBlockSignal < Config.Alliance.handshakeWindow then
-                blackboard:recordAllianceSignal(userId)
+    local startHealth = target.humanoid and target.humanoid.Health or target.lastKnownHealth
+    local thread
+    thread = task.spawn(function()
+        local aborted = false
+        for _, step in ipairs(combo.steps) do
+            if not self.running then
+                aborted = true
+                break
             end
-        else
-            if now - enemy.lastBlockSignal < Config.Alliance.handshakeWindow then
-                local entry = blackboard.alliances[userId]
-                if not entry then
-                    blackboard.alliances[userId] = {
-                        userId = userId,
-                        lastSignalT = now,
-                        expiryT = now + Config.Alliance.gracePeriod,
-                    }
-                    blackboard.logger:logEvent("alliance_attempt", {
-                        userId = userId,
-                        time = now,
-                    })
-                elseif now - entry.lastSignalT < Config.Alliance.handshakeWindow then
-                    entry.expiryT = now + Config.Alliance.decayTime
-                    blackboard.logger:increment("alliancesMade", 1)
-                    blackboard.logger:logEvent("alliance", {
-                        userId = userId,
-                        time = now,
-                    })
+            if not target.model.Parent then
+                aborted = true
+                break
+            end
+            if step.kind == "aim" then
+                self:applyAim(target.hrp)
+                task.wait(0.05)
+            elseif step.kind == "press" and step.action then
+                if step.hold and step.hold > Config.InputTap then
+                    pressAndHold(step.action, step.hold)
+                else
+                    pressBinding(step.action, step.hold)
                 end
+                if step.wait and step.wait > 0 then
+                    task.wait(step.wait)
+                else
+                    task.wait(Config.InputTap)
+                end
+            elseif step.kind == "wait" then
+                task.wait(step.wait or Config.InputTap)
             end
         end
-    end
-end
-
-function Decisions.tick(blackboard: BlackboardState, actions: Actions, dt: number)
-    if not blackboard.myState.character then
-        return
-    end
-
-    Perception.senseWorld(blackboard, dt)
-    Perception.updateThreatMap(blackboard, dt)
-    Decisions.updateAllianceState(blackboard)
-
-    local enemy = Decisions.selectTarget(blackboard)
-    if not enemy then
-        return
-    end
-
-    if Decisions.shouldEvasive(blackboard) then
-        if actions:tryEvasive() then
-            blackboard.logger:logEvent("evasive_used", { reason = "defensive" })
-        end
-        return
-    end
-
-    if Decisions.haveConfirm(blackboard, enemy) and not actions.isBusy then
-        local route = Decisions.chooseRoute(blackboard, enemy)
-        if route then
-            if actions:enqueueSequence(route.steps, route.id) then
-                blackboard.logger:logEvent("combo_start", {
-                    route = route.id,
-                    target = enemy.player.UserId,
-                })
-            end
+        if aborted or not self.running then
+            self.gui:setCombo("Combo: none")
+            self.currentCombo = nil
+            self.actionThread = nil
             return
         end
-    end
-
-    Decisions.neutralPlan(blackboard, enemy)
+        task.wait(0.65)
+        local endHealth = target.humanoid and target.humanoid.Health or startHealth
+        local damage = math.max(0, startHealth - endHealth)
+        local success = damage > 4
+        self.learningStore:recordResult(combo.id, success, damage)
+        self.learningStore:log("combo_result", {
+            id = combo.id,
+            success = success,
+            damage = damage,
+            target = target.model.Name,
+        })
+        self.gui:setCombo("Combo: none")
+        self.currentCombo = nil
+        self.actionThread = nil
+        self.gui:updateLearningList(self.learningStore.learning)
+    end)
+    self.actionThread = thread
 end
 
---\\ MAIN LOOP //-------------------------------------------------------------------
-local logger = Logger.new()
-logger:startSession()
+function Bot:neutralMovement(target: EnemyRecord?)
+    if not target or not target.hrp then
+        return
+    end
+    local distance = target.distance
+    if distance > Config.NeutralSpacingMax then
+        pressBinding("ForwardDash")
+    elseif distance < Config.NeutralSpacingMin then
+        pressBinding("BackDash")
+    else
+        -- strafe lightly to stay unpredictable
+        if math.random() < 0.5 then
+            pressBinding("SideDash")
+        end
+    end
+end
 
-local blackboard = Blackboard.new(logger)
-local actions = Actions.new(blackboard)
+function Bot:attemptEvasive(reason: string)
+    if not self.evasiveReady then
+        return false
+    end
+    self.evasiveReady = false
+    self.evasiveTimer = Config.EvasiveCooldown
+    pressBinding("Evasive", Config.InputTap)
+    self.learningStore:log("evasive", { reason = reason, t = os.clock() })
+    return true
+end
 
-local lastTick = tick()
-RunService.Heartbeat:Connect(function()
-    local now = tick()
-    local dt = now - lastTick
-    lastTick = now
+-- Initialization -------------------------------------------------------------
+if getgenv().BattlegroundsBot and getgenv().BattlegroundsBot.destroy then
+    pcall(function()
+        getgenv().BattlegroundsBot:destroy()
+    end)
+end
 
-    Decisions.tick(blackboard, actions, dt)
-end)
+local botInstance = Bot.new()
+getgenv().BattlegroundsBot = botInstance
+BotController = botInstance
 
-return {
-    Config = Config,
-    Logger = Logger,
-    Blackboard = Blackboard,
-    Perception = Perception,
-    Decisions = Decisions,
-    Combos = Combos,
-    Actions = Actions,
-}
+return botInstance
