@@ -116,6 +116,14 @@ local function pressBinding(name, hold)
     end
 end
 
+local function tapDirectional(keyCode: Enum.KeyCode, duration: number?)
+    duration = duration or 0.2
+    VirtualInputManager:SendKeyEvent(true, keyCode, false, game)
+    task.delay(duration, function()
+        VirtualInputManager:SendKeyEvent(false, keyCode, false, game)
+    end)
+end
+
 local function pressAndHold(name, duration)
     local binding = Config.ActionBindings[name]
     if not binding then
@@ -685,6 +693,14 @@ function Bot.new()
     self.evasiveReady = true
     self.evasiveTimer = 0
     self.shouldPanicEvasive = false
+    self.lastMoveCommand = 0
+    self.lastStrafeCommand = 0
+    self.lastForwardDash = 0
+    self.lastBackDash = 0
+    self.lastBasicAttack = 0
+    self.lastAttackerName = nil
+    self.liveFolder = workspace:WaitForChild("Live")
+    self.liveCharacter = self.liveFolder:FindFirstChild(LocalPlayer.Name)
 
     self.gui:setStatus("Status: idle")
     self.gui:setTarget("Target: none")
@@ -699,15 +715,21 @@ function Bot.new()
         self:connectCharacter(char)
     end)
 
-    local liveFolder = workspace:WaitForChild("Live")
-    for _, model in ipairs(liveFolder:GetChildren()) do
+    for _, model in ipairs(self.liveFolder:GetChildren()) do
         self:addEnemy(model)
     end
-    liveFolder.ChildAdded:Connect(function(model)
-        self:addEnemy(model)
+    self.liveFolder.ChildAdded:Connect(function(model)
+        if model.Name == LocalPlayer.Name then
+            self.liveCharacter = model
+        else
+            self:addEnemy(model)
+        end
     end)
-    liveFolder.ChildRemoved:Connect(function(model)
+    self.liveFolder.ChildRemoved:Connect(function(model)
         self.enemies[model] = nil
+        if model == self.liveCharacter then
+            self.liveCharacter = nil
+        end
     end)
 
     self.heartbeatConn = RunService.Heartbeat:Connect(function(dt)
@@ -890,6 +912,7 @@ function Bot:update(dt: number)
 
     self:updateEvasiveState(dt)
     self:updateEnemyData(dt)
+    self:updateLastAttacker()
 
     if not self.running then
         return
@@ -981,6 +1004,9 @@ function Bot:updateEnemyData(dt: number)
                 local distanceFactor = math.clamp(40 - record.distance, -40, 40)
                 local evasiveFactor = record.hasEvasive and -25 or 15
                 record.threatScore = hpFactor + distanceFactor + evasiveFactor
+                if self.lastAttackerName and record.model.Name == self.lastAttackerName then
+                    record.threatScore += 120
+                end
             end
         end
     end
@@ -1006,6 +1032,13 @@ function Bot:applyAim(targetHRP: BasePart?)
     if not targetHRP or not self.rootPart then
         return
     end
+    if self.humanoid then
+        local state = self.humanoid:GetState()
+        if state == Enum.HumanoidStateType.FallingDown then
+            self.humanoid.AutoRotate = true
+            return
+        end
+    end
     if not self.bridge:aim(self.rootPart, targetHRP) then
         aimWithCFrame(self.rootPart, targetHRP)
     end
@@ -1024,7 +1057,7 @@ function Bot:shouldStartCombo(target: EnemyRecord)
     if target.distance > Config.ComboConfirmDistance then
         return false
     end
-    if not self.humanoid or self.humanoid.MoveDirection.Magnitude > 0.2 then
+    if not self.humanoid or self.humanoid.MoveDirection.Magnitude > 0.35 then
         return false
     end
     if target.humanoid and target.humanoid.FloorMaterial == Enum.Material.Air then
@@ -1132,14 +1165,37 @@ function Bot:neutralMovement(target: EnemyRecord?)
         return
     end
     local distance = target.distance
+    local now = os.clock()
     if distance > Config.NeutralSpacingMax then
-        pressBinding("ForwardDash")
-    elseif distance < Config.NeutralSpacingMin then
-        pressBinding("BackDash")
+        if now - self.lastForwardDash > 1 then
+            pressBinding("ForwardDash")
+            self.lastForwardDash = now
+        end
+        if now - self.lastMoveCommand > 0.15 then
+            tapDirectional(Enum.KeyCode.W, 0.28)
+            self.lastMoveCommand = now
+        end
+    elseif distance < Config.NeutralSpacingMin * 0.6 then
+        if now - self.lastMoveCommand > 0.15 then
+            tapDirectional(Enum.KeyCode.S, 0.2)
+            self.lastMoveCommand = now
+        end
+        if now - self.lastBackDash > 0.8 then
+            pressBinding("BackDash")
+            self.lastBackDash = now
+        end
     else
-        -- strafe lightly to stay unpredictable
-        if math.random() < 0.5 then
-            pressBinding("SideDash")
+        if now - self.lastStrafeCommand > 0.9 then
+            local strafeKey = math.random() < 0.5 and Enum.KeyCode.A or Enum.KeyCode.D
+            tapDirectional(strafeKey, 0.18)
+            if math.random() < 0.45 then
+                pressBinding("SideDash")
+            end
+            self.lastStrafeCommand = now
+        end
+        if distance < Config.ComboConfirmDistance - 1 and now - self.lastBasicAttack > 1.1 then
+            pressBinding("M1", Config.InputHoldShort)
+            self.lastBasicAttack = now
         end
     end
 end
@@ -1153,6 +1209,22 @@ function Bot:attemptEvasive(reason: string)
     pressBinding("Evasive", Config.InputTap)
     self.learningStore:log("evasive", { reason = reason, t = os.clock() })
     return true
+end
+
+function Bot:updateLastAttacker()
+    if not self.liveCharacter then
+        self.liveCharacter = self.liveFolder and self.liveFolder:FindFirstChild(LocalPlayer.Name) or nil
+    end
+    if not self.liveCharacter then
+        return
+    end
+    local attacker = self.liveCharacter:GetAttribute("LastHit")
+    if attacker == nil then
+        attacker = self.liveCharacter:GetAttribute("lastHit")
+    end
+    if typeof(attacker) == "string" and attacker ~= "" then
+        self.lastAttackerName = attacker
+    end
 end
 
 -- Initialization -------------------------------------------------------------
