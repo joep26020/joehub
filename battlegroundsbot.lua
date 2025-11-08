@@ -26,11 +26,11 @@ local Config = {
         ConsecutivePunches = { type = "Key", key = Enum.KeyCode.E },
         Uppercut = { type = "Key", key = Enum.KeyCode.F },
         NormalPunch = { type = "Key", key = Enum.KeyCode.G },
-        Block = { type = "Key", key = Enum.KeyCode.Q },
-        SideDash = { type = "Key", key = Enum.KeyCode.Z },
+        Block = { type = "Key", key = Enum.KeyCode.F },
+        SideDash = { type = "Key", key = Enum.KeyCode.Q },
         ForwardDash = { type = "Key", key = Enum.KeyCode.C },
         BackDash = { type = "Key", key = Enum.KeyCode.X },
-        Evasive = { type = "Key", key = Enum.KeyCode.V },
+        Evasive = { type = "Key", key = Enum.KeyCode.Q },
     },
     InputTap = 0.045,
     InputHoldShort = 0.12,
@@ -123,6 +123,22 @@ local function pressAndHold(name, duration)
         task.wait(duration)
         VirtualInputManager:SendMouseButtonEvent(0, 0, binding.button, false, game, 0)
     end
+end
+
+local function attributeActive(value: any): boolean
+    if value == nil then
+        return false
+    end
+    local valueType = typeof(value)
+    if valueType == "boolean" then
+        return value
+    elseif valueType == "number" then
+        return value ~= 0
+    elseif valueType == "string" then
+        local lower = string.lower(value)
+        return lower ~= "false" and lower ~= "0" and lower ~= ""
+    end
+    return true
 end
 
 local function aimWithCFrame(rootPart: BasePart, targetPart: BasePart)
@@ -583,6 +599,7 @@ type ComboDefinition = {
     minimumRange: number?,
     maximumRange: number?,
     steps: { ComboStep },
+    traits: { string }?,
 }
 
 local ComboLibrary: { ComboDefinition } = {
@@ -596,11 +613,12 @@ local ComboLibrary: { ComboDefinition } = {
             { kind = "aim" },
             { kind = "press", action = "M1", hold = Config.InputHoldShort, wait = 0.12 },
             { kind = "press", action = "Shove", wait = 0.32 },
-            { kind = "press", action = "SideDash", wait = 0.08 },
+            { kind = "press", action = "SideDash", direction = "right", wait = 0.08 },
             { kind = "press", action = "ConsecutivePunches", wait = 0.55 },
             { kind = "press", action = "M1", wait = 0.18 },
             { kind = "press", action = "NormalPunch" },
         },
+        traits = { "guardbreak", "pressure" },
     },
     {
         id = "saitama_tc2",
@@ -613,9 +631,10 @@ local ComboLibrary: { ComboDefinition } = {
             { kind = "press", action = "M1", hold = Config.InputHoldShort, wait = 0.12 },
             { kind = "press", action = "M1", hold = Config.InputHoldShort, wait = 0.12 },
             { kind = "press", action = "Shove", wait = 0.3 },
-            { kind = "press", action = "SideDash", wait = 0.08 },
+            { kind = "press", action = "SideDash", direction = "left", wait = 0.08 },
             { kind = "press", action = "Uppercut" },
         },
+        traits = { "launcher", "fast" },
     },
     {
         id = "saitama_ecc1",
@@ -629,14 +648,57 @@ local ComboLibrary: { ComboDefinition } = {
             { kind = "press", action = "M1", hold = Config.InputHoldShort, wait = 0.1 },
             { kind = "press", action = "M1", hold = Config.InputHoldShort, wait = 0.18 },
             { kind = "press", action = "Uppercut", wait = 0.35 },
-            { kind = "press", action = "SideDash", wait = 0.12 },
+            { kind = "press", action = "SideDash", direction = "right", wait = 0.12 },
             { kind = "press", action = "M1", wait = 0.16 },
             { kind = "press", action = "ConsecutivePunches", wait = 0.45 },
             { kind = "press", action = "M1", wait = 0.12 },
             { kind = "press", action = "NormalPunch" },
         },
+        traits = { "burst", "requires_evasive" },
+    },
+    {
+        id = "saitama_mix1",
+        name = "Mix: M1 > Dash > M1 > CP > Upper",
+        minimumRange = 0,
+        maximumRange = 14,
+        steps = {
+            { kind = "aim" },
+            { kind = "press", action = "M1", hold = Config.InputHoldShort, wait = 0.12 },
+            { kind = "press", action = "SideDash", direction = "right", wait = 0.1 },
+            { kind = "press", action = "M1", hold = Config.InputHoldShort, wait = 0.16 },
+            { kind = "press", action = "ConsecutivePunches", wait = 0.45 },
+            { kind = "press", action = "Uppercut" },
+        },
+        traits = { "mixup", "launcher" },
+    },
+    {
+        id = "saitama_mix2",
+        name = "Mix: M1 > Shove > M1x2 > NP",
+        minimumRange = 0,
+        maximumRange = 13,
+        steps = {
+            { kind = "aim" },
+            { kind = "press", action = "M1", hold = Config.InputHoldShort, wait = 0.12 },
+            { kind = "press", action = "Shove", wait = 0.28 },
+            { kind = "press", action = "M1", hold = Config.InputHoldShort, wait = 0.16 },
+            { kind = "press", action = "M1", hold = Config.InputHoldShort, wait = 0.16 },
+            { kind = "press", action = "NormalPunch" },
+        },
+        traits = { "guardbreak", "fast" },
     },
 }
+
+local function comboHasTrait(combo: ComboDefinition, trait: string): boolean
+    if not combo.traits then
+        return false
+    end
+    for _, tag in ipairs(combo.traits) do
+        if tag == trait then
+            return true
+        end
+    end
+    return false
+end
 
 -- Bot Controller ------------------------------------------------------------
 local Bot = {}
@@ -652,6 +714,15 @@ type EnemyRecord = {
     threatScore: number,
     player: Player?,
     lastKnownHealth: number,
+    style: {
+        aggression: number,
+        defense: number,
+        evasive: number,
+        lastAttackTime: number,
+        lastBlockTime: number,
+        lastDashTime: number,
+    }?,
+    recentDamage: number?,
 }
 
 function Bot.new()
@@ -683,8 +754,15 @@ function Bot.new()
     self.lastBackDash = 0
     self.lastBasicAttack = 0
     self.lastAttackerName = nil
+    self.lastDamageBy = nil
+    self.lastDamageTime = 0
+    self.lastDamageAmount = 0
+    self.blockHoldUntil = 0
     self.liveFolder = workspace:WaitForChild("Live")
     self.liveCharacter = self.liveFolder:FindFirstChild(LocalPlayer.Name)
+    self.blocking = false
+    self.blockThread = nil
+    self.lastBlockTime = 0
 
     self.gui:setStatus("Status: idle")
     self.gui:setTarget("Target: none")
@@ -760,9 +838,30 @@ function Bot:connectCharacter(char: Model)
     end)
 
     humanoid.HealthChanged:Connect(function(health)
-        if health < self.lastDamageTaken - 2 then
-            self.shouldPanicEvasive = true
+        local damage = self.lastDamageTaken - health
+        if damage > 0 then
+            self.lastDamageAmount = damage
+            self.lastDamageTime = os.clock()
+            self.shouldPanicEvasive = damage > 2 or self.shouldPanicEvasive
             self.evasiveReady = self:getEvasiveAttribute() or self.evasiveReady
+            self:updateLastAttacker()
+            self.lastDamageBy = self.lastAttackerName
+            if self.lastDamageBy then
+                local record = self:getEnemyByName(self.lastDamageBy)
+                if record then
+                    record.recentDamage = (record.recentDamage or 0) * 0.5 + damage
+                    record.style = record.style or {
+                        aggression = 0,
+                        defense = 0,
+                        evasive = 0,
+                        lastAttackTime = 0,
+                        lastBlockTime = 0,
+                        lastDashTime = 0,
+                    }
+                    record.style.aggression = math.clamp(record.style.aggression + math.min(3, damage / 4), 0, 10)
+                    record.style.lastAttackTime = os.clock()
+                end
+            end
         end
         self.lastDamageTaken = health
     end)
@@ -809,6 +908,15 @@ function Bot:addEnemy(model: Model)
         threatScore = 0,
         player = Players:FindFirstChild(model.Name),
         lastKnownHealth = 100,
+        style = {
+            aggression = 0,
+            defense = 0,
+            evasive = 0,
+            lastAttackTime = 0,
+            lastBlockTime = 0,
+            lastDashTime = 0,
+        },
+        recentDamage = 0,
     }
     if record.humanoid then
         record.lastKnownHealth = record.humanoid.Health
@@ -821,6 +929,16 @@ function Bot:addEnemy(model: Model)
         if desc.Name == "RagdollCancel" then
             record.lastEvasive = tick()
             record.hasEvasive = false
+            record.style = record.style or {
+                aggression = 0,
+                defense = 0,
+                evasive = 0,
+                lastAttackTime = 0,
+                lastBlockTime = 0,
+                lastDashTime = 0,
+            }
+            record.style.evasive = math.clamp(record.style.evasive + 2, 0, 8)
+            record.style.lastDashTime = tick()
         end
     end
 
@@ -836,6 +954,15 @@ function Bot:addEnemy(model: Model)
     end)
 
     self.enemies[model] = record
+end
+
+function Bot:getEnemyByName(name: string): EnemyRecord?
+    for _, record in pairs(self.enemies) do
+        if record.model and record.model.Name == name then
+            return record
+        end
+    end
+    return nil
 end
 
 function Bot:start()
@@ -897,6 +1024,10 @@ function Bot:update(dt: number)
     self:updateEvasiveState(dt)
     self:updateEnemyData(dt)
     self:updateLastAttacker()
+    if self.lastDamageBy and os.clock() - self.lastDamageTime > 3 then
+        self.lastDamageBy = nil
+        self.lastDamageAmount = 0
+    end
 
     if not self.running then
         return
@@ -927,6 +1058,18 @@ function Bot:update(dt: number)
     self.currentTarget = target
     self.gui:setTarget(string.format("Target: %s (%.0f hp)", target.model.Name, target.lastKnownHealth))
     self:applyAim(target.hrp)
+
+    if self:shouldEvasive(target) then
+        if self:attemptEvasive("reactive") then
+            return
+        end
+    end
+
+    if self:shouldBlock(target) then
+        self:performBlock(self:getBlockDuration(target))
+        self:neutralMovement(target)
+        return
+    end
 
     if self:shouldStartCombo(target) then
         local combo = self:chooseCombo(target)
@@ -971,12 +1114,48 @@ function Bot:updateEnemyData(dt: number)
             else
                 record.distance = math.huge
             end
+            record.style = record.style or {
+                aggression = 0,
+                defense = 0,
+                evasive = 0,
+                lastAttackTime = 0,
+                lastBlockTime = 0,
+                lastDashTime = 0,
+            }
+            local style = record.style
+            record.recentDamage = (record.recentDamage or 0) * math.clamp(1 - dt * 0.6, 0, 1)
+            style.aggression = math.max(0, style.aggression - dt * 0.35)
+            style.defense = math.max(0, style.defense - dt * 0.25)
+            style.evasive = math.max(0, style.evasive - dt * 0.25)
             local evasiveFromBridge = self.bridge:getEvasive(model)
             if evasiveFromBridge ~= nil then
                 record.hasEvasive = evasiveFromBridge and true or false
             else
                 if record.lastEvasive > 0 and now - record.lastEvasive > Config.EvasiveCooldown then
                     record.hasEvasive = true
+                end
+            end
+            local attackingAttr = model:GetAttribute("Attacking") or model:GetAttribute("Attack") or model:GetAttribute("isAttacking")
+            if attributeActive(attackingAttr) then
+                style.aggression = math.clamp(style.aggression + dt * 3.5, 0, 10)
+                style.lastAttackTime = now
+            end
+            local blockingAttr = model:GetAttribute("Blocking") or model:GetAttribute("IsBlocking") or model:GetAttribute("Block")
+            if attributeActive(blockingAttr) then
+                style.defense = math.clamp(style.defense + dt * 3, 0, 10)
+                style.lastBlockTime = now
+            end
+            local dashingAttr = model:GetAttribute("Dashing") or model:GetAttribute("IsDashing") or model:GetAttribute("Dash")
+            if attributeActive(dashingAttr) then
+                style.evasive = math.clamp(style.evasive + dt * 2.5, 0, 8)
+                style.lastDashTime = now
+            end
+            if record.humanoid then
+                local moveMag = record.humanoid.MoveDirection.Magnitude
+                if moveMag > 0.65 and record.distance < 18 then
+                    style.aggression = math.clamp(style.aggression + dt * 1.5, 0, 10)
+                elseif moveMag < 0.1 and record.distance < 12 then
+                    style.defense = math.clamp(style.defense + dt * 1.2, 0, 10)
                 end
             end
             if record.humanoid and record.humanoid.Health <= 0 then
@@ -987,7 +1166,10 @@ function Bot:updateEnemyData(dt: number)
                 local hpFactor = (100 - hp)
                 local distanceFactor = math.clamp(40 - record.distance, -40, 40)
                 local evasiveFactor = record.hasEvasive and -25 or 15
-                record.threatScore = hpFactor + distanceFactor + evasiveFactor
+                local aggressionFactor = style.aggression * 4
+                local defensePenalty = style.defense * 1.5
+                local damageFactor = (record.recentDamage or 0) * 1.2
+                record.threatScore = hpFactor + distanceFactor + evasiveFactor + aggressionFactor - defensePenalty + damageFactor
                 if self.lastAttackerName and record.model.Name == self.lastAttackerName then
                     record.threatScore += 120
                 end
@@ -1010,6 +1192,115 @@ function Bot:selectTarget(): EnemyRecord?
         end
     end
     return best
+end
+
+function Bot:performSideDash(direction: string?)
+    local binding = Config.ActionBindings.SideDash
+    if not binding or binding.type ~= "Key" then
+        return
+    end
+    local dirKey: Enum.KeyCode
+    if direction == "left" then
+        dirKey = Enum.KeyCode.A
+    elseif direction == "right" then
+        dirKey = Enum.KeyCode.D
+    else
+        dirKey = math.random() < 0.5 and Enum.KeyCode.A or Enum.KeyCode.D
+    end
+    VirtualInputManager:SendKeyEvent(true, dirKey, false, game)
+    task.wait(0.02)
+    VirtualInputManager:SendKeyEvent(true, binding.key, false, game)
+    task.wait(Config.InputHoldShort)
+    VirtualInputManager:SendKeyEvent(false, binding.key, false, game)
+    VirtualInputManager:SendKeyEvent(false, dirKey, false, game)
+end
+
+function Bot:getBlockDuration(target: EnemyRecord?): number
+    local base = 0.45
+    if not target or not target.style then
+        return base
+    end
+    local style = target.style
+    if style.aggression > 6 then
+        base += 0.15
+    end
+    if self.lastDamageBy == (target.model and target.model.Name) and os.clock() - self.lastDamageTime < 0.6 then
+        base += 0.2
+    end
+    return math.clamp(base, 0.35, 0.9)
+end
+
+function Bot:performBlock(duration: number?)
+    local binding = Config.ActionBindings.Block
+    if not binding or binding.type ~= "Key" then
+        return
+    end
+    local holdUntil = os.clock() + (duration or 0.4)
+    self.blockHoldUntil = math.max(self.blockHoldUntil, holdUntil)
+    if self.blocking and self.blockThread then
+        return
+    end
+    self.blocking = true
+    self.blockThread = task.spawn(function()
+        VirtualInputManager:SendKeyEvent(true, binding.key, false, game)
+        while os.clock() < self.blockHoldUntil and self.running and self.alive do
+            task.wait(0.03)
+        end
+        VirtualInputManager:SendKeyEvent(false, binding.key, false, game)
+        self.blockHoldUntil = os.clock()
+        self.blocking = false
+        self.blockThread = nil
+        self.lastBlockTime = os.clock()
+    end)
+end
+
+function Bot:shouldBlock(target: EnemyRecord?): boolean
+    if not target or not target.style then
+        return false
+    end
+    if self.blocking then
+        return true
+    end
+    local now = os.clock()
+    if now - self.lastBlockTime < 0.45 then
+        return false
+    end
+    if target.distance > Config.ComboConfirmDistance + 4 then
+        return false
+    end
+    if target.style.aggression > 6 and now - target.style.lastAttackTime < 0.6 then
+        return true
+    end
+    if self.lastDamageBy == target.model.Name and now - self.lastDamageTime < 0.8 then
+        return true
+    end
+    if target.style.lastAttackTime > 0 and now - target.style.lastAttackTime < 0.4 and target.distance < Config.ComboConfirmDistance then
+        return true
+    end
+    return false
+end
+
+function Bot:shouldEvasive(target: EnemyRecord?): boolean
+    if not target or not target.style then
+        return false
+    end
+    if not self.evasiveReady then
+        return false
+    end
+    local now = os.clock()
+    if target.distance > Config.ComboConfirmDistance + 6 then
+        return false
+    end
+    if self.lastDamageBy == target.model.Name and now - self.lastDamageTime < 0.35 and self.lastDamageAmount > 10 then
+        return true
+    end
+    if target.style.aggression > 7 and now - target.style.lastAttackTime < 0.35 then
+        return true
+    end
+    if target.style.evasive > 6 and now - target.style.lastDashTime < 0.3 and target.distance < Config.NeutralSpacingMin then
+        return true
+    end
+    return false
 end
 
 function Bot:applyAim(targetHRP: BasePart?)
@@ -1041,6 +1332,12 @@ function Bot:shouldStartCombo(target: EnemyRecord)
     if target.distance > Config.ComboConfirmDistance then
         return false
     end
+    if self.blocking then
+        return false
+    end
+    if target.style and target.style.lastBlockTime > 0 and os.clock() - target.style.lastBlockTime < 0.4 then
+        return false
+    end
     if not self.humanoid or self.humanoid.MoveDirection.Magnitude > 0.35 then
         return false
     end
@@ -1067,7 +1364,25 @@ function Bot:chooseCombo(target: EnemyRecord): ComboDefinition?
         local successes = stats.successes
         local successRate = (successes + 1) / (attempts + 2)
         local distanceBias = math.max(0.1, 1 - math.abs((target.distance - ((combo.minimumRange or 0) + (combo.maximumRange or 20)) / 2) / 20))
-        table.insert(available, { combo = combo, weight = successRate * distanceBias })
+        local styleBias = 1
+        if target.style then
+            if target.style.defense > 4 and comboHasTrait(combo, "guardbreak") then
+                styleBias += 0.45
+            end
+            if target.style.aggression > 5 and comboHasTrait(combo, "burst") then
+                styleBias += 0.3
+            end
+            if target.style.aggression < 3 and comboHasTrait(combo, "pressure") then
+                styleBias += 0.2
+            end
+            if target.style.evasive > 5 and not combo.requiresNoEvasive then
+                styleBias -= 0.2
+            end
+            if target.style.defense > 6 and comboHasTrait(combo, "mixup") then
+                styleBias += 0.25
+            end
+        end
+        table.insert(available, { combo = combo, weight = successRate * distanceBias * styleBias })
     end
     if #available == 0 then
         return nil
@@ -1105,7 +1420,9 @@ function Bot:executeCombo(combo: ComboDefinition, target: EnemyRecord)
                 self:applyAim(target.hrp)
                 task.wait(0.05)
             elseif step.kind == "press" and step.action then
-                if step.hold and step.hold > Config.InputTap then
+                if step.action == "SideDash" then
+                    self:performSideDash(step.direction)
+                elseif step.hold and step.hold > Config.InputTap then
                     pressAndHold(step.action, step.hold)
                 else
                     pressBinding(step.action, step.hold)
@@ -1136,6 +1453,15 @@ function Bot:executeCombo(combo: ComboDefinition, target: EnemyRecord)
             damage = damage,
             target = target.model.Name,
         })
+        if target.style then
+            if success then
+                target.style.defense = math.max(0, target.style.defense - 0.6)
+                target.style.aggression = math.max(0, target.style.aggression - 0.4)
+            else
+                target.style.defense = math.clamp(target.style.defense + 0.8, 0, 10)
+                target.style.aggression = math.clamp(target.style.aggression + 0.2, 0, 10)
+            end
+        end
         self.gui:setCombo("Combo: none")
         self.currentCombo = nil
         self.actionThread = nil
@@ -1150,6 +1476,16 @@ function Bot:neutralMovement(target: EnemyRecord?)
     end
     local distance = target.distance
     local now = os.clock()
+    local blocking = self.blocking
+    if blocking then
+        if now - self.lastStrafeCommand > 0.55 then
+            local strafeLeft = math.random() < 0.5
+            local dirKey = strafeLeft and Enum.KeyCode.A or Enum.KeyCode.D
+            tapDirectional(dirKey, 0.16)
+            self.lastStrafeCommand = now
+        end
+        return
+    end
     if distance > Config.NeutralSpacingMax then
         if now - self.lastForwardDash > 1 then
             pressBinding("ForwardDash")
@@ -1173,7 +1509,8 @@ function Bot:neutralMovement(target: EnemyRecord?)
             local strafeKey = math.random() < 0.5 and Enum.KeyCode.A or Enum.KeyCode.D
             tapDirectional(strafeKey, 0.18)
             if math.random() < 0.45 then
-                pressBinding("SideDash")
+                local dir = strafeKey == Enum.KeyCode.A and "left" or "right"
+                self:performSideDash(dir)
             end
             self.lastStrafeCommand = now
         end
@@ -1188,9 +1525,17 @@ function Bot:attemptEvasive(reason: string)
     if not self.evasiveReady then
         return false
     end
+    if self.blocking and self.blockThread then
+        self.blockHoldUntil = os.clock()
+        task.wait(0.05)
+    end
     self.evasiveReady = false
     self.evasiveTimer = Config.EvasiveCooldown
-    pressBinding("Evasive", Config.InputTap)
+    local dirKey = math.random() < 0.5 and Enum.KeyCode.A or Enum.KeyCode.D
+    VirtualInputManager:SendKeyEvent(true, dirKey, false, game)
+    task.wait(0.02)
+    pressBinding("Evasive", Config.InputHoldShort)
+    VirtualInputManager:SendKeyEvent(false, dirKey, false, game)
     self.learningStore:log("evasive", { reason = reason, t = os.clock() })
     return true
 end
