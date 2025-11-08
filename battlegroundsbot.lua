@@ -13,9 +13,9 @@ local BotController
 -- Shared Config --------------------------------------------------------------
 local Config = {
     CharacterKey = "saitama",
-    ComboConfirmDistance = 16,
-    NeutralSpacingMin = 10,
-    NeutralSpacingMax = 22,
+    ComboConfirmDistance = 7.8,
+    NeutralSpacingMin = 5.2,
+    NeutralSpacingMax = 9.5,
     AimReactTime = 0.08,
     AimDamping = 0.55,
     AimStrength = 1.35,
@@ -94,9 +94,13 @@ local function pressBinding(name, hold)
         task.wait(hold or Config.InputTap)
         VirtualInputManager:SendKeyEvent(false, binding.key, false, game)
     elseif binding.type == "MouseButton" then
-        VirtualInputManager:SendMouseButtonEvent(0, 0, binding.button, true, game, 0)
+        local button = binding.button
+        if typeof(button) == "EnumItem" then
+            button = button.Value
+        end
+        VirtualInputManager:SendMouseButtonEvent(0, 0, button, true, game, 0)
         task.wait(hold or Config.InputTap)
-        VirtualInputManager:SendMouseButtonEvent(0, 0, binding.button, false, game, 0)
+        VirtualInputManager:SendMouseButtonEvent(0, 0, button, false, game, 0)
     end
 end
 
@@ -119,9 +123,13 @@ local function pressAndHold(name, duration)
         task.wait(duration)
         VirtualInputManager:SendKeyEvent(false, binding.key, false, game)
     elseif binding.type == "MouseButton" then
-        VirtualInputManager:SendMouseButtonEvent(0, 0, binding.button, true, game, 0)
+        local button = binding.button
+        if typeof(button) == "EnumItem" then
+            button = button.Value
+        end
+        VirtualInputManager:SendMouseButtonEvent(0, 0, button, true, game, 0)
         task.wait(duration)
-        VirtualInputManager:SendMouseButtonEvent(0, 0, binding.button, false, game, 0)
+        VirtualInputManager:SendMouseButtonEvent(0, 0, button, false, game, 0)
     end
 end
 
@@ -608,7 +616,7 @@ local ComboLibrary: { ComboDefinition } = {
         name = "TC: M1 > Shove > CP > M1 > NP",
         requiresNoEvasive = false,
         minimumRange = 0,
-        maximumRange = 15,
+        maximumRange = 8,
         steps = {
             { kind = "aim" },
             { kind = "press", action = "M1", hold = Config.InputHoldShort, wait = 0.12 },
@@ -625,7 +633,7 @@ local ComboLibrary: { ComboDefinition } = {
         name = "TC: M1x2 > Shove > Upper",
         requiresNoEvasive = false,
         minimumRange = 0,
-        maximumRange = 13,
+        maximumRange = 8,
         steps = {
             { kind = "aim" },
             { kind = "press", action = "M1", hold = Config.InputHoldShort, wait = 0.12 },
@@ -641,7 +649,7 @@ local ComboLibrary: { ComboDefinition } = {
         name = "ECC: 3M1 > Upper > CP > NP",
         requiresNoEvasive = true,
         minimumRange = 0,
-        maximumRange = 12,
+        maximumRange = 8,
         steps = {
             { kind = "aim" },
             { kind = "press", action = "M1", hold = Config.InputHoldShort, wait = 0.1 },
@@ -660,7 +668,7 @@ local ComboLibrary: { ComboDefinition } = {
         id = "saitama_mix1",
         name = "Mix: M1 > Dash > M1 > CP > Upper",
         minimumRange = 0,
-        maximumRange = 14,
+        maximumRange = 8,
         steps = {
             { kind = "aim" },
             { kind = "press", action = "M1", hold = Config.InputHoldShort, wait = 0.12 },
@@ -675,7 +683,7 @@ local ComboLibrary: { ComboDefinition } = {
         id = "saitama_mix2",
         name = "Mix: M1 > Shove > M1x2 > NP",
         minimumRange = 0,
-        maximumRange = 13,
+        maximumRange = 8,
         steps = {
             { kind = "aim" },
             { kind = "press", action = "M1", hold = Config.InputHoldShort, wait = 0.12 },
@@ -748,8 +756,6 @@ function Bot.new()
     self.evasiveReady = true
     self.evasiveTimer = 0
     self.shouldPanicEvasive = false
-    self.lastMoveCommand = 0
-    self.lastStrafeCommand = 0
     self.lastForwardDash = 0
     self.lastBackDash = 0
     self.lastBasicAttack = 0
@@ -760,9 +766,18 @@ function Bot.new()
     self.blockHoldUntil = 0
     self.liveFolder = workspace:WaitForChild("Live")
     self.liveCharacter = self.liveFolder:FindFirstChild(LocalPlayer.Name)
+    self.liveCharacterConn = nil
     self.blocking = false
     self.blockThread = nil
     self.lastBlockTime = 0
+    self.moveKeyState = {
+        [Enum.KeyCode.W] = false,
+        [Enum.KeyCode.A] = false,
+        [Enum.KeyCode.S] = false,
+        [Enum.KeyCode.D] = false,
+    }
+    self.currentStrafe = 0
+    self.lastStrafeSwitch = 0
 
     self.gui:setStatus("Status: idle")
     self.gui:setTarget("Target: none")
@@ -777,12 +792,14 @@ function Bot.new()
         self:connectCharacter(char)
     end)
 
+    self:attachLiveCharacter(self.liveCharacter)
+
     for _, model in ipairs(self.liveFolder:GetChildren()) do
         self:addEnemy(model)
     end
     self.liveFolder.ChildAdded:Connect(function(model)
         if model.Name == LocalPlayer.Name then
-            self.liveCharacter = model
+            self:attachLiveCharacter(model)
         else
             self:addEnemy(model)
         end
@@ -790,7 +807,7 @@ function Bot.new()
     self.liveFolder.ChildRemoved:Connect(function(model)
         self.enemies[model] = nil
         if model == self.liveCharacter then
-            self.liveCharacter = nil
+            self:attachLiveCharacter(nil)
         end
     end)
 
@@ -806,6 +823,11 @@ function Bot:destroy()
         self.heartbeatConn:Disconnect()
         self.heartbeatConn = nil
     end
+    if self.liveCharacterConn then
+        self.liveCharacterConn:Disconnect()
+        self.liveCharacterConn = nil
+    end
+    self:clearMoveKeys()
     if self.gui then
         self.gui:destroy()
     end
@@ -985,9 +1007,11 @@ end
 
 function Bot:stop()
     if not self.running then
+        self:clearMoveKeys()
         return
     end
     self.running = false
+    self:clearMoveKeys()
     if self.humanoid then
         self.humanoid.AutoRotate = true
     end
@@ -1030,6 +1054,7 @@ function Bot:update(dt: number)
     end
 
     if not self.running then
+        self:clearMoveKeys()
         return
     end
 
@@ -1084,17 +1109,29 @@ end
 function Bot:updateEvasiveState(dt: number)
     local attr = self:getEvasiveAttribute()
     if attr ~= nil then
-        self.evasiveReady = attr
-        if attr then
-            self.evasiveTimer = 0
-        end
-    else
-        if self.evasiveTimer > 0 then
-            self.evasiveTimer -= dt
+        if attr == true then
             if self.evasiveTimer <= 0 then
                 self.evasiveReady = true
+                self.evasiveTimer = 0
+            end
+        else
+            self.evasiveReady = false
+            if self.evasiveTimer <= 0 then
+                self.evasiveTimer = Config.EvasiveCooldown
             end
         end
+    end
+    if self.evasiveTimer > 0 then
+        self.evasiveTimer -= dt
+        if self.evasiveTimer <= 0 then
+            self.evasiveTimer = 0
+            self.evasiveReady = true
+        else
+            self.evasiveReady = false
+        end
+    end
+    if attr == false then
+        self.evasiveReady = false
     end
     local statusText = self.evasiveReady and "Evasive: ready" or string.format("Evasive: %.1fs", math.max(0, self.evasiveTimer))
     self.gui:setEvasive(statusText)
@@ -1326,7 +1363,7 @@ function Bot:shouldStartCombo(target: EnemyRecord)
     if not target or not target.hrp then
         return false
     end
-    if os.clock() - self.lastComboAttempt < 1.5 then
+    if os.clock() - self.lastComboAttempt < 0.8 then
         return false
     end
     if target.distance > Config.ComboConfirmDistance then
@@ -1338,7 +1375,7 @@ function Bot:shouldStartCombo(target: EnemyRecord)
     if target.style and target.style.lastBlockTime > 0 and os.clock() - target.style.lastBlockTime < 0.4 then
         return false
     end
-    if not self.humanoid or self.humanoid.MoveDirection.Magnitude > 0.35 then
+    if not self.humanoid or self.humanoid.MoveDirection.Magnitude > 0.55 then
         return false
     end
     if target.humanoid and target.humanoid.FloorMaterial == Enum.Material.Air then
@@ -1398,6 +1435,7 @@ function Bot:executeCombo(combo: ComboDefinition, target: EnemyRecord)
         return
     end
     self.currentCombo = combo
+    self:clearMoveKeys()
     self.lastComboAttempt = os.clock()
     self.gui:setCombo("Combo: " .. combo.name)
     self.learningStore:recordAttempt(combo.id)
@@ -1470,55 +1508,141 @@ function Bot:executeCombo(combo: ComboDefinition, target: EnemyRecord)
     self.actionThread = thread
 end
 
+function Bot:setMoveKey(keyCode: Enum.KeyCode, pressed: boolean)
+    self.moveKeyState = self.moveKeyState or {}
+    if self.moveKeyState[keyCode] == pressed then
+        return
+    end
+    self.moveKeyState[keyCode] = pressed
+    VirtualInputManager:SendKeyEvent(pressed, keyCode, false, game)
+end
+
+function Bot:clearMoveKeys()
+    if not self.moveKeyState then
+        return
+    end
+    for keyCode, pressed in pairs(self.moveKeyState) do
+        if pressed then
+            VirtualInputManager:SendKeyEvent(false, keyCode, false, game)
+            self.moveKeyState[keyCode] = false
+        end
+    end
+end
+
+function Bot:setMoveInput(forward: number?, right: number?)
+    local f = forward or 0
+    local r = right or 0
+    local threshold = 0.15
+    self:setMoveKey(Enum.KeyCode.W, f > threshold)
+    self:setMoveKey(Enum.KeyCode.S, f < -threshold)
+    self:setMoveKey(Enum.KeyCode.D, r > threshold)
+    self:setMoveKey(Enum.KeyCode.A, r < -threshold)
+end
+
+function Bot:alignCameraForMovement()
+    local camera = workspace.CurrentCamera
+    if not (camera and self.rootPart) then
+        return
+    end
+    local camPos = camera.CFrame.Position
+    local look = self.rootPart.CFrame.LookVector
+    local flat = Vector3.new(look.X, 0, look.Z)
+    if flat.Magnitude < 1e-3 then
+        return
+    end
+    local target = camPos + flat.Unit
+    camera.CFrame = CFrame.new(camPos, Vector3.new(target.X, camPos.Y, target.Z))
+end
+
+function Bot:onSelfEvasiveTriggered()
+    if self.humanoid and self.humanoid:GetState() ~= Enum.HumanoidStateType.FallingDown then
+        return
+    end
+    self:clearMoveKeys()
+    self.evasiveReady = false
+    self.evasiveTimer = Config.EvasiveCooldown
+    self.shouldPanicEvasive = false
+    if self.gui then
+        self.gui:setEvasive(string.format("Evasive: %.1fs", math.max(0, self.evasiveTimer)))
+    end
+end
+
+function Bot:attachLiveCharacter(model: Model?)
+    if self.liveCharacterConn then
+        self.liveCharacterConn:Disconnect()
+        self.liveCharacterConn = nil
+    end
+    self.liveCharacter = model
+    if not model then
+        return
+    end
+    local function check(descendant: Instance)
+        if descendant.Name == "RagdollCancel" then
+            self:onSelfEvasiveTriggered()
+        end
+    end
+    for _, desc in ipairs(model:GetDescendants()) do
+        check(desc)
+    end
+    self.liveCharacterConn = model.DescendantAdded:Connect(check)
+end
+
 function Bot:neutralMovement(target: EnemyRecord?)
     if not target or not target.hrp then
+        self:setMoveInput(0, 0)
         return
     end
+
+    self:alignCameraForMovement()
+
     local distance = target.distance
     local now = os.clock()
-    local blocking = self.blocking
-    if blocking then
-        if now - self.lastStrafeCommand > 0.55 then
-            local strafeLeft = math.random() < 0.5
-            local dirKey = strafeLeft and Enum.KeyCode.A or Enum.KeyCode.D
-            tapDirectional(dirKey, 0.16)
-            self.lastStrafeCommand = now
+
+    if self.blocking then
+        if now - self.lastStrafeSwitch > 0.55 then
+            self.currentStrafe = math.random() < 0.5 and -1 or 1
+            self.lastStrafeSwitch = now
         end
+        self:setMoveInput(0, self.currentStrafe)
         return
     end
+
+    local forward = 0
+    local right = 0
+
     if distance > Config.NeutralSpacingMax then
+        forward = 1
+        self.currentStrafe = 0
         if now - self.lastForwardDash > 1 then
             pressBinding("ForwardDash")
             self.lastForwardDash = now
         end
-        if now - self.lastMoveCommand > 0.15 then
-            tapDirectional(Enum.KeyCode.W, 0.28)
-            self.lastMoveCommand = now
-        end
     elseif distance < Config.NeutralSpacingMin * 0.6 then
-        if now - self.lastMoveCommand > 0.15 then
-            tapDirectional(Enum.KeyCode.S, 0.2)
-            self.lastMoveCommand = now
-        end
+        forward = -1
+        self.currentStrafe = 0
         if now - self.lastBackDash > 0.8 then
             pressBinding("BackDash")
             self.lastBackDash = now
         end
     else
-        if now - self.lastStrafeCommand > 0.9 then
-            local strafeKey = math.random() < 0.5 and Enum.KeyCode.A or Enum.KeyCode.D
-            tapDirectional(strafeKey, 0.18)
+        forward = 0.55
+        if now - self.lastStrafeSwitch > 0.9 then
+            self.currentStrafe = math.random() < 0.5 and -1 or 1
             if math.random() < 0.45 then
-                local dir = strafeKey == Enum.KeyCode.A and "left" or "right"
+                local dir = self.currentStrafe < 0 and "left" or "right"
                 self:performSideDash(dir)
             end
-            self.lastStrafeCommand = now
+            self.lastStrafeSwitch = now
         end
-        if distance < Config.ComboConfirmDistance - 1 and now - self.lastBasicAttack > 1.1 then
-            pressBinding("M1", Config.InputHoldShort)
-            self.lastBasicAttack = now
-        end
+        right = self.currentStrafe
     end
+
+    if distance < Config.ComboConfirmDistance - 0.2 and now - self.lastBasicAttack > 0.65 then
+        pressBinding("M1", Config.InputHoldShort)
+        self.lastBasicAttack = now
+    end
+
+    self:setMoveInput(forward, right)
 end
 
 function Bot:attemptEvasive(reason: string)
@@ -1529,6 +1653,7 @@ function Bot:attemptEvasive(reason: string)
         self.blockHoldUntil = os.clock()
         task.wait(0.05)
     end
+    self:clearMoveKeys()
     self.evasiveReady = false
     self.evasiveTimer = Config.EvasiveCooldown
     local dirKey = math.random() < 0.5 and Enum.KeyCode.A or Enum.KeyCode.D
