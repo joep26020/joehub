@@ -25,6 +25,7 @@ local CFG = {
     TapM     = 0.22,
     M1Min    = 0.25,
     M1Rand   = 0.10,
+    M1Range  = 5.0,
 
 
     Cooldown = { FDash=3.0, BDash=5.0, Side=0.80 },
@@ -86,8 +87,8 @@ local CFG = {
     },
 
 
-    MaxNoAtk = 2.0,
-    ForceAtk = 3.6,
+    MaxNoAtk = 1.6,
+    ForceAtk = 3.0,
     CloseGain = 3.0, CloseWindow = 5.0, FarChase = 50.0,
 
 
@@ -158,6 +159,12 @@ local function m1Gap() return CFG.M1Min + math.random() * CFG.M1Rand end
 
 
 local function flat(v:Vector3) return Vector3.new(v.X,0,v.Z) end
+local STUN_TAILS = {
+    ["10473655082"] = true,
+    ["10473654583"] = true,
+    ["10473655645"] = true,
+    ["10473653782"] = true,
+}
 local function aimCFrame(root:BasePart, tgt:BasePart)
     if not(root and tgt) then return end
     local rp, tp = root.Position, tgt.Position
@@ -456,6 +463,8 @@ function Bot.new()
     self.isAttacking=false
     self.isM1ing=false
     self.m1ChainCount=0
+    self.lastM1Target=nil
+    self.lastM1AttemptTime=0
 
     self.lastAttempt=os.clock(); self.urgency=0
     self.arcUntil=0; self.closeT=os.clock(); self.closeD=math.huge
@@ -471,6 +480,7 @@ function Bot.new()
     self.stickyT=0
     self.stickyHold=1.6
     self.switchMargin=25.0
+    self.lastStunTarget=nil
 
 
     self.stillTimer=0
@@ -785,6 +795,58 @@ end
 
 local function now() return os.clock() end
 local function distOK(d:number, lo:number, hi:number) return d>=lo and d<=hi end
+local FALL_STATES = {
+    [Enum.HumanoidStateType.FallingDown] = true,
+    [Enum.HumanoidStateType.Ragdoll] = true,
+}
+
+function Bot:_targetRagdolled(r:Enemy?):boolean
+    if not r or not r.hum then return false end
+    local state = r.hum:GetState()
+    if FALL_STATES[state] then return true end
+    return false
+end
+
+function Bot:_registerM1Attempt(r:Enemy?)
+    self.lastM1Target = r
+    self.lastM1AttemptTime = os.clock()
+end
+
+function Bot:_noteStun(r:Enemy, tail:string)
+    local nowT = os.clock()
+    r.lastStun = nowT
+    local byMe = (self.lastM1Target==r) and ((nowT - (self.lastM1AttemptTime or 0)) <= 0.7)
+    local gain = byMe and 0.85 or 0.35
+    r.stunScore = math.min(1.6, (r.stunScore or 0) + gain)
+    r.lastStunAnim = tail
+    self.lastStunTarget = r
+    self.ls:log("stun_detected", {enemy = r.model.Name, anim = tail, score = r.stunScore, byMe = byMe})
+end
+
+function Bot:_hasRecentStun(r:Enemy?):boolean
+    if not r then return false end
+    local last = r.lastStun or 0
+    if last == 0 then return false end
+    return (os.clock() - last) <= 0.75 and (r.stunScore or 0) >= 0.35
+end
+
+function Bot:_waitForRange(r:Enemy, range:number, timeout:number):boolean
+    if not (self.rp and r and r.hrp) then return false end
+    local deadline = os.clock() + timeout
+    while os.clock() < deadline do
+        local dist = (r.hrp.Position - self.rp.Position).Magnitude
+        r.dist = dist
+        if dist <= range then
+            self:setInput(0, 0)
+            return true
+        end
+        self:aimAt(r.hrp)
+        self:setInput(1, 0)
+        RunService.Heartbeat:Wait()
+    end
+    self:setInput(0, 0)
+    return false
+end
 
 function Bot:_cdLeft(which:string)
     local t = now()
@@ -863,13 +925,18 @@ function Bot:_forceUnblockNow()
         VIM:SendKeyEvent(true,b.k,false,game); task.wait(0.04); VIM:SendKeyEvent(false,b.k,false,game); task.wait(0.02)
     end
 end
-function Bot:block(dur:number?)
+function Bot:block(dur:number?, target:Enemy?)
     if os.clock() < self.blockCooldown then return end
     local b=CFG.Bind.Block; if not b or b.t~="Key" then return end
     local hold = math.clamp(dur or 0.35, 0.20, 0.55)
     if self.blocking and self.blockThread then return end
     self.blocking=true
     self.blockStartTime=os.clock()
+    if target and target.model then
+        local aid=self:_animId(target)
+        local threat = aid and self.ls:threat(aid) or 0
+        self.ls:log("block", {enemy=target.model.Name, anim=aid, threat=threat, dur=hold})
+    end
     self.blockThread = task.spawn(function()
         VIM:SendKeyEvent(true,b.k,false,game)
         local tEnd=os.clock()+hold
@@ -915,7 +982,9 @@ function Bot:addEnemy(m:Model)
     local function hookAnimator(an:Animator)
         table.insert(r.cons, an.AnimationPlayed:Connect(function(tr)
             local id=tr.Animation and tostring(tr.Animation.AnimationId) or "unknown"
-            r.active[tr]={id=sidTail(id),start=os.clock(),wasBlk=false,hit=false}
+            local tail=sidTail(id)
+            r.active[tr]={id=tail,start=os.clock(),wasBlk=false,hit=false}
+            if STUN_TAILS[tail] then self:_noteStun(r, tail) end
             if id==CFG.BlockAnimId then r.style.def=math.clamp(r.style.def+2,0,10); r.style.lastBlk=os.clock() end
             tr.Stopped:Connect(function()
                 local slot=r.active[tr]
@@ -958,6 +1027,10 @@ function Bot:updateEnemies(dt:number)
         else
             r.hrp = r.hrp or m:FindFirstChild("HumanoidRootPart")
             r.hum = r.hum or m:FindFirstChildOfClass("Humanoid")
+            if r.stunScore then
+                r.stunScore = math.max(0, r.stunScore - dt*0.7)
+                if r.stunScore < 0.05 then r.stunScore = 0 end
+            end
             r.dist = r.hrp and (r.hrp.Position - my).Magnitude or math.huge
             local st=r.style
             r.recent = (r.recent or 0)*math.clamp(1-dt*0.6,0,1)
@@ -980,7 +1053,8 @@ function Bot:updateEnemies(dt:number)
                 local aid=self:_animId(r); local ath= aid and self.ls:threat(aid) or 0
 
                 r.aggro = (r.recent*1.2 + r.aRecent*0.8) + (ath*2)
-                r.score = hpF + distF + evF + agF - defP + dmgF + math.clamp(ath*4, -8, 16) + math.min(40, r.aggro*0.5)
+                local stunBias = (r.stunScore or 0)*45
+                r.score = hpF + distF + evF + agF - defP + dmgF + math.clamp(ath*4, -8, 16) + math.min(40, r.aggro*0.5) + stunBias
                 if self.lastAttacker and r.model.Name==self.lastAttacker then r.score+=120 end
                 if hasFreezeOnLive(r.model.Name) then r.score = r.score + 60 end
             end
@@ -992,7 +1066,7 @@ function Bot:selectTarget():Enemy?
 
     local best,bs=nil,-1e9
     for _,r in pairs(self.enemies) do
-        if r.model.Parent and r.hum and r.hum.Health>0 and r.dist<80 then
+        if r.model.Parent and r.hum and r.hum.Health>0 then
             if r.score>bs then bs=r.score; best=r end
         end
     end
@@ -1028,16 +1102,24 @@ end
 function Bot:shouldBlock(r:Enemy?):boolean
     if not r then return false end
     if self.blocking then return true end
+    if self.isAttacking then return false end
+    if self:_hasRecentStun(r) then return false end
     local nowT=os.clock()
     if nowT<self.blockCooldown then return false end
-    if nowT-self.lastBlockTime<0.30 then return false end
+    if nowT-self.lastBlockTime<0.22 then return false end
     if r.dist>CFG.ComboDist+4 then return false end
     local aid=nil; local best=-1; for _,slot in pairs(r.active) do if slot.start>best then best=slot.start; aid=slot.id end end
-    if aid and self.ls:threat(aid)>=1.5 then return true end
+    if aid then
+        local threat=self.ls:threat(aid)
+        if threat>=1.5 then return true end
+        if threat>=1.0 and nowT-(r.style.lastAtk or 0)<0.65 then return true end
+    end
     local st=r.style
     if st.aggr>6 and nowT-st.lastAtk<0.50 then return true end
+    if st.aggr>4 and nowT-st.lastAtk<0.70 and r.dist<=CFG.ComboDist then return true end
     if self.lastAttacker==r.model.Name and nowT-self.lastAtkTime<0.75 then return true end
     if st.lastAtk>0 and nowT-st.lastAtk<0.30 and r.dist<CFG.ComboDist then return true end
+    if st.def>4 and nowT-st.lastBlk>1.0 and r.dist<=CFG.ComboDist then return true end
     return false
 end
 
@@ -1127,12 +1209,12 @@ function Bot:maybeDash(r:Enemy)
     local canS = distOK(d,gS.lo,gS.hi) and (self:_cdLeft("S")==0)
     local canB = distOK(d,gB.lo,gB.hi) and (self:_cdLeft("B")==0)
 
-    if canF and math.random()<0.60 then self:_requestForwardDash(r); return end
-    if canS and math.random()<0.55 then self:_requestSideDash(r); return end
+    if canS and math.random()<0.75 then self:_requestSideDash(r); return end
+    if canF and math.random()<0.55 then self:_requestForwardDash(r); return end
     if canB and math.random()<0.35 then self:_requestBackDash(r); return end
 
-    if canF then self:_requestForwardDash(r); return end
     if canS then self:_requestSideDash(r); return end
+    if canF then self:_requestForwardDash(r); return end
     if canB then self:_requestBackDash(r); return end
 end
 
@@ -1155,15 +1237,42 @@ function Bot:execCombo(c:Combo, r:Enemy)
     local startHP = r.hum and r.hum.Health or r.hp
     self.actThread = task.spawn(function()
         local abort=false
+        local waitForStun=false
         for _,st in ipairs(c.steps) do
             if not self.run or not r.model.Parent then abort=true break end
+            if waitForStun and st.kind ~= "aim" then
+                local confirmed=false
+                for _=1,6 do
+                    if not self.run or not r.model.Parent then abort=true break end
+                    if self:_hasRecentStun(r) then confirmed=true; break end
+                    task.wait(0.05)
+                end
+                if not confirmed then abort=true break end
+                waitForStun=false
+            end
             if st.kind=="aim" then
                 self:aimAt(r.hrp); task.wait(0.03)
             elseif st.kind=="press" and st.action then
                 if st.action=="M1" then
-                    self:_pressAction("M1", st.hold); task.wait(st.wait or m1Gap())
+                    if self:_targetRagdolled(r) then abort=true break end
+                    if (r.dist or math.huge) > CFG.M1Range then
+                        if not self:_waitForRange(r, CFG.M1Range, 0.45) then abort=true break end
+                    end
+                    self:_registerM1Attempt(r)
+                    self:_pressAction("M1", st.hold)
+                    self.lastM1=os.clock()
+                    task.wait(st.wait or m1Gap())
+                    waitForStun=true
                 elseif st.action=="M1HOLD" then
-                    self:_pressAction("M1HOLD", st.hold); task.wait(st.wait or m1Gap())
+                    if self:_targetRagdolled(r) then abort=true break end
+                    if (r.dist or math.huge) > CFG.M1Range then
+                        if not self:_waitForRange(r, CFG.M1Range, 0.45) then abort=true break end
+                    end
+                    self:_registerM1Attempt(r)
+                    self:_pressAction("M1HOLD", st.hold)
+                    self.lastM1=os.clock()
+                    task.wait(st.wait or m1Gap())
+                    waitForStun=true
                 elseif st.action=="Upper" then
                     local y0 = (r.hrp and r.hrp.Position.Y) or 0
 
@@ -1222,7 +1331,15 @@ function Bot:execCombo(c:Combo, r:Enemy)
         if hasFreezeOnLive(r.model.Name) then
             if slotReady(SLOT.CP) then self:_pressAction("CP") end
             task.wait(0.12)
-            self:_pressAction("M1", CFG.TapS); task.wait(m1Gap())
+            if not self:_targetRagdolled(r) then
+                if (r.dist or math.huge) > CFG.M1Range then
+                    self:_waitForRange(r, CFG.M1Range, 0.35)
+                end
+                self:_registerM1Attempt(r)
+                self:_pressAction("M1", CFG.TapS)
+                self.lastM1=os.clock()
+                task.wait(m1Gap())
+            end
             if slotReady(SLOT.NP) then self:_pressAction("NP") end
         end
 
@@ -1273,10 +1390,9 @@ function Bot:_shouldStartCombo(tgt:Enemy):boolean
     if self.blocking then return false end
     if tgt.style.lastBlk>0 and os.clock()-tgt.style.lastBlk<0.28 then return false end
     if not self.hum or self.hum.MoveDirection.Magnitude>0.9 then return false end
-    if tgt.hum and tgt.hum.FloorMaterial==Enum.Material.Air then
-
-        if not hasFreezeOnLive(tgt.model.Name) then return false end
-    end
+    if self:_targetRagdolled(tgt) then return false end
+    if self.lastM1Target~=tgt or (os.clock()-self.lastM1AttemptTime)>0.7 then return false end
+    if not self:_hasRecentStun(tgt) then return false end
     return true
 end
 
@@ -1394,7 +1510,14 @@ function Bot:neutral(tgt:Enemy?)
     end
 
 
-    if d<6.2 and nowT-self.lastM1>CFG.M1Min*0.9 then self:_pressAction("M1", CFG.TapS); self.lastM1=nowT; self.lastAttempt=nowT end
+    if d<=CFG.M1Range and nowT-self.lastM1>CFG.M1Min*0.9 then
+        if not self:_targetRagdolled(tgt) then
+            self:_registerM1Attempt(tgt)
+            self:_pressAction("M1", CFG.TapS)
+            self.lastM1=nowT
+            self.lastAttempt=nowT
+        end
+    end
 
 
     if d<=CFG.CloseUseRange and (nowT - self.lastSkill)>0.28 then
@@ -1520,7 +1643,7 @@ function Bot:update(dt:number)
     end
 
 
-    if self:shouldBlock(tgt) then self:block(self:blockDur(tgt)); self:neutral(tgt); self.gui:updateCDs(self:_cdLeft("F"), self:_cdLeft("B"), self:_cdLeft("S")); return end
+    if self:shouldBlock(tgt) then self:block(self:blockDur(tgt), tgt); self:neutral(tgt); self.gui:updateCDs(self:_cdLeft("F"), self:_cdLeft("B"), self:_cdLeft("S")); return end
 
 
     local nowT=os.clock()
