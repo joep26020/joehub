@@ -12,10 +12,10 @@ local CFG = {
     CharKey = "saitama",
 
 
-    ComboDist      = 7.2,
+    ComboDist      = 6,
     SpaceMin       = 4.6,
-    SpaceMax       = 8.6,
-    CloseUseRange  = 7.4,
+    SpaceMax       = 7,
+    CloseUseRange  = 6.5,
     SnipeRange     = 60.0,
     SnipeHP        = 10,
 
@@ -28,7 +28,7 @@ local CFG = {
     M1Range  = 5.0,
 
 
-    Cooldown = { FDash=2.2, BDash=4.2, Side=0.65 },
+    Cooldown = { FDash=10, BDash=5.5, Side=0.65 },
     EvasiveCD = 30,
 
 
