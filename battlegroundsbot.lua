@@ -7,7 +7,12 @@ local VIM         = game:GetService("VirtualInputManager")
 
 local LP = Players.LocalPlayer or Players.PlayerAdded:Wait()
 
-
+local DashAnim = {
+    F  = "10479335397",
+    B  = "10491993682",
+    SL = "10480796021",
+    SR = "10480793962",
+}
 local CFG = {
     CharKey = "saitama",
 
@@ -20,12 +25,6 @@ local CFG = {
     SnipeHP        = 10,
 
 
-    DashAnim = {
-        F  = "10479335397",
-        B  = "10491993682",
-        SL = "10480796021",
-        SR = "10480793962",
-    },
 
     Cooldown = {
         F = 10.0,
@@ -55,6 +54,10 @@ local CFG = {
     },
 
 
+
+
+
+
     Dash = {
         KeyQ        = Enum.KeyCode.Q,
         HoldQ       = 0.12,
@@ -72,9 +75,9 @@ local CFG = {
 
 
         Anim = {
-            fdash = { CFG.DashAnim.F },
-            bdash = { CFG.DashAnim.B },
-            side  = { CFG.DashAnim.SL, CFG.DashAnim.SR },
+            fdash = { DashAnim.F },
+            bdash = { DashAnim.B },
+            side  = { DashAnim.SL, DashAnim.SR },
         }
     },
 
@@ -719,9 +722,9 @@ function Bot:_hookMine(h:Humanoid)
         local c=an.AnimationPlayed:Connect(function(tr)
             local tail = tailIdFromTrack(tr)
             local nowT = os.clock()
-            if tail == CFG.DashAnim.F then self.lastRealDash.F = nowT end
-            if tail == CFG.DashAnim.B then self.lastRealDash.B = nowT end
-            if tail == CFG.DashAnim.SL or tail == CFG.DashAnim.SR then self.lastRealDash.S = nowT end
+            if tail == DashAnim.F then self.lastRealDash.F = nowT end
+            if tail == DashAnim.B then self.lastRealDash.B = nowT end
+            if tail == DashAnim.SL or tail == DashAnim.SR then self.lastRealDash.S = nowT end
             self.myAnims[tr]={id=tail,start=os.clock()}
             tr.Stopped:Connect(function()
                 self.myAnims[tr]=nil
@@ -1948,4 +1951,3 @@ end
 
 if getgenv().BattlegroundsBot and getgenv().BattlegroundsBot.destroy then pcall(function() getgenv().BattlegroundsBot:destroy() end) end
 local bot=Bot.new(); getgenv().BattlegroundsBot=bot; return bot
-
