@@ -28,14 +28,14 @@ local CFG = {
     M1Range  = 5.0,
 
 
-    Cooldown = { FDash=10, BDash=5.5, Side=0.65 },
+    Cooldown = { FDash=10, BDash=5.5, Side=0.50 },
     EvasiveCD = 30,
 
 
     Gates = {
         F = { lo=14.0, hi=30.0 },
-        S = { lo= 4.5, hi=18.0 },
-        B = { lo= 5.0, hi=36.0 },
+        S = { lo= 4.5, hi=22.0 },
+        B = { lo= 5.0, hi=40.0 },
     },
 
 
@@ -563,7 +563,19 @@ end
 
 function Bot:_beginDashOrientation(kind:string, tr:AnimationTrack, style:("off"|"def"), tHRP:BasePart?)
     if self.inDash or not self.hum or not self.rp then return end
-    self.inDash=true
+    self.inDash = true
+    if self.hum then self.hum.AutoRotate = false end
+
+    local function alignCam()
+        local cam = workspace.CurrentCamera
+        if not(cam and self.rp) then return end
+        local cp  = cam.CFrame.Position
+        local fv  = self.rp.CFrame.LookVector
+        local flat= Vector3.new(fv.X, 0, fv.Z)
+        if flat.Magnitude < 1e-3 then return end
+        local tgt = cp + flat.Unit
+        cam.CFrame = CFrame.new(cp, Vector3.new(tgt.X, cp.Y, tgt.Z))
+    end
 
     local function canTurn()
         if self.hum and self.hum:GetState()==Enum.HumanoidStateType.FallingDown then return false end
@@ -571,52 +583,57 @@ function Bot:_beginDashOrientation(kind:string, tr:AnimationTrack, style:("off"|
     end
     local function faceToward(pos:Vector3)
         if not canTurn() then return end
-        local here=self.rp.Position; local to=flat(pos-here); if to.Magnitude<1e-3 then return end
-        self.rp.CFrame=CFrame.lookAt(here, here+to.Unit)
+        local here=self.rp.Position
+        local to  = Vector3.new(pos.X, here.Y, pos.Z) - here
+        if to.Magnitude<1e-3 then return end
+        self.rp.CFrame = CFrame.lookAt(here, here + to.Unit)
+        alignCam()
     end
     local function faceAwayFrom(pos:Vector3)
         if not canTurn() then return end
-        local here=self.rp.Position; local to=flat(pos-here); if to.Magnitude<1e-3 then return end
-        self.rp.CFrame=CFrame.lookAt(here, here+(-to.Unit))
+        local here=self.rp.Position
+        local to  = Vector3.new(pos.X, here.Y, pos.Z) - here
+        if to.Magnitude<1e-3 then return end
+        self.rp.CFrame = CFrame.lookAt(here, here - to.Unit)
+        alignCam()
     end
     local function facePerp(toU:Vector3, cw:boolean)
         if not canTurn() then return end
         local perp = cw and Vector3.new(toU.Z,0,-toU.X) or Vector3.new(-toU.Z,0,toU.X)
         self.rp.CFrame = CFrame.lookAt(self.rp.Position, self.rp.Position + perp.Unit)
+        alignCam()
     end
 
-    local t0=os.clock()
-    local length = (tr.Length and tr.Length>0) and tr.Length or (
-        kind=="fdash" and CFG.Dash.FWindow or kind=="bdash" and CFG.Dash.BWindow or CFG.Dash.SWindow
-    )
-    local orbitCW = (math.random()<0.5)
-    local didOrbit=false
-    local orbitStart=0.0
+    local t0 = os.clock()
+    local length = (tr.Length and tr.Length>0) and tr.Length
+                  or (kind=="fdash" and CFG.Dash.FWindow)
+                  or (kind=="bdash" and CFG.Dash.BWindow)
+                  or CFG.Dash.SWindow
+    local orbitCW, didOrbit, orbitStart = (math.random()<0.5), false, 0.0
+    local stopped = false
+    tr.Stopped:Connect(function() stopped = true end)
 
-    local stopped=false
-    tr.Stopped:Connect(function() stopped=true end)
-
-    self.dashOrientThread = task.spawn(function()
+    task.spawn(function()
         while not stopped and os.clock()-t0 <= length do
             if not (self.run and self.hum and self.hum.Health>0 and self.rp) then break end
             local tgt = tHRP
-            if not tgt or not tgt.Parent then
-                local pick=self:selectTarget()
+            if not (tgt and tgt.Parent) then
+                local pick = self:selectTarget()
                 tgt = pick and pick.hrp or nil
             end
             if tgt then
-                local to = flat(tgt.Position - self.rp.Position)
-                if to.Magnitude>1e-3 then
+                local to = Vector3.new(tgt.Position.X, self.rp.Position.Y, tgt.Position.Z) - self.rp.Position
+                if to.Magnitude > 1e-3 then
                     local toU = to.Unit
                     if kind=="fdash" then
                         if style=="off" then
-                            if (not didOrbit) then
+                            if not didOrbit then
                                 faceToward(tgt.Position)
                                 if to.Magnitude <= CFG.Dash.OrbitTrigger then
-                                    didOrbit=true; orbitStart=os.clock()
+                                    didOrbit = true; orbitStart = os.clock()
                                 end
                             else
-                                local elapsed = os.clock()-orbitStart
+                                local elapsed = os.clock() - orbitStart
                                 if elapsed <= CFG.Dash.OrbitDur then facePerp(toU, orbitCW)
                                 else faceToward(tgt.Position) end
                             end
@@ -625,17 +642,14 @@ function Bot:_beginDashOrientation(kind:string, tr:AnimationTrack, style:("off"|
                         end
                     elseif kind=="bdash" then
                         if style=="off" then
-                            local timeLeft = (t0+length) - os.clock()
-                            if to.Magnitude <= CFG.Dash.BackClose then
-                                facePerp(toU, orbitCW)
-                            else
-                                faceAwayFrom(tgt.Position)
-                            end
+                            local timeLeft = (t0 + length) - os.clock()
+                            if to.Magnitude <= CFG.Dash.BackClose then facePerp(toU, orbitCW)
+                            else faceAwayFrom(tgt.Position) end
                             if timeLeft <= CFG.Dash.PreEndBackFace then faceToward(tgt.Position) end
                         else
                             faceToward(tgt.Position)
                         end
-                    else
+                    else -- side
                         if style=="off" then
                             if to.Magnitude <= CFG.Dash.SideOffLock then faceToward(tgt.Position)
                             else facePerp(toU, orbitCW) end
@@ -647,15 +661,21 @@ function Bot:_beginDashOrientation(kind:string, tr:AnimationTrack, style:("off"|
             end
             RunService.Heartbeat:Wait()
         end
-        local pick=self:selectTarget()
-        local tHRP2 = (tHRP and tHRP.Parent) and tHRP or (pick and pick.hrp)
-        if tHRP2 then
-            if self.hum and self.hum.Health>0 and self.hum:GetState()~=Enum.HumanoidStateType.FallingDown then
-                self.rp.CFrame = CFrame.lookAt(self.rp.Position, Vector3.new(tHRP2.Position.X, self.rp.Position.Y, tHRP2.Position.Z))
-            end
+
+        -- Hard re-lock after dash
+        local pick = self:selectTarget()
+        local t2   = (tHRP and tHRP.Parent) and tHRP or (pick and pick.hrp)
+        if t2 and self.hum and self.hum.Health>0 and self.hum:GetState()~=Enum.HumanoidStateType.FallingDown then
+            self.rp.CFrame = CFrame.lookAt(self.rp.Position, Vector3.new(t2.Position.X, self.rp.Position.Y, t2.Position.Z))
+            alignCam()
         end
-        self.inDash=false
-        self.dashOrientThread=nil
+
+        -- If dash produced a stun window, immediately branch a close combo.
+        if pick and self:_hasRecentStun(pick) and (pick.dist or 99) <= CFG.CloseUseRange then
+            self:execBestCloseCombo(pick)  -- new helper added below
+        end
+
+        self.inDash = false
     end)
 end
 
@@ -1093,28 +1113,33 @@ function Bot:updateEnemies(dt:number)
 end
 
 function Bot:selectTarget():Enemy?
-
-    local best,bs=nil,-1e9
+    local best, bs, bestAgg = nil, -1e9, -1e9
     for _,r in pairs(self.enemies) do
         if r.model.Parent and r.hum and r.hum.Health>0 then
-            if r.score>bs then bs=r.score; best=r end
+            local s  = r.score or -1e9
+            local ag = r.aggro or 0
+            local w  = s + ag * 0.9  -- weight aggro heavily
+            if w > bs then bs, best, bestAgg = w, r, ag end
         end
     end
     if not best then return nil end
-    local nowT=os.clock()
-    if self.sticky and self.sticky.model.Parent and (nowT - self.stickyT) < self.stickyHold then
 
+    local nowT = os.clock()
+    if self.sticky and self.sticky.model.Parent and (nowT - self.stickyT) < (self.stickyHold or 1.6) then
         return self.sticky
     end
     if self.sticky and self.sticky.model.Parent then
-        local curScore = self.sticky.score or -1e9
-        if bs > (curScore + self.switchMargin) then
-            self.sticky = best; self.stickyT = nowT; return best
+        local curAgg = self.sticky.aggro or 0
+        -- Only switch if new aggro beats current by margin, or total score is far better.
+        if (bestAgg > curAgg + (self.switchMargin or 25)) or (bs > ((self.sticky.score or -1e9) + 60)) then
+            self.sticky, self.stickyT = best, nowT
+            return best
         else
             return self.sticky
         end
     else
-        self.sticky = best; self.stickyT = nowT; return best
+        self.sticky, self.stickyT = best, nowT
+        return best
     end
 end
 
@@ -1237,22 +1262,23 @@ end
 
 
 function Bot:maybeDash(r:Enemy)
-    if not r or not r.hrp then return end
-    if self.inDash then return end
-
+    if not r or not r.hrp or self.inDash then return end
     local d = r.dist
-    local gF,gS,gB = CFG.Gates.F, CFG.Gates.S, CFG.Gates.B
-    local canF = distOK(d,gF.lo,gF.hi) and (self:_cdLeft("F")==0)
-    local canS = distOK(d,gS.lo,gS.hi) and (self:_cdLeft("S")==0)
-    local canB = distOK(d,gB.lo,gB.hi) and (self:_cdLeft("B")==0)
+    local canF = (d>=CFG.Gates.F.lo and d<=CFG.Gates.F.hi) and (self:_cdLeft("F")==0)
+    local canS = (d>=CFG.Gates.S.lo and d<=CFG.Gates.S.hi) and (self:_cdLeft("S")==0)
+    local canB = (d>=CFG.Gates.B.lo and d<=CFG.Gates.B.hi) and (self:_cdLeft("B")==0)
 
-    if canS and math.random()<0.88 then self:_requestSideDash(r); return end
-    if canF and math.random()<0.70 then self:_requestForwardDash(r); return end
-    if canB and math.random()<0.30 then self:_requestBackDash(r); return end
+    -- If we just created a stun window, chain a side dash to stay glued.
+    if self:_hasRecentStun(r) and canS then self:_requestSideDash(r); return end
 
-    if canS then self:_requestSideDash(r); return end
-    if canF then self:_requestForwardDash(r); return end
-    if canB then self:_requestBackDash(r); return end
+    -- Offense bias: side > forward > back
+    if canS and math.random()<0.94 then self:_requestSideDash(r); return end
+    if canF and math.random()<0.72 then self:_requestForwardDash(r); return end
+    if canB and math.random()<0.44 then self:_requestBackDash(r); return end
+
+    if canS then self:_requestSideDash(r)
+    elseif canF then self:_requestForwardDash(r)
+    elseif canB then self:_requestBackDash(r) end
 end
 
 
@@ -1390,6 +1416,22 @@ function Bot:execCombo(c:Combo, r:Enemy)
     end)
 end
 
+function Bot:execBestCloseCombo(r:Enemy)
+    if not r or not r.hrp then return end
+    -- Prefer 2–3x M1 → CP → M1 → NP, or Shove pressure branch, depending on LS success.
+    local c1, c2 = "sai_m1cp_np", "sai_m1_shove_sd_cp_np"
+    local ls1 = (self.ls.data.combos[c1] and self.ls.data.combos[c1].succ or 0)
+    local ls2 = (self.ls.data.combos[c2] and self.ls.data.combos[c2].succ or 0)
+    local pick = (ls2 > ls1 and math.random()<0.65) and c2 or c1
+    for _,c in ipairs(LIB) do
+        if c.id == pick then
+            if r.dist > (c.max or CFG.M1Range) then self:_waitForRange(r, math.min(CFG.M1Range, 6.5), 0.45) end
+            self:execCombo(c, r)
+            return
+        end
+    end
+end
+
 function Bot:_upperUseOK(r:Enemy):boolean
 
     local closeOK = r.dist <= (CFG.SpaceMin + 2.0)
@@ -1418,6 +1460,29 @@ function Bot:chase(r:Enemy)
     end
     self:setInput(forward,strafe)
     self:maybeDash(r)
+end
+
+function Bot:approachFarTarget(r:Enemy)
+    if not self.run then return end
+    if not (r and r.hrp and self.rp) then return end
+    local d = r.dist or math.huge
+    if d < 60 then return end
+    -- Hold W, keep camera locked, and sprinkle dashes on CD to close space fast.
+    self:aimAt(r.hrp)
+    self:setInput(1, 0) -- forward
+    local t = os.clock()
+    -- Small lateral weaves to avoid straight lines
+    local side = (math.floor(t*2)%2==0) and 0.35 or -0.35
+    self:setInput(1, side)
+
+    -- Use whichever dash is ready to gain ground.
+    local canF = self:_cdLeft("F")==0
+    local canS = self:_cdLeft("S")==0
+    if canS and d > 70 then
+        self:_requestSideDash(r)
+    elseif canF and d > 65 then
+        self:_requestForwardDash(r)
+    end
 end
 
 function Bot:_shouldStartCombo(tgt:Enemy):boolean
@@ -1632,6 +1697,9 @@ function Bot:update(dt:number)
     if self.lastAttacker and nowT-self.lastAtkTime>3 then self.lastAttacker=nil; self.lastDmg=0 end
 
     local tgt=self:selectTarget()
+    if tgt then
+        self:approachFarTarget(tgt)
+    end
     if not tgt then
         self.gui:setT("Target: none")
         if not self.run then self:clearMove() end
@@ -1641,6 +1709,12 @@ function Bot:update(dt:number)
     self.gui:setT(("Target: %s (%.0f hp)"):format(tgt.model.Name, tgt.hp))
 
     nowT=os.clock()
+    if tgt and tgt.dist <= CFG.SpaceMax then
+        local justDashed = (tgt.style.lastDash>0) and (nowT - tgt.style.lastDash < 0.25)
+        if justDashed and self:shouldBlock(tgt) then
+            self:block(self:blockDur(tgt), tgt)
+        end
+    end
 
     if self.blocking and self.blockStartTime and (nowT-self.blockStartTime)>5.0 then
         self:_forceUnblockNow()
