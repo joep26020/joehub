@@ -12,10 +12,10 @@ local CFG = {
     CharKey = "saitama",
 
 
-    ComboDist      = 7.8,
-    SpaceMin       = 5.2,
-    SpaceMax       = 9.5,
-    CloseUseRange  = 8.0,
+    ComboDist      = 7.2,
+    SpaceMin       = 4.6,
+    SpaceMax       = 8.6,
+    CloseUseRange  = 7.4,
     SnipeRange     = 60.0,
     SnipeHP        = 10,
 
@@ -28,14 +28,14 @@ local CFG = {
     M1Range  = 5.0,
 
 
-    Cooldown = { FDash=3.0, BDash=5.0, Side=0.80 },
+    Cooldown = { FDash=2.2, BDash=4.2, Side=0.65 },
     EvasiveCD = 30,
 
 
     Gates = {
-        F = { lo=18.0, hi=34.0 },
-        S = { lo= 5.0, hi=20.0 },
-        B = { lo= 5.0, hi=40.0 },
+        F = { lo=14.0, hi=30.0 },
+        S = { lo= 4.5, hi=18.0 },
+        B = { lo= 5.0, hi=36.0 },
     },
 
 
@@ -87,9 +87,12 @@ local CFG = {
     },
 
 
-    MaxNoAtk = 1.6,
-    ForceAtk = 3.0,
-    CloseGain = 3.0, CloseWindow = 5.0, FarChase = 50.0,
+    MaxNoAtk = 1.3,
+    ForceAtk = 2.4,
+    CloseGain = 3.0, CloseWindow = 5.0, FarChase = 45.0,
+
+    StillPunish = 5.0,
+    AttackPunish = 15.0,
 
 
     Data  = "bgbot",
@@ -330,7 +333,7 @@ function GUI.new()
     local exitB =btn(f,"Exit","Exit",  UDim2.new(0.33,-10,0,30), UDim2.new(0.66,10,0,148), Color3.fromRGB(80,30,30))
 
     self.moves = text(f,"M","Dash CDs: F=0.00 | B=0.00 | S=0.00", UDim2.new(1,-20,0,20), UDim2.new(0,10,0,182), 14, false)
-    self.rules = text(f,"R","FDash[18..34] • SideOff relock≤3.5 • OB bias • Block>5s→force-unblock • M1 chain≈0.25–0.35s", UDim2.new(1,-20,0,20), UDim2.new(0,10,0,204), 12, false)
+    self.rules = text(f,"R","FDash[14..30] • SideOff relock≤3.5 • Still>5s→dash • Idle atk≤15s • M1 openers", UDim2.new(1,-20,0,20), UDim2.new(0,10,0,204), 12, false)
 
     local panel=Instance.new("Frame"); panel.Name="Combos"; panel.Size=UDim2.new(1,-20,1,-238); panel.Position=UDim2.new(0,10,0,238)
     panel.BackgroundColor3=Color3.fromRGB(20,22,30); panel.BorderSizePixel=0; panel.Parent=f
@@ -378,12 +381,13 @@ local LIB:{Combo} = {
 
     {
         id="sai_sd_m1h",
-        name="M1(1-2)->Shove->Side(off)->M1(HOLD)",
-        min=0, max=10, risk=0.25,
+        name="M1>Shove->Side(off)->M1(HOLD)",
+        min=0, max=7.5, risk=0.28,
         steps={
             {kind="aim"},
-            {kind="press",action="Shove",wait=0.10},
-            {kind="dash",action="side",dir="off",wait=0.06},
+            {kind="press",action="M1",hold=CFG.TapS,wait=m1Gap()},
+            {kind="press",action="Shove",wait=0.12},
+            {kind="dash",action="side",dir="off",wait=0.08},
             {kind="press",action="M1HOLD",hold=CFG.TapM,wait=m1Gap()},
         },
         traits={"pressure","guardbreak"}
@@ -392,7 +396,7 @@ local LIB:{Combo} = {
     {
         id="sai_m1cp_np",
         name="M1x2>CP>M1>NP",
-        min=0, max=8, risk=0.35,
+        min=0, max=7.2, risk=0.35,
         steps={
             {kind="aim"},
             {kind="press",action="M1",hold=CFG.TapS,wait=m1Gap()},
@@ -415,6 +419,23 @@ local LIB:{Combo} = {
             {kind="dash",action="auto_after_upper",dir="smart",wait=0.10},
         },
         traits={"launcher","requires_evasive"}
+    },
+
+    {
+        id="sai_m1_shove_sd_cp_np",
+        name="M1->Shove->M1(HOLD)->Side(off)->CP->M1->NP",
+        min=0, max=7.5, risk=0.42,
+        steps={
+            {kind="aim"},
+            {kind="press",action="M1",hold=CFG.TapS,wait=m1Gap()},
+            {kind="press",action="Shove",wait=0.12},
+            {kind="press",action="M1HOLD",hold=CFG.TapM,wait=0.30},
+            {kind="dash",action="side",dir="off",wait=0.08},
+            {kind="press",action="CP",wait=0.36},
+            {kind="press",action="M1",hold=CFG.TapS,wait=m1Gap()},
+            {kind="press",action="NP"},
+        },
+        traits={"pressure","branching"}
     },
 }
 
@@ -466,7 +487,8 @@ function Bot.new()
     self.lastM1Target=nil
     self.lastM1AttemptTime=0
 
-    self.lastAttempt=os.clock(); self.urgency=0
+    local nowT=os.clock()
+    self.lastAttempt=nowT; self.urgency=0
     self.arcUntil=0; self.closeT=os.clock(); self.closeD=math.huge
     self.pendingResume=false
 
@@ -484,6 +506,8 @@ function Bot.new()
 
 
     self.stillTimer=0
+    self.lastMoveTime=nowT
+    self.lastOffenseTime=nowT
 
 
     self.isUlt=false
@@ -773,6 +797,9 @@ end
 function Bot:clearMove() for k,down in pairs(self.moveKeys) do if down then VIM:SendKeyEvent(false,k,false,game); self.moveKeys[k]=false end end end
 function Bot:setInput(f:number?,r:number?) local th=0.15; f=f or 0; r=r or 0
     self:setKey(Enum.KeyCode.W, f>th); self:setKey(Enum.KeyCode.S, f<-th); self:setKey(Enum.KeyCode.D, r>th); self:setKey(Enum.KeyCode.A, r<-th)
+    if self.moveKeys[Enum.KeyCode.W] or self.moveKeys[Enum.KeyCode.S] or self.moveKeys[Enum.KeyCode.A] or self.moveKeys[Enum.KeyCode.D] then
+        self.lastMoveTime = os.clock()
+    end
 end
 function Bot:alignCam()
     local cam=workspace.CurrentCamera; if not(cam and self.rp) then return end
@@ -887,6 +914,7 @@ function Bot:_requestSideDash(r:Enemy)
     self.moveKeys[towardKey]=false
     if wState then self:setKey(Enum.KeyCode.W,true) end
     if sideState then self:setKey(towardKey,true) end
+    self.lastMoveTime = os.clock()
 end
 
 function Bot:_requestForwardDash(r:Enemy)
@@ -899,6 +927,7 @@ function Bot:_requestForwardDash(r:Enemy)
 
     self.dashPending = {kind="fdash", style="off", tHRP=r.hrp}
     pressKey(Enum.KeyCode.W,true); task.wait(0.02); holdQ(CFG.Dash.HoldQ); pressKey(Enum.KeyCode.W,false)
+    self.lastMoveTime = os.clock()
 end
 
 function Bot:_requestBackDash(r:Enemy)
@@ -911,6 +940,7 @@ function Bot:_requestBackDash(r:Enemy)
 
     self.dashPending = {kind="bdash", style="off", tHRP=r.hrp}
     pressKey(Enum.KeyCode.S,true); task.wait(0.02); holdQ(CFG.Dash.HoldQ); pressKey(Enum.KeyCode.S,false)
+    self.lastMoveTime = os.clock()
 end
 
 
@@ -1119,6 +1149,7 @@ function Bot:shouldBlock(r:Enemy?):boolean
     if st.aggr>4 and nowT-st.lastAtk<0.70 and r.dist<=CFG.ComboDist then return true end
     if self.lastAttacker==r.model.Name and nowT-self.lastAtkTime<0.75 then return true end
     if st.lastAtk>0 and nowT-st.lastAtk<0.30 and r.dist<CFG.ComboDist then return true end
+    if st.lastDash>0 and nowT-st.lastDash<0.25 and r.dist<=CFG.SpaceMax then return true end
     if st.def>4 and nowT-st.lastBlk>1.0 and r.dist<=CFG.ComboDist then return true end
     return false
 end
@@ -1176,8 +1207,13 @@ end
 
 function Bot:_pressAction(name:string, hold:number?)
 
+    local function markOffense()
+        self.lastOffenseTime = os.clock()
+    end
+
     if name=="M1" or name=="M1HOLD" then
         pressMouse(Enum.UserInputType.MouseButton1, hold or CFG.InputTap)
+        markOffense()
         return true
     end
     if name=="Block" then pressKey(CFG.Bind.Block.k,true,hold or CFG.InputTap); return true end
@@ -1191,6 +1227,7 @@ function Bot:_pressAction(name:string, hold:number?)
 
         local b = CFG.Bind[name]; if b and b.t=="Key" then
             pressKey(b.k,true, hold or CFG.InputTap)
+            markOffense()
             return true
         end
         return false
@@ -1209,9 +1246,9 @@ function Bot:maybeDash(r:Enemy)
     local canS = distOK(d,gS.lo,gS.hi) and (self:_cdLeft("S")==0)
     local canB = distOK(d,gB.lo,gB.hi) and (self:_cdLeft("B")==0)
 
-    if canS and math.random()<0.75 then self:_requestSideDash(r); return end
-    if canF and math.random()<0.55 then self:_requestForwardDash(r); return end
-    if canB and math.random()<0.35 then self:_requestBackDash(r); return end
+    if canS and math.random()<0.88 then self:_requestSideDash(r); return end
+    if canF and math.random()<0.70 then self:_requestForwardDash(r); return end
+    if canB and math.random()<0.30 then self:_requestBackDash(r); return end
 
     if canS then self:_requestSideDash(r); return end
     if canF then self:_requestForwardDash(r); return end
@@ -1391,8 +1428,15 @@ function Bot:_shouldStartCombo(tgt:Enemy):boolean
     if tgt.style.lastBlk>0 and os.clock()-tgt.style.lastBlk<0.28 then return false end
     if not self.hum or self.hum.MoveDirection.Magnitude>0.9 then return false end
     if self:_targetRagdolled(tgt) then return false end
+    if self.m1ChainCount>=3 then return false end
     if self.lastM1Target~=tgt or (os.clock()-self.lastM1AttemptTime)>0.7 then return false end
-    if not self:_hasRecentStun(tgt) then return false end
+    local hasBridge = self:_hasRecentStun(tgt)
+    if not hasBridge then
+        if self.m1ChainCount>=1 and (os.clock()-self.lastM1)<=0.55 then
+            hasBridge = true
+        end
+    end
+    if not hasBridge then return false end
     return true
 end
 
@@ -1584,7 +1628,8 @@ function Bot:update(dt:number)
     self.gui:setE(self.evReady and "Evasive: ready" or ("Evasive: "..string.format("%.1fs",math.max(0,self.evTimer))))
 
     self:updateEnemies(dt); self:updateAttacker()
-    if self.lastAttacker and os.clock()-self.lastAtkTime>3 then self.lastAttacker=nil; self.lastDmg=0 end
+    local nowT=os.clock()
+    if self.lastAttacker and nowT-self.lastAtkTime>3 then self.lastAttacker=nil; self.lastDmg=0 end
 
     local tgt=self:selectTarget()
     if not tgt then
@@ -1595,8 +1640,9 @@ function Bot:update(dt:number)
     end
     self.gui:setT(("Target: %s (%.0f hp)"):format(tgt.model.Name, tgt.hp))
 
+    nowT=os.clock()
 
-    if self.blocking and self.blockStartTime and (os.clock()-self.blockStartTime)>5.0 then
+    if self.blocking and self.blockStartTime and (nowT-self.blockStartTime)>5.0 then
         self:_forceUnblockNow()
         self.blocking=false
         self.blockStartTime=nil
@@ -1605,16 +1651,39 @@ function Bot:update(dt:number)
 
 
     local md = self.hum.MoveDirection.Magnitude
+    if md>0.10 then self.lastMoveTime = nowT end
+
+    if self.run and (not self.blocking) and (not self.inDash) then
+        if nowT - self.lastMoveTime >= CFG.StillPunish then
+            self:chase(tgt)
+            local sideKick = (math.random()<0.5) and -0.75 or 0.75
+            self:setInput(0.95, sideKick)
+            self.lastMoveTime = nowT
+        end
+        if (nowT - self.lastOffenseTime) >= CFG.AttackPunish and not self.isAttacking then
+            if tgt.dist <= (CFG.M1Range + 1.2) and not self:_targetRagdolled(tgt) then
+                self:_registerM1Attempt(tgt)
+                if self:_pressAction("M1", CFG.TapS) then self.lastM1 = nowT end
+            else
+                self:chase(tgt)
+                self:maybeDash(tgt)
+            end
+            self.lastOffenseTime = nowT
+            self.lastAttempt = nowT
+        end
+    end
+
     local idleCond = (md<0.10) and (not self.inDash) and (not self.isAttacking) and (not self.blocking)
     if idleCond then
         self.stillTimer = self.stillTimer + dt
-        if self.stillTimer > 1.6 then
+        if self.stillTimer > 1.2 then
             if distOK(tgt.dist, CFG.Gates.S.lo, CFG.Gates.S.hi) and math.random()<0.65 then
                 self:_pressAction("Shove", CFG.TapS); self:_requestSideDash(tgt)
             else
                 self:maybeDash(tgt)
             end
             self:setInput(0.95, (math.random()<0.5) and -1 or 1)
+            self.lastMoveTime = nowT
             self.stillTimer = 0
         end
     else
@@ -1633,10 +1702,10 @@ function Bot:update(dt:number)
     if self:shouldEvasive(tgt) then if self:attemptEvasive("react") then self.gui:updateCDs(self:_cdLeft("F"), self:_cdLeft("B"), self:_cdLeft("S")); return end end
 
 
-    local likelyBlk = (os.clock()-tgt.style.lastBlk)<0.30 or (tgt.style.def>6)
-    if tgt.hp<=CFG.SnipeHP and not likelyBlk and tgt.dist<=CFG.SnipeRange and (os.clock()-self.lastSnipe>0.8) then
+    local likelyBlk = (nowT-tgt.style.lastBlk)<0.30 or (tgt.style.def>6)
+    if tgt.hp<=CFG.SnipeHP and not likelyBlk and tgt.dist<=CFG.SnipeRange and (nowT-self.lastSnipe>0.8) then
         if slotReady(SLOT.NP) then
-            self:_pressAction("NP"); self.lastSnipe=os.clock(); self.lastAttempt=os.clock(); self:setInput(0.6,0)
+            self:_pressAction("NP"); self.lastSnipe=nowT; self.lastAttempt=nowT; self:setInput(0.6,0)
             self.gui:updateCDs(self:_cdLeft("F"), self:_cdLeft("B"), self:_cdLeft("S"))
             return
         end
@@ -1646,7 +1715,6 @@ function Bot:update(dt:number)
     if self:shouldBlock(tgt) then self:block(self:blockDur(tgt), tgt); self:neutral(tgt); self.gui:updateCDs(self:_cdLeft("F"), self:_cdLeft("B"), self:_cdLeft("S")); return end
 
 
-    local nowT=os.clock()
     if nowT - self.lastAttempt > CFG.MaxNoAtk and tgt.dist<=CFG.CloseUseRange+2 then
         if (nowT - self.lastAttempt) > CFG.ForceAtk then
             if slotReady(SLOT.Shove) and math.random()<0.55 then self:_pressAction("Shove") elseif slotReady(SLOT.CP) then self:_pressAction("CP") end
