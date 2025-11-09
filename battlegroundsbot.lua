@@ -1,1720 +1,1466 @@
+--!strict
+-- Battlegrounds Aggro Bot v6.0 — WASD Aggro + M1-First Bias + Shove-Tech Rules + Ult/CD UI + Keep-Orientation Dashes
+-- Kaiden directives covered:
+--  • Move with WASD more, be aggressive with dashes, M1-first bias.
+--  • Shove-tech: M1 (1st or 2nd only) -> Shove -> SideDash(offensive) -> M1(HOLD) pressure. Do NOT do it off 3rd/4th M1.
+--  • Prefer M1 combos; stop spamming all skills. NP finish after 2×M1 + CP, or Uppercut as finisher on ragdolled/no-ev targets in close range.
+--  • Reduce 'Upper right after Shove' behavior (still allowed situationally, but de-weighted).
+--  • Track/learn blocks, timings, threats. Stick to the most-aggro target; switch less often (sticky targeting + hysteresis).
+--  • M1 chain timing faster: min ≈0.25s, jitter up to +0.10s; chain count tracked by anim IDs.
+--  • Forward-dash distance gate: 18–34 studs (tightened).
+--  • Continue combos if target is stunned: detect Live/<EnemyName>/Freeze.
+--  • No aimlock while YOU are FallingDown.
+--  • Handle ult moves via LocalPlayer PlayerGui hotbar + 'Ulted' attribute in Live/<YourName>. Keys 1–4 map differently in ult.
+--  • Read cooldowns from PlayerGui.Hotbar.Backpack.Hotbar["slot"].Base (Frame that shrinks Y to 0).
+--  • Offensive side-dash direction logic mirrors the mini-GUI logic (perp then toward when close).
+--  • Keep-orientation dash system (fdash/bdash/side) with orbit/relock rules matched to your prior instructions.
+--  • Slightly less risky combo selection (weights favor safer, proven routes).
+--  • Auto-resume after death.
 
-
-local Players = game:GetService("Players")
-local RunService = game:GetService("RunService")
+------------------------------ SERVICES --------------------------------------
+local Players     = game:GetService("Players")
+local RunService  = game:GetService("RunService")
 local HttpService = game:GetService("HttpService")
-local VirtualInputManager = game:GetService("VirtualInputManager")
+local VIM         = game:GetService("VirtualInputManager")
 
-local LocalPlayer = Players.LocalPlayer or Players.PlayerAdded:Wait()
+local LP = Players.LocalPlayer or Players.PlayerAdded:Wait()
 
--- Forward declarations -------------------------------------------------------
-local BotController
+------------------------------- CONFIG ---------------------------------------
+local CFG = {
+    CharKey = "saitama",
 
--- Shared Config --------------------------------------------------------------
-local Config = {
-    CharacterKey = "saitama",
-    ComboConfirmDistance = 7.8,
-    NeutralSpacingMin = 5.2,
-    NeutralSpacingMax = 9.5,
-    AimReactTime = 0.08,
-    AimDamping = 0.55,
-    AimStrength = 1.35,
-    EvasiveCooldown = 26,
-    ActionBindings = {
-        M1 = { type = "MouseButton", button = Enum.UserInputType.MouseButton1 },
-        Shove = { type = "Key", key = Enum.KeyCode.Three },
-        ConsecutivePunches = { type = "Key", key = Enum.KeyCode.Two },
-        Uppercut = { type = "Key", key = Enum.KeyCode.Four },
-        NormalPunch = { type = "Key", key = Enum.KeyCode.One },
-        Block = { type = "Key", key = Enum.KeyCode.F },
-        SideDash = { type = "Key", key = Enum.KeyCode.Q },
-        ForwardDash = { type = "Key", key = Enum.KeyCode.C },
-        BackDash = { type = "Key", key = Enum.KeyCode.X },
-        Evasive = { type = "Key", key = Enum.KeyCode.Q },
+    -- Core distances (studs)
+    ComboDist      = 7.8,
+    SpaceMin       = 5.2,
+    SpaceMax       = 9.5,
+    CloseUseRange  = 8.0,
+    SnipeRange     = 60.0,
+    SnipeHP        = 10,
+
+    -- Input timings (faster M1 chain; jitter up to +0.10)
+    InputTap = 0.045,      -- generic tap
+    TapS     = 0.12,       -- short hold (CP/Np taps etc.)
+    TapM     = 0.22,       -- medium hold (held M1 pressure)
+    M1Min    = 0.25,       -- min gap between M1s (chain)
+    M1Rand   = 0.10,       -- plus up to +0.10 sec jitter
+
+    -- Dash CDs and orient windows
+    Cooldown = { FDash=3.0, BDash=5.0, Side=0.80 }, -- OB/back strong rule persists
+    EvasiveCD = 30,  -- strict per Kaiden rule
+
+    -- Gates for dashes (tighten F hi to 34 by request)
+    Gates = {
+        F = { lo=18.0, hi=34.0 },
+        S = { lo= 5.0, hi=20.0 },
+        B = { lo= 5.0, hi=40.0 },
     },
-    InputTap = 0.045,
-    InputHoldShort = 0.12,
-    InputHoldMedium = 0.22,
-    M1ChainInterval = 0.4,
-    DataFolder = "battlegroundbot",
+
+    -- Dash orientation policy
+    Dash = {
+        KeyQ        = Enum.KeyCode.Q,
+        HoldQ       = 0.12,
+        RefaceTail  = 0.50,
+
+        FWindow     = 0.80,  -- fallback anim time if missing
+        BWindow     = 1.25,
+        SWindow     = 0.50,
+
+        OrbitTrigger   = 2.0,   -- start orbit at ≤2 studs
+        OrbitDur       = 0.30,  -- 0.30 s orbit hold
+        BackClose      = 4.0,   -- bdash close orbit range
+        SideOffLock    = 3.5,   -- side off hard-face distance
+        PreEndBackFace = 0.25,  -- pre-end relock time
+
+        -- known dash anim tails
+        Anim = {
+            fdash = { "10479335397" },
+            bdash = { "10491993682" },
+            side  = { "10480796021", "10480793962" },
+        }
+    },
+
+    -- Attack recognition (Saitama anim tails)
+    Attack = {
+        AnimIds = {
+            m1    = "10469493270",
+            m2    = "10469630950",
+            m3    = "10469639222",
+            m4    = "10469643643",
+            np    = "10468665991",
+            cp    = "10466974800",
+            shove = "10471336737",
+            upper = "12510170988",
+        },
+        Info = {
+            ["10468665991"] = {dur=1.00, interruptible=true},  -- NP
+            ["10466974800"] = {dur=2.00, interruptible=true},  -- CP
+            ["10471336737"] = {dur=0.30, interruptible=true},  -- Shove
+            ["12510170988"] = {dur=0.80, interruptible=true},  -- Upper
+            ["10469493270"] = {dur=0.25, interruptible=true},  -- M1..M4
+            ["10469630950"] = {dur=0.25, interruptible=true},
+            ["10469639222"] = {dur=0.25, interruptible=true},
+            ["10469643643"] = {dur=0.25, interruptible=true},
+        }
+    },
+
+    -- Aggression pacing / anti-idle
+    MaxNoAtk = 2.0,
+    ForceAtk = 3.6,
+    CloseGain = 3.0, CloseWindow = 5.0, FarChase = 50.0,
+
+    -- Learning store
+    Data  = "bgbot",
+    Flush = 2.0,
+
+    BlockAnimId = "rbxassetid://10470389827",
 }
 
--- Utility Functions ----------------------------------------------------------
-local function safeMakeFolder(path)
-    if not makefolder or not isfolder then
-        return
-    end
-    if not isfolder(path) then
-        pcall(makefolder, path)
-    end
-end
+------------------------------ SAFE FILE I/O ---------------------------------
+local function mkfolder(p) if makefolder and isfolder and not isfolder(p) then pcall(makefolder,p) end end
+local function wfile(p,c) if writefile then pcall(writefile,p,c) end end
+local function afile(p,c) if appendfile then pcall(appendfile,p,c) end end
+local function rfile(p) if readfile and isfile and isfile(p) then local ok,res=pcall(readfile,p); if ok then return res end end end
 
-local function safeWriteFile(path, contents)
-    if not writefile then
-        return
-    end
-    local ok, err = pcall(writefile, path, contents)
-    if not ok then
-        warn("battlegroundbot writefile failed", err)
-    end
-end
-
-local function safeAppendFile(path, contents)
-    if not appendfile then
-        return
-    end
-    local ok, err = pcall(appendfile, path, contents)
-    if not ok then
-        warn("battlegroundbot appendfile failed", err)
-    end
-end
-
-local function safeReadFile(path)
-    if not readfile or not isfile then
-        return nil
-    end
-    if not isfile(path) then
-        return nil
-    end
-    local ok, result = pcall(readfile, path)
-    if ok then
-        return result
-    end
-    warn("battlegroundbot readfile failed", result)
+---------------------------- UI HOTBAR COOLDOWNS -----------------------------
+-- Reads PlayerGui.Hotbar.Backpack.Hotbar["1".."4"].Base (Frame that shrinks Y to 0)
+local function getHotbarBase(slot:number):Frame?
+    local pg = LP:FindFirstChild("PlayerGui")
+    local hb = pg and pg:FindFirstChild("Hotbar")
+    local bp = hb and hb:FindFirstChild("Backpack")
+    local H  = bp and bp:FindFirstChild("Hotbar")
+    local s  = H and H:FindFirstChild(tostring(slot))
+    local base = s and s:FindFirstChild("Base")
+    if base and base:IsA("Frame") then return base end
     return nil
 end
+local function slotCooling(slot:number):boolean
+    local base = getHotbarBase(slot)
+    if not base then return false end
+    -- If it's visible and Y.Scale > ~0, cooldown is active; if vanished or ~0, ready.
+    local y = base.Size and base.Size.Y and base.Size.Y.Scale or 0
+    local vis = (base.Visible == nil) and true or base.Visible
+    return vis and (math.abs(y) > 0.01)
+end
+local function slotReady(slot:number):boolean
+    return not slotCooling(slot)
+end
 
-local function pressBinding(name, hold)
-    local binding = Config.ActionBindings[name]
-    if not binding then
-        return
-    end
+-- Map action -> hotbar slot in normal set; ult uses same slots but different semantics.
+local SLOT = { NP=1, CP=2, Shove=3, Upper=4 }
 
-    if binding.type == "Key" then
-        VirtualInputManager:SendKeyEvent(true, binding.key, false, game)
-        task.wait(hold or Config.InputTap)
-        VirtualInputManager:SendKeyEvent(false, binding.key, false, game)
-    elseif binding.type == "MouseButton" then
-        local button = binding.button
-        if typeof(button) == "EnumItem" then
-            button = button.Value
-        end
-        VirtualInputManager:SendMouseButtonEvent(0, 0, button, true, game, 0)
-        task.wait(hold or Config.InputTap)
-        VirtualInputManager:SendMouseButtonEvent(0, 0, button, false, game, 0)
+------------------------------ INPUT HELPERS ---------------------------------
+local function pressKey(k:Enum.KeyCode, down:boolean, hold:number?)
+    VIM:SendKeyEvent(down, k, false, game)
+    if hold and hold>0 and down then
+        task.wait(hold)
+        VIM:SendKeyEvent(false, k, false, game)
     end
 end
 
-local function tapDirectional(keyCode: Enum.KeyCode, duration: number?)
-    duration = duration or 0.2
-    VirtualInputManager:SendKeyEvent(true, keyCode, false, game)
-    task.delay(duration, function()
-        VirtualInputManager:SendKeyEvent(false, keyCode, false, game)
-    end)
+local function pressMouse(mb:Enum.UserInputType, hold:number?)
+    local b = typeof(mb)=="EnumItem" and mb.Value or mb
+    VIM:SendMouseButtonEvent(0,0,b,true,game,0); task.wait(hold or CFG.InputTap)
+    VIM:SendMouseButtonEvent(0,0,b,false,game,0)
 end
 
-local function pressAndHold(name, duration)
-    local binding = Config.ActionBindings[name]
-    if not binding then
-        return
-    end
-
-    if binding.type == "Key" then
-        VirtualInputManager:SendKeyEvent(true, binding.key, false, game)
-        task.wait(duration)
-        VirtualInputManager:SendKeyEvent(false, binding.key, false, game)
-    elseif binding.type == "MouseButton" then
-        local button = binding.button
-        if typeof(button) == "EnumItem" then
-            button = button.Value
-        end
-        VirtualInputManager:SendMouseButtonEvent(0, 0, button, true, game, 0)
-        task.wait(duration)
-        VirtualInputManager:SendMouseButtonEvent(0, 0, button, false, game, 0)
-    end
-end
-
-local function attributeActive(value: any): boolean
-    if value == nil then
-        return false
-    end
-    local valueType = typeof(value)
-    if valueType == "boolean" then
-        return value
-    elseif valueType == "number" then
-        return value ~= 0
-    elseif valueType == "string" then
-        local lower = string.lower(value)
-        return lower ~= "false" and lower ~= "0" and lower ~= ""
-    end
+local function attrOn(v:any):boolean
+    if v==nil then return false end
+    local t=typeof(v)
+    if t=="boolean" then return v end
+    if t=="number" then return v~=0 end
+    if t=="string" then local s=v:lower(); return s~="false" and s~="0" and s~="" end
     return true
 end
 
-local function aimWithCFrame(rootPart: BasePart, targetPart: BasePart)
-    if not (rootPart and targetPart) then
-        return
-    end
-    local rootPos = rootPart.Position
-    local targetPos = targetPart.Position
-    local dir = targetPos - rootPos
-    if dir.Magnitude < 0.05 then
-        return
-    end
+local function m1Gap() return CFG.M1Min + math.random() * CFG.M1Rand end
 
-    -- keep previous pitch to avoid camera snaps
-    local oldLook = rootPart.CFrame.LookVector
-    local oldPitch = math.asin(oldLook.Y)
-    local horizTarget = Vector3.new(targetPos.X, rootPos.Y, targetPos.Z)
-    local flatDir = (horizTarget - rootPos)
-    if flatDir.Magnitude <= 1e-3 then
-        flatDir = Vector3.new(oldLook.X, 0, oldLook.Z)
-    end
-    flatDir = flatDir.Unit
-    local cosPitch = math.cos(oldPitch)
-    local finalDir = Vector3.new(flatDir.X * cosPitch, math.sin(oldPitch), flatDir.Z * cosPitch)
-    rootPart.CFrame = CFrame.lookAt(rootPos, rootPos + finalDir)
+------------------------------- AIMING ---------------------------------------
+local function flat(v:Vector3) return Vector3.new(v.X,0,v.Z) end
+local function aimCFrame(root:BasePart, tgt:BasePart)
+    if not(root and tgt) then return end
+    local rp, tp = root.Position, tgt.Position
+    local dir = tp - rp; if dir.Magnitude<0.05 then return end
+    local old = root.CFrame.LookVector; local oldPitch = math.asin(old.Y)
+    local horiz = Vector3.new(tp.X,rp.Y,tp.Z); local flatv = (horiz - rp)
+    if flatv.Magnitude<=1e-3 then flatv = Vector3.new(old.X,0,old.Z) end
+    flatv = flatv.Unit
+    local cosP = math.cos(oldPitch)
+    local v = Vector3.new(flatv.X*cosP, math.sin(oldPitch), flatv.Z*cosP)
+    root.CFrame = CFrame.lookAt(rp, rp+v)
 end
 
--- JoeHub Integrations --------------------------------------------------------
-local JoeHubBridge = {}
-JoeHubBridge.__index = JoeHubBridge
-
-function JoeHubBridge.new()
-    local env = rawget(getgenv(), "joehub") or rawget(getgenv(), "JoeHub")
-    local self = setmetatable({}, JoeHubBridge)
-    if typeof(env) == "table" then
-        self.env = env
-    end
-    if self.env then
-        self.aimFunction = self.env.AimAt or self.env.AimTarget or self.env.AimStabilizer
-        self.evasiveQuery = self.env.GetEvasive or self.env.GetEvasiveState
-        self.targetingFeed = self.env.GetHostilePlayers
-    end
+--------------------------- OPTIONAL BRIDGE ----------------------------------
+local Bridge={}; Bridge.__index=Bridge
+function Bridge.new()
+    local env=rawget(getgenv(),"joehub") or rawget(getgenv(),"JoeHub")
+    local self=setmetatable({},Bridge)
+    if typeof(env)=="table" then self.env=env end
+    if self.env then self.aim = self.env.AimAt or self.env.AimTarget or self.env.AimStabilizer end
     return self
 end
+function Bridge:tryAim(rp,tp) if self.aim then local ok=pcall(self.aim,rp,tp); if ok then return true end end return false end
 
-function JoeHubBridge:getEvasive(model: Model)
-    if self.evasiveQuery then
-        local ok, result = pcall(self.evasiveQuery, model)
-        if ok and result ~= nil then
-            return result
+---------------------------- LEARNING STORE ----------------------------------
+local LS={}; LS.__index=LS
+local function sid(id:string?):string if not id then return "unk" end local n=id:match("(%d+)$"); return n or id end
+local function ema(old,v,a) return old + a*(v-old) end
+function LS.new()
+    local self=setmetatable({},LS)
+    self.dir=CFG.Data; self.file=self.dir.."/learning.json"; self.sdir=self.dir.."/sessions"
+    self.data={combos={},A={},moves={},sessions=0,last=os.time(),ev={total=0,optimal=0,subopt=0}}
+    self._dirty=false; self._lastFlush=0
+    mkfolder(self.dir); mkfolder(self.sdir)
+    local raw=rfile(self.file); if raw then pcall(function()
+        local d=HttpService:JSONDecode(raw)
+        if typeof(d)=="table" then
+            self.data.combos=d.combos or {}; self.data.A=d.A or {}; self.data.moves=d.moves or {}
+            self.data.sessions=d.sessions or 0; self.data.ev=d.ev or self.data.ev
         end
-    end
-    local readyAttr = model:GetAttribute("EvasiveReady")
-    if typeof(readyAttr) == "boolean" then
-        return readyAttr
-    end
-    local cdAttr = model:GetAttribute("EvasiveCooldown")
-    if typeof(cdAttr) == "number" then
-        return cdAttr <= 0
-    end
-    return nil
-end
-
-function JoeHubBridge:aim(rootPart: BasePart, targetPart: BasePart)
-    if self.aimFunction then
-        local ok = pcall(self.aimFunction, rootPart, targetPart)
-        if ok then
-            return true
-        end
-    end
-    return false
-end
-
-function JoeHubBridge:getTargets()
-    if self.targetingFeed then
-        local ok, result = pcall(self.targetingFeed)
-        if ok and typeof(result) == "table" then
-            return result
-        end
-    end
-    return nil
-end
-
--- Learning Store -------------------------------------------------------------
-local LearningStore = {}
-LearningStore.__index = LearningStore
-
-function LearningStore.new()
-    local self = setmetatable({}, LearningStore)
-    self.folder = Config.DataFolder
-    self.learningFile = string.format("%s/learning.json", self.folder)
-    self.sessionsFolder = string.format("%s/sessions", self.folder)
-    self.learning = {
-        combos = {},
-        sessions = 0,
-        lastUpdate = os.time(),
-    }
-    self:load()
+    end) end
     return self
 end
+function LS:_flag() self._dirty=true end
+function LS:flush() local now=os.clock(); if self._dirty and now-(self._lastFlush or 0)>=CFG.Flush then self.data.last=os.time(); wfile(self.file,HttpService:JSONEncode(self.data)); self._dirty=false; self._lastFlush=now end end
+function LS:startSession() self.data.sessions+=1; self:_flag(); local id=os.date("%Y%m%d-%H%M%S"); local p=self.sdir.."/"..id..".jsonl"; wfile(p,""); self.cur=p; return p end
+function LS:log(ev,p) if self.cur then afile(self.cur, HttpService:JSONEncode({t=os.clock(),event=ev,data=p}).."\n") end end
 
-function LearningStore:ensure()
-    safeMakeFolder(self.folder)
-    safeMakeFolder(self.sessionsFolder)
+function LS:combo(id) local c=self.data.combos[id]; if not c then c={att=0,succ=0,dmgt=0,last=0}; self.data.combos[id]=c end return c end
+function LS:att(id) local c=self:combo(id); c.att+=1; c.last=os.time(); self:_flag() end
+function LS:res(id,ok,dm) local c=self:combo(id); if ok then c.succ+=1; c.last=os.time() end; c.dmgt+=(dm>0 and dm or 0); self:_flag() end
+
+local function getA(self,id) id=sid(id); local a=self.data.A[id]; if not a then a={seen=0,open=0,block=0,prevent=0,dealt=0}; self.data.A[id]=a end; return id,a end
+function LS:seen(id,dur) local _,a=getA(self,id); a.seen+=1; self:_flag() end
+function LS:dmgFrom(id,blocked,amt) local _,a=getA(self,id); local al=0.2; if blocked then a.block=ema(a.block,math.max(0,amt),al) else a.open=ema(a.open,math.max(0,amt),al) end; self:_flag() end
+function LS:prevent(id) local _,a=getA(self,id); a.prevent=ema(a.prevent,1.0,0.1); self:_flag() end
+function LS:deal(id,amt) local _,a=getA(self,id); a.dealt=ema(a.dealt,math.max(0,amt),0.2); self:_flag() end
+function LS:threat(id) local _,a=getA(self,id); return (a.open - a.block) + (a.prevent or 0)*1.5 end
+function LS:moveStats(name:string) local m=self.data.moves[name]; if not m then m={n=0,rsum=0.0,ravg=0.0,last=0} self.data.moves[name]=m end return m end
+function LS:moveAdd(name:string, reward:number) local m=self:moveStats(name); m.n+=1; m.rsum+=reward; m.ravg=m.rsum/math.max(1,m.n); m.last=os.time(); self:_flag(); self:log("move_result",{name=name,reward=reward,n=m.n,ravg=m.ravg}) end
+function LS:markEv(opt:boolean) self.data.ev.total+=1; if opt then self.data.ev.optimal+=1 else self.data.ev.subopt+=1 end; self:_flag() end
+
+------------------------------- GUI ------------------------------------------
+local GUI={}; GUI.__index=GUI
+local function text(p,n,t,sz,pos,ts,bold)
+    local l=Instance.new("TextLabel"); l.Name=n; l.Size=sz; l.Position=pos
+    l.BackgroundColor3=Color3.fromRGB(24,24,24); l.BackgroundTransparency=0.35
+    l.TextColor3=Color3.fromRGB(235,235,235); l.Font=bold and Enum.Font.GothamBold or Enum.Font.Gotham
+    l.TextSize=ts; l.Text=t; l.BorderSizePixel=0; l.TextXAlignment=Enum.TextXAlignment.Left; l.TextYAlignment=Enum.TextYAlignment.Center; l.Parent=p
+    local pad=Instance.new("UIPadding"); pad.PaddingLeft=UDim.new(0,10); pad.Parent=l; return l
 end
-
-function LearningStore:load()
-    self:ensure()
-    local raw = safeReadFile(self.learningFile)
-    if not raw then
-        return
-    end
-    local ok, decoded = pcall(function()
-        return HttpService:JSONDecode(raw)
-    end)
-    if ok and typeof(decoded) == "table" then
-        if typeof(decoded.combos) ~= "table" then
-            decoded.combos = {}
-        end
-        self.learning = decoded
-    end
+local function btn(p,n,t,sz,pos,clr)
+    local b=Instance.new("TextButton"); b.Name=n; b.Size=sz; b.Position=pos
+    b.BackgroundColor3=clr or Color3.fromRGB(48,60,96)
+    b.TextColor3=Color3.fromRGB(240,240,240); b.Font=Enum.Font.GothamBold; b.TextSize=18; b.Text=t; b.BorderSizePixel=0; b.AutoButtonColor=true
+    local s=Instance.new("UIStroke"); s.Color=Color3.fromRGB(94,123,255); s.Thickness=1.4; s.Transparency=0.35; s.Parent=b; b.Parent=p; return b
 end
-
-function LearningStore:save()
-    self.learning.lastUpdate = os.time()
-    local encoded = HttpService:JSONEncode(self.learning)
-    safeWriteFile(self.learningFile, encoded)
+local function drag(f:Frame)
+    local g=false; local st,sp
+    f.InputBegan:Connect(function(i) if i.UserInputType==Enum.UserInputType.MouseButton1 then g=true; st=i.Position; sp=f.Position; i.Changed:Connect(function() if i.UserInputState==Enum.UserInputState.End then g=false end end) end end)
+    f.InputChanged:Connect(function(i) if g and i.UserInputType==Enum.UserInputType.MouseMovement then local d=i.Position-st; f.Position=UDim2.new(sp.X.Scale,sp.X.Offset+d.X,sp.Y.Scale,sp.Y.Offset+d.Y) end end)
 end
+function GUI.new()
+    local self=setmetatable({},GUI)
+    local g=Instance.new("ScreenGui"); g.Name="BGBotUI"; g.ResetOnSpawn=false; g.ZIndexBehavior=Enum.ZIndexBehavior.Sibling; g.Parent=gethui and gethui() or game:GetService("CoreGui")
+    local f=Instance.new("Frame"); f.Name="Main"; f.Size=UDim2.new(0,520,0,336); f.Position=UDim2.new(0,60,0,100); f.BackgroundColor3=Color3.fromRGB(17,18,26); f.BorderSizePixel=0; f.Parent=g; drag(f)
+    local s=Instance.new("UIStroke"); s.Color=Color3.fromRGB(76,110,255); s.Thickness=1.5; s.Transparency=0.15; s.Parent=f
 
-function LearningStore:startSession()
-    self:ensure()
-    self.learning.sessions += 1
-    self:save()
-    local sessionId = os.date("%Y%m%d-%H%M%S")
-    local path = string.format("%s/%s.jsonl", self.sessionsFolder, sessionId)
-    safeWriteFile(path, "")
-    self.currentSessionPath = path
-    return path
-end
+    local title=text(f,"T","Aggro Bot v6.0", UDim2.new(1,0,0,32),UDim2.new(0,0,0,0),20,true); title.BackgroundTransparency=1; title.TextColor3=Color3.fromRGB(205,214,255)
+    self.status =text(f,"S","Status: idle", UDim2.new(1,-20,0,24),UDim2.new(0,10,0,34),18,false)
+    self.target =text(f,"A","Target: none", UDim2.new(1,-20,0,24),UDim2.new(0,10,0,60),18,false)
+    self.combo  =text(f,"C","Combo: none", UDim2.new(1,-20,0,24),UDim2.new(0,10,0,86),18,false)
+    self.ev     =text(f,"E","Evasive: ready",UDim2.new(1,-20,0,24),UDim2.new(0,10,0,112),18,false)
 
-function LearningStore:log(eventName: string, payload: table)
-    if not self.currentSessionPath then
-        return
-    end
-    local entry = {
-        t = os.clock(),
-        event = eventName,
-        data = payload,
-    }
-    safeAppendFile(self.currentSessionPath, HttpService:JSONEncode(entry) .. "\n")
-end
+    local startB=btn(f,"Start","Start", UDim2.new(0.33,-10,0,30), UDim2.new(0,10,0,148))
+    local stopB =btn(f,"Stop","Stop",  UDim2.new(0.33,-10,0,30), UDim2.new(0.33,0,0,148), Color3.fromRGB(120,50,50))
+    local exitB =btn(f,"Exit","Exit",  UDim2.new(0.33,-10,0,30), UDim2.new(0.66,10,0,148), Color3.fromRGB(80,30,30))
 
-function LearningStore:getCombo(comboId: string)
-    local combos = self.learning.combos
-    if not combos[comboId] then
-        combos[comboId] = {
-            attempts = 0,
-            successes = 0,
-            totalDamage = 0,
-            lastSuccess = 0,
-        }
-    end
-    return combos[comboId]
-end
+    self.moves = text(f,"M","Dash CDs: F=0.00 | B=0.00 | S=0.00", UDim2.new(1,-20,0,20), UDim2.new(0,10,0,182), 14, false)
+    self.rules = text(f,"R","FDash[18..34] • SideOff relock≤3.5 • OB bias • Block>5s→force-unblock • M1 chain≈0.25–0.35s", UDim2.new(1,-20,0,20), UDim2.new(0,10,0,204), 12, false)
 
-function LearningStore:recordAttempt(comboId: string)
-    local combo = self:getCombo(comboId)
-    combo.attempts += 1
-    combo.lastAttempt = os.time()
-    self:save()
-end
+    local panel=Instance.new("Frame"); panel.Name="Combos"; panel.Size=UDim2.new(1,-20,1,-238); panel.Position=UDim2.new(0,10,0,238)
+    panel.BackgroundColor3=Color3.fromRGB(20,22,30); panel.BorderSizePixel=0; panel.Parent=f
+    local pst=Instance.new("UIStroke"); pst.Color=Color3.fromRGB(76,110,255); pst.Thickness=1; pst.Transparency=0.2; pst.Parent=panel
 
-function LearningStore:recordResult(comboId: string, success: boolean, damage: number)
-    local combo = self:getCombo(comboId)
-    if success then
-        combo.successes += 1
-        combo.lastSuccess = os.time()
-    end
-    combo.totalDamage += math.max(0, damage)
-    self:save()
-end
+    self.ctitle = text(panel,"CT","Combo Tracker",UDim2.new(1,-10,0,22),UDim2.new(0,6,0,4),16,true); self.ctitle.BackgroundTransparency=1
+    local list=Instance.new("ScrollingFrame"); list.Name="List"; list.Size=UDim2.new(1,-10,1,-30); list.Position=UDim2.new(0,5,0,26)
+    list.CanvasSize=UDim2.new(0,0,0,0); list.BackgroundTransparency=1; list.BorderSizePixel=0; list.ScrollBarThickness=4; list.Parent=panel
+    local ul=Instance.new("UIListLayout"); ul.Padding=UDim.new(0,4); ul.SortOrder=Enum.SortOrder.LayoutOrder; ul.Parent=list
+    self.comboList=list; self.comboLayout=ul
 
-function LearningStore:reset()
-    self.learning = {
-        combos = {},
-        sessions = 0,
-        lastUpdate = os.time(),
-    }
-    self:save()
-end
-
--- GUI ------------------------------------------------------------------------
-local GuiController = {}
-GuiController.__index = GuiController
-
-local function createText(parent: Instance, name: string, text: string, size: UDim2, position: UDim2, textSize: number, bold: boolean)
-    local label = Instance.new("TextLabel")
-    label.Name = name
-    label.Size = size
-    label.Position = position
-    label.BackgroundColor3 = Color3.fromRGB(24, 24, 24)
-    label.BackgroundTransparency = 0.35
-    label.TextColor3 = Color3.fromRGB(235, 235, 235)
-    label.Font = bold and Enum.Font.GothamBold or Enum.Font.Gotham
-    label.TextSize = textSize
-    label.Text = text
-    label.TextXAlignment = Enum.TextXAlignment.Left
-    label.TextYAlignment = Enum.TextYAlignment.Center
-    label.BorderSizePixel = 0
-    label.Parent = parent
-    local padding = Instance.new("UIPadding")
-    padding.PaddingLeft = UDim.new(0, 10)
-    padding.Parent = label
-    return label
-end
-
-local function createButton(parent: Instance, name: string, text: string, size: UDim2, position: UDim2)
-    local button = Instance.new("TextButton")
-    button.Name = name
-    button.Size = size
-    button.Position = position
-    button.BackgroundColor3 = Color3.fromRGB(48, 60, 96)
-    button.TextColor3 = Color3.fromRGB(240, 240, 240)
-    button.Font = Enum.Font.GothamBold
-    button.TextSize = 18
-    button.Text = text
-    button.BorderSizePixel = 0
-    button.AutoButtonColor = true
-    local stroke = Instance.new("UIStroke")
-    stroke.Color = Color3.fromRGB(94, 123, 255)
-    stroke.Thickness = 1.4
-    stroke.Transparency = 0.35
-    stroke.Parent = button
-    button.Parent = parent
-    return button
-end
-
-local function enableDragging(frame: Frame)
-    local dragging = false
-    local dragStart, startPos
-
-    frame.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 then
-            dragging = true
-            dragStart = input.Position
-            startPos = frame.Position
-            input.Changed:Connect(function()
-                if input.UserInputState == Enum.UserInputState.End then
-                    dragging = false
-                end
-            end)
-        end
-    end)
-
-    frame.InputChanged:Connect(function(input)
-        if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
-            local delta = input.Position - dragStart
-            frame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
-        end
-    end)
-end
-
-function GuiController.new()
-    local self = setmetatable({}, GuiController)
-
-    local screenGui = Instance.new("ScreenGui")
-    screenGui.Name = "BattlegroundBotUI"
-    screenGui.ResetOnSpawn = false
-    screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-    screenGui.Parent = gethui and gethui() or game:GetService("CoreGui")
-
-    local frame = Instance.new("Frame")
-    frame.Name = "MainFrame"
-    frame.Size = UDim2.new(0, 360, 0, 320)
-    frame.Position = UDim2.new(0, 60, 0, 100)
-    frame.BackgroundColor3 = Color3.fromRGB(17, 18, 26)
-    frame.BorderSizePixel = 0
-    local stroke = Instance.new("UIStroke")
-    stroke.Color = Color3.fromRGB(76, 110, 255)
-    stroke.Thickness = 1.5
-    stroke.Transparency = 0.15
-    stroke.Parent = frame
-    frame.Parent = screenGui
-    enableDragging(frame)
-
-    local title = createText(frame, "Title", "JoeHub Battleground Bot", UDim2.new(1, 0, 0, 36), UDim2.new(0, 0, 0, 0), 20, true)
-    title.BackgroundTransparency = 1
-    title.TextColor3 = Color3.fromRGB(205, 214, 255)
-
-    local statusLabel = createText(frame, "Status", "Status: idle", UDim2.new(1, -20, 0, 26), UDim2.new(0, 10, 0, 46), 18, false)
-    local targetLabel = createText(frame, "Target", "Target: none", UDim2.new(1, -20, 0, 26), UDim2.new(0, 10, 0, 78), 18, false)
-    local comboLabel = createText(frame, "Combo", "Combo: none", UDim2.new(1, -20, 0, 26), UDim2.new(0, 10, 0, 110), 18, false)
-    local evasiveLabel = createText(frame, "Evasive", "Evasive: ready", UDim2.new(1, -20, 0, 26), UDim2.new(0, 10, 0, 142), 18, false)
-
-    local startButton = createButton(frame, "StartButton", "Start Bot", UDim2.new(0.5, -15, 0, 36), UDim2.new(0, 10, 0, 180))
-    local stopButton = createButton(frame, "StopButton", "Stop Bot", UDim2.new(0.5, -15, 0, 36), UDim2.new(0.5, 5, 0, 180))
-    stopButton.BackgroundColor3 = Color3.fromRGB(120, 50, 50)
-
-    local panicButton = createButton(frame, "PanicButton", "Panic Evasive", UDim2.new(1, -20, 0, 32), UDim2.new(0, 10, 0, 224))
-    panicButton.BackgroundColor3 = Color3.fromRGB(110, 40, 40)
-
-    local resetLearningButton = createButton(frame, "ResetLearning", "Reset Learning", UDim2.new(1, -20, 0, 32), UDim2.new(0, 10, 0, 264))
-    resetLearningButton.BackgroundColor3 = Color3.fromRGB(48, 70, 120)
-
-    local learningFrame = Instance.new("Frame")
-    learningFrame.Name = "LearningFrame"
-    learningFrame.Size = UDim2.new(0, 240, 0, 140)
-    learningFrame.Position = UDim2.new(1, 10, 0, 0)
-    learningFrame.BackgroundColor3 = Color3.fromRGB(20, 22, 30)
-    learningFrame.BorderSizePixel = 0
-    learningFrame.Visible = false
-    local learningStroke = Instance.new("UIStroke")
-    learningStroke.Color = Color3.fromRGB(76, 110, 255)
-    learningStroke.Thickness = 1
-    learningStroke.Transparency = 0.2
-    learningStroke.Parent = learningFrame
-    learningFrame.Parent = frame
-
-    local learningTitle = createText(learningFrame, "LearningTitle", "Combo Learning", UDim2.new(1, -10, 0, 30), UDim2.new(0, 5, 0, 2), 18, true)
-    learningTitle.BackgroundTransparency = 1
-
-    local learningList = Instance.new("ScrollingFrame")
-    learningList.Name = "LearningList"
-    learningList.Size = UDim2.new(1, -10, 1, -36)
-    learningList.Position = UDim2.new(0, 5, 0, 34)
-    learningList.CanvasSize = UDim2.new(0, 0, 0, 0)
-    learningList.BackgroundTransparency = 1
-    learningList.BorderSizePixel = 0
-    learningList.ScrollBarThickness = 4
-    learningList.Parent = learningFrame
-
-    local uiList = Instance.new("UIListLayout")
-    uiList.Padding = UDim.new(0, 6)
-    uiList.HorizontalAlignment = Enum.HorizontalAlignment.Left
-    uiList.VerticalAlignment = Enum.VerticalAlignment.Top
-    uiList.SortOrder = Enum.SortOrder.LayoutOrder
-    uiList.Parent = learningList
-
-    self.gui = screenGui
-    self.frame = frame
-    self.statusLabel = statusLabel
-    self.targetLabel = targetLabel
-    self.comboLabel = comboLabel
-    self.evasiveLabel = evasiveLabel
-    self.startButton = startButton
-    self.stopButton = stopButton
-    self.panicButton = panicButton
-    self.resetLearningButton = resetLearningButton
-    self.learningFrame = learningFrame
-    self.learningList = learningList
-    self.learningLayout = uiList
-
-    startButton.MouseButton1Click:Connect(function()
-        if BotController then
-            BotController:start()
-        end
-    end)
-
-    stopButton.MouseButton1Click:Connect(function()
-        if BotController then
-            BotController:stop()
-        end
-    end)
-
-    panicButton.MouseButton1Click:Connect(function()
-        if BotController then
-            BotController:panicEvasive(true)
-        end
-    end)
-
-    resetLearningButton.MouseButton1Click:Connect(function()
-        if BotController then
-            BotController:resetLearning()
-        end
-    end)
-
+    self.gui=g; self.frame=f; self.startB=startB; self.stopB=stopB; self.exitB=exitB
     return self
 end
-
-function GuiController:setStatus(text: string)
-    if self.statusLabel then
-        self.statusLabel.Text = text
+function GUI:setS(t) self.status.Text=t end
+function GUI:setT(t) self.target.Text=t end
+function GUI:setC(t) self.combo.Text=t end
+function GUI:setE(t) self.ev.Text=t end
+function GUI:updateCDs(f,b,s) self.moves.Text = string.format("Dash CDs: F=%.2f | B=%.2f | S=%.2f", math.max(0,f), math.max(0,b), math.max(0,s)) end
+function GUI:updateCombos(data)
+    for _,ch in ipairs(self.comboList:GetChildren()) do if ch:IsA("TextLabel") then ch:Destroy() end end
+    local combos = data.combos or {}
+    local rows = {}
+    for id,info in pairs(combos) do
+        local att = info.att or 0; local succ=info.succ or 0; local sr = (att>0) and (succ/att*100) or 0
+        table.insert(rows, {id=id, att=att, succ=succ, sr=sr, dmgt=info.dmgt or 0})
     end
+    table.sort(rows,function(a,b) if a.sr==b.sr then return a.dmgt>b.dmgt end return a.sr>b.sr end)
+    for _,r in ipairs(rows) do
+        local l=Instance.new("TextLabel"); l.Size=UDim2.new(1,-6,0,20); l.BackgroundTransparency=1
+        l.TextColor3=Color3.fromRGB(210,220,255); l.Font=Enum.Font.Gotham; l.TextSize=14; l.TextXAlignment=Enum.TextXAlignment.Left
+        l.Text=string.format("%-14s | %2d/%2d | %5.1f%% | dmg %.0f", r.id, r.succ, r.att, r.sr, r.dmgt); l.Parent=self.comboList
+    end
+    self.comboList.CanvasSize=UDim2.new(0,0,0,self.comboLayout.AbsoluteContentSize.Y+8)
 end
+function GUI:destroy() if self.gui then self.gui:Destroy() end end
 
-function GuiController:setTarget(text: string)
-    if self.targetLabel then
-        self.targetLabel.Text = text
-    end
-end
+------------------------------- COMBOS ---------------------------------------
+type Step = {kind:string, action:string?, hold:number?, wait:number?, dir:string?}
+type Combo = {id:string, name:string, reqNoEv:boolean?, min:number?, max:number?, steps:{Step}, traits:{string}?, risk:number?}
+local function hasTrait(c:Combo,t:string):boolean if not c.traits then return false end for _,x in ipairs(c.traits) do if x==t then return true end end return false end
 
-function GuiController:setCombo(text: string)
-    if self.comboLabel then
-        self.comboLabel.Text = text
-    end
-end
-
-function GuiController:setEvasive(text: string)
-    if self.evasiveLabel then
-        self.evasiveLabel.Text = text
-    end
-end
-
-function GuiController:showLearning(show: boolean)
-    if self.learningFrame then
-        self.learningFrame.Visible = show
-    end
-end
-
-function GuiController:updateLearningList(learning: table)
-    if not self.learningList then
-        return
-    end
-    local layout: UIListLayout? = self.learningLayout
-    for _, child in ipairs(self.learningList:GetChildren()) do
-        if child:IsA("TextLabel") then
-            child:Destroy()
-        end
-    end
-    for comboId, info in pairs(learning.combos or {}) do
-        local label = Instance.new("TextLabel")
-        label.Size = UDim2.new(1, -6, 0, 32)
-        label.BackgroundTransparency = 1
-        label.TextColor3 = Color3.fromRGB(210, 220, 255)
-        label.Font = Enum.Font.Gotham
-        label.TextSize = 16
-        local successRate = 0
-        if info.attempts > 0 then
-            successRate = (info.successes / info.attempts) * 100
-        end
-        label.TextXAlignment = Enum.TextXAlignment.Left
-        label.Text = string.format("%s | %d/%d | %.1f%% | dmg %.0f", comboId, info.successes or 0, info.attempts or 0, successRate, info.totalDamage or 0)
-        label.Parent = self.learningList
-    end
-    if layout then
-        self.learningList.CanvasSize = UDim2.new(0, 0, 0, layout.AbsoluteContentSize.Y + 10)
-    end
-end
-
-function GuiController:destroy()
-    if self.gui then
-        self.gui:Destroy()
-    end
-end
-
--- Combo Definitions ---------------------------------------------------------
-export type ComboStep = {
-    kind: string,
-    action: string?,
-    hold: number?,
-    wait: number?,
-}
-
-type ComboDefinition = {
-    id: string,
-    name: string,
-    requiresNoEvasive: boolean?,
-    minimumRange: number?,
-    maximumRange: number?,
-    steps: { ComboStep },
-    traits: { string }?,
-}
-
-local ComboLibrary: { ComboDefinition } = {
+-- Safer, M1-first heavy library. Upper is a situational finisher, not spammed.
+local LIB:{Combo} = {
+    -- Shove-tech (only valid if our M1 chain index is 1 or 2)
     {
-        id = "saitama_tc1",
-        name = "TC: M1 > Shove > CP > M1 > NP",
-        requiresNoEvasive = false,
-        minimumRange = 0,
-        maximumRange = 8,
-        steps = {
-            { kind = "aim" },
-            { kind = "press", action = "M1", hold = Config.InputHoldShort, wait = Config.M1ChainInterval },
-            { kind = "press", action = "Shove", wait = 0.32 },
-            { kind = "press", action = "SideDash", direction = "right", wait = 0.08 },
-            { kind = "press", action = "ConsecutivePunches", wait = 0.55 },
-            { kind = "press", action = "M1", wait = Config.M1ChainInterval },
-            { kind = "press", action = "NormalPunch" },
+        id="sai_sd_m1h",
+        name="M1(1-2)->Shove->Side(off)->M1(HOLD)",
+        min=0, max=10, risk=0.25,
+        steps={
+            {kind="aim"},
+            {kind="press",action="Shove",wait=0.10},
+            {kind="dash",action="side",dir="off",wait=0.06},
+            {kind="press",action="M1HOLD",hold=CFG.TapM,wait=m1Gap()},
         },
-        traits = { "guardbreak", "pressure" },
+        traits={"pressure","guardbreak"}
     },
+    -- Core string: M1 > M1 > CP > M1 > NP (NP finisher)
     {
-        id = "saitama_tc2",
-        name = "TC: M1x2 > Shove > Upper",
-        requiresNoEvasive = false,
-        minimumRange = 0,
-        maximumRange = 8,
-        steps = {
-            { kind = "aim" },
-            { kind = "press", action = "M1", hold = Config.InputHoldShort, wait = Config.M1ChainInterval },
-            { kind = "press", action = "M1", hold = Config.InputHoldShort, wait = Config.M1ChainInterval },
-            { kind = "press", action = "Shove", wait = 0.3 },
-            { kind = "press", action = "SideDash", direction = "left", wait = 0.08 },
-            { kind = "press", action = "Uppercut" },
+        id="sai_m1cp_np",
+        name="M1x2>CP>M1>NP",
+        min=0, max=8, risk=0.35,
+        steps={
+            {kind="aim"},
+            {kind="press",action="M1",hold=CFG.TapS,wait=m1Gap()},
+            {kind="press",action="M1",hold=CFG.TapS,wait=m1Gap()},
+            {kind="press",action="CP",wait=0.40},
+            {kind="press",action="M1",wait=m1Gap()},
+            {kind="press",action="NP"},
         },
-        traits = { "launcher", "fast" },
+        traits={"finisher_np"}
     },
+    -- Launcher path, but used less often and only when it makes sense
     {
-        id = "saitama_ecc1",
-        name = "ECC: 3M1 > Upper > CP > NP",
-        requiresNoEvasive = true,
-        minimumRange = 0,
-        maximumRange = 8,
-        steps = {
-            { kind = "aim" },
-            { kind = "press", action = "M1", hold = Config.InputHoldShort, wait = Config.M1ChainInterval },
-            { kind = "press", action = "M1", hold = Config.InputHoldShort, wait = Config.M1ChainInterval },
-            { kind = "press", action = "M1", hold = Config.InputHoldShort, wait = Config.M1ChainInterval },
-            { kind = "press", action = "Uppercut", wait = 0.35 },
-            { kind = "press", action = "SideDash", direction = "right", wait = 0.12 },
-            { kind = "press", action = "M1", wait = Config.M1ChainInterval },
-            { kind = "press", action = "ConsecutivePunches", wait = 0.45 },
-            { kind = "press", action = "M1", wait = Config.M1ChainInterval },
-            { kind = "press", action = "NormalPunch" },
+        id="sai_upper_path",
+        name="M1>Upper (situational) -> Dash follow",
+        min=0, max=8, reqNoEv=true, risk=0.55,
+        steps={
+            {kind="aim"},
+            {kind="press",action="M1",hold=CFG.TapS,wait=m1Gap()},
+            {kind="press",action="Upper",wait=0.28},
+            {kind="dash",action="auto_after_upper",dir="smart",wait=0.10},
         },
-        traits = { "burst", "requires_evasive" },
-    },
-    {
-        id = "saitama_mix1",
-        name = "Mix: M1 > Dash > M1 > CP > Upper",
-        minimumRange = 0,
-        maximumRange = 8,
-        steps = {
-            { kind = "aim" },
-            { kind = "press", action = "M1", hold = Config.InputHoldShort, wait = Config.M1ChainInterval },
-            { kind = "press", action = "SideDash", direction = "right", wait = 0.1 },
-            { kind = "press", action = "M1", hold = Config.InputHoldShort, wait = Config.M1ChainInterval },
-            { kind = "press", action = "ConsecutivePunches", wait = 0.45 },
-            { kind = "press", action = "Uppercut" },
-        },
-        traits = { "mixup", "launcher" },
-    },
-    {
-        id = "saitama_mix2",
-        name = "Mix: M1 > Shove > M1x2 > NP",
-        minimumRange = 0,
-        maximumRange = 8,
-        steps = {
-            { kind = "aim" },
-            { kind = "press", action = "M1", hold = Config.InputHoldShort, wait = Config.M1ChainInterval },
-            { kind = "press", action = "Shove", wait = 0.28 },
-            { kind = "press", action = "M1", hold = Config.InputHoldShort, wait = Config.M1ChainInterval },
-            { kind = "press", action = "M1", hold = Config.InputHoldShort, wait = Config.M1ChainInterval },
-            { kind = "press", action = "NormalPunch" },
-        },
-        traits = { "guardbreak", "fast" },
+        traits={"launcher","requires_evasive"}
     },
 }
 
-local function comboHasTrait(combo: ComboDefinition, trait: string): boolean
-    if not combo.traits then
-        return false
-    end
-    for _, tag in ipairs(combo.traits) do
-        if tag == trait then
-            return true
-        end
-    end
-    return false
-end
-
--- Bot Controller ------------------------------------------------------------
-local Bot = {}
-Bot.__index = Bot
-
-type EnemyRecord = {
-    model: Model,
-    humanoid: Humanoid?,
-    hrp: BasePart?,
-    distance: number,
-    hasEvasive: boolean,
-    lastEvasive: number,
-    threatScore: number,
-    player: Player?,
-    lastKnownHealth: number,
-    style: {
-        aggression: number,
-        defense: number,
-        evasive: number,
-        lastAttackTime: number,
-        lastBlockTime: number,
-        lastDashTime: number,
-    }?,
-    recentDamage: number?,
+------------------------------ BOT CORE --------------------------------------
+local Bot={}; Bot.__index=Bot
+type Enemy = {
+    model:Model, hum:Humanoid?, hrp:BasePart?, dist:number,
+    hasEv:boolean, lastEv:number, score:number, ply:Player?, hp:number,
+    style:{aggr:number, def:number, ev:number, lastAtk:number, lastBlk:number, lastDash:number},
+    recent:number,    -- recent damage we took from them (aggression)
+    aRecent:number,   -- recent damage we dealt to them (pressure)
+    active:{[AnimationTrack]:{id:string,start:number,wasBlk:boolean,hit:boolean}},
+    cons:{RBXScriptConnection},
+    aggro:number,     -- blended aggro metric
 }
 
 function Bot.new()
-    local self = setmetatable({}, Bot)
-    self.gui = GuiController.new()
-    self.learningStore = LearningStore.new()
-    self.bridge = JoeHubBridge.new()
-    self.enemies = {}
-    self.running = false
-    self.state = "idle"
-    self.sessionStart = 0
-    self.sessionFile = nil
-    self.currentCombo = nil
-    self.currentTarget = nil
-    self.lastComboAttempt = 0
-    self.actionThread = nil
-    self.evasiveLock = 0
-    self.lastDamageTaken = 0
-    self.humanoid = nil
-    self.rootPart = nil
-    self.character = nil
-    self.alive = false
-    self.evasiveReady = true
-    self.evasiveTimer = 0
-    self.shouldPanicEvasive = false
-    self.lastForwardDash = 0
-    self.lastBackDash = 0
-    self.lastBasicAttack = 0
-    self.lastAttackerName = nil
-    self.lastDamageBy = nil
-    self.lastDamageTime = 0
-    self.lastDamageAmount = 0
-    self.blockHoldUntil = 0
-    self.liveFolder = workspace:WaitForChild("Live")
-    self.liveCharacter = self.liveFolder:FindFirstChild(LocalPlayer.Name)
-    self.liveCharacterConn = nil
-    self.blocking = false
-    self.blockThread = nil
-    self.lastBlockTime = 0
-    self.moveKeyState = {
-        [Enum.KeyCode.W] = false,
-        [Enum.KeyCode.A] = false,
-        [Enum.KeyCode.S] = false,
-        [Enum.KeyCode.D] = false,
-    }
-    self.currentStrafe = 0
-    self.lastStrafeSwitch = 0
+    local self=setmetatable({},Bot)
 
-    self.gui:setStatus("Status: idle")
-    self.gui:setTarget("Target: none")
-    self.gui:setCombo("Combo: none")
-    self.gui:setEvasive("Evasive: unknown")
-    self.gui:showLearning(true)
-    self.gui:updateLearningList(self.learningStore.learning)
+    -- UI / learning
+    self.gui=GUI.new()
+    self.ls=LS.new()
+    self.bridge=Bridge.new()
 
-    self:connectCharacter(LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait())
+    -- state
+    self.enemies = {} :: {[Model]:Enemy}
+    self.run=false; self.state="idle"; self.actThread=nil
+    self.char=nil; self.hum=nil; self.rp=nil; self.alive=false
 
-    LocalPlayer.CharacterAdded:Connect(function(char)
-        self:connectCharacter(char)
+    self.evReady=true; self.evTimer=0; self.shouldPanic=false
+    self.lastFD=0; self.lastBD=0; self.lastSide=0
+    self.lastM1=0; self.lastSkill=0; self.lastSnipe=0
+    self.lastAttacker=nil; self.lastAtkTime=0; self.lastDmg=0; self.lastHP=0
+
+    self.blocking=false; self.blockUntil=0; self.blockThread=nil; self.lastBlockTime=0; self.blockCooldown=0
+    self.blockStartTime=nil
+
+    self.moveKeys={ [Enum.KeyCode.W]=false,[Enum.KeyCode.A]=false,[Enum.KeyCode.S]=false,[Enum.KeyCode.D]=false }
+    self.strafe=0; self.lastStrafe=0
+
+    self.live=workspace:WaitForChild("Live"); self.liveChar=self.live:FindFirstChild(LP.Name); self.liveConn=nil
+
+    -- my anims + flags
+    self.myAnims={}; self.myHumConns={}
+    self.attackActive={}   -- set of active attack tracks
+    self.isAttacking=false
+    self.isM1ing=false
+    self.m1ChainCount=0    -- 1..4 tracking; resets after pause or non-M1
+
+    self.lastAttempt=os.clock(); self.urgency=0
+    self.arcUntil=0; self.closeT=os.clock(); self.closeD=math.huge
+    self.pendingResume=false
+
+    -- Keep-orientation dash controller
+    self.inDash=false
+    self.dashOrientThread=nil
+    self.dashPending = nil -- {kind="fdash"/"bdash"/"side", style="off"/"def", tHRP:BasePart?}
+
+    -- Sticky targeting
+    self.sticky=nil          -- Enemy?
+    self.stickyT=0           -- last assign time
+    self.stickyHold=1.6      -- seconds; resist switches
+    self.switchMargin=25.0   -- require score advantage to switch
+
+    -- Idle punish
+    self.stillTimer=0
+
+    -- Ult state cache
+    self.isUlt=false
+    self.lastUltCheck=0
+
+    self.gui.startB.MouseButton1Click:Connect(function() if getgenv().BattlegroundsBot then getgenv().BattlegroundsBot:start() end end)
+    self.gui.stopB.MouseButton1Click:Connect(function() if getgenv().BattlegroundsBot then getgenv().BattlegroundsBot:stop() end end)
+    self.gui.exitB.MouseButton1Click:Connect(function() if getgenv().BattlegroundsBot then getgenv().BattlegroundsBot:exit() end end)
+
+    self.gui:setS("Status: idle"); self.gui:setT("Target: none"); self.gui:setC("Combo: none"); self.gui:setE("Evasive: unknown")
+    self.gui:updateCombos(self.ls.data); self.gui:updateCDs(0,0,0)
+
+    self:connectChar(LP.Character or LP.CharacterAdded:Wait())
+    LP.CharacterAdded:Connect(function(c) self:connectChar(c) end)
+
+    self:attachLive(self.liveChar)
+    for _,m in ipairs(self.live:GetChildren()) do self:addEnemy(m) end
+    self.live.ChildAdded:Connect(function(m) if m.Name==LP.Name then self:attachLive(m) else self:addEnemy(m) end end)
+    self.live.ChildRemoved:Connect(function(m)
+        local r=self.enemies[m]; if r then for _,c in ipairs(r.cons) do pcall(function() c:Disconnect() end) end self.enemies[m]=nil end
+        if m==self.liveChar then self:attachLive(nil) end
     end)
 
-    self:attachLiveCharacter(self.liveCharacter)
-
-    for _, model in ipairs(self.liveFolder:GetChildren()) do
-        self:addEnemy(model)
-    end
-    self.liveFolder.ChildAdded:Connect(function(model)
-        if model.Name == LocalPlayer.Name then
-            self:attachLiveCharacter(model)
-        else
-            self:addEnemy(model)
-        end
-    end)
-    self.liveFolder.ChildRemoved:Connect(function(model)
-        self.enemies[model] = nil
-        if model == self.liveCharacter then
-            self:attachLiveCharacter(nil)
-        end
-    end)
-
-    self.heartbeatConn = RunService.Heartbeat:Connect(function(dt)
-        self:update(dt)
-    end)
-
+    self.hb=RunService.Heartbeat:Connect(function(dt) self:update(dt) end)
     return self
 end
 
 function Bot:destroy()
-    if self.heartbeatConn then
-        self.heartbeatConn:Disconnect()
-        self.heartbeatConn = nil
-    end
-    if self.liveCharacterConn then
-        self.liveCharacterConn:Disconnect()
-        self.liveCharacterConn = nil
-    end
-    self:clearMoveKeys()
-    if self.gui then
-        self.gui:destroy()
-    end
+    if self.hb then self.hb:Disconnect() end
+    if self.liveConn then self.liveConn:Disconnect() end
+    for _,c in ipairs(self.myHumConns) do pcall(function() c:Disconnect() end) end
+    self:clearMove()
+    if self.gui then self.gui:destroy() end
 end
 
-function Bot:connectCharacter(char: Model)
-    self.character = char
-    if not char then
-        return
-    end
-    local humanoid = char:FindFirstChildOfClass("Humanoid") or char:WaitForChild("Humanoid", 5)
-    if not humanoid then
-        return
-    end
-    self.humanoid = humanoid
-    self.rootPart = char:FindFirstChild("HumanoidRootPart") or char:WaitForChild("HumanoidRootPart", 5)
-    self.alive = humanoid.Health > 0
-    self.evasiveReady = true
-    self.evasiveTimer = 0
-    self.lastDamageTaken = humanoid.Health
+---------------------- MY ANIMS + ATTACK/M1 RECOG + DASH HOOK ----------------
+local function tailIdFromTrack(tr:AnimationTrack?):string
+    local id = tr and tr.Animation and tostring(tr.Animation.AnimationId) or ""
+    return id:match("(%d+)$") or "unknown"
+end
+local function listHas(list:{string}, tail:string):boolean
+    for _,v in ipairs(list) do if v==tail then return true end end
+    return false
+end
+local function isM1Tail(tail:string):boolean
+    local A = CFG.Attack.AnimIds
+    return tail==A.m1 or tail==A.m2 or tail==A.m3 or tail==A.m4
+end
+local function isAttackTail(tail:string):boolean
+    local A = CFG.Attack.AnimIds
+    return isM1Tail(tail) or tail==A.np or tail==A.cp or tail==A.shove or tail==A.upper
+end
 
-    humanoid.Died:Connect(function()
-        self.alive = false
-        self.running = false
-        self.gui:setStatus("Status: dead")
-        self.gui:setTarget("Target: none")
-        if self.actionThread then
-            self.actionThread = nil
+function Bot:_beginDashOrientation(kind:string, tr:AnimationTrack, style:("off"|"def"), tHRP:BasePart?)
+    if self.inDash or not self.hum or not self.rp then return end
+    self.inDash=true
+
+    local function canTurn()
+        if self.hum and self.hum:GetState()==Enum.HumanoidStateType.FallingDown then return false end
+        return true
+    end
+    local function faceToward(pos:Vector3)
+        if not canTurn() then return end
+        local here=self.rp.Position; local to=flat(pos-here); if to.Magnitude<1e-3 then return end
+        self.rp.CFrame=CFrame.lookAt(here, here+to.Unit)
+    end
+    local function faceAwayFrom(pos:Vector3)
+        if not canTurn() then return end
+        local here=self.rp.Position; local to=flat(pos-here); if to.Magnitude<1e-3 then return end
+        self.rp.CFrame=CFrame.lookAt(here, here+(-to.Unit))
+    end
+    local function facePerp(toU:Vector3, cw:boolean)
+        if not canTurn() then return end
+        local perp = cw and Vector3.new(toU.Z,0,-toU.X) or Vector3.new(-toU.Z,0,toU.X)
+        self.rp.CFrame = CFrame.lookAt(self.rp.Position, self.rp.Position + perp.Unit)
+    end
+
+    local t0=os.clock()
+    local length = (tr.Length and tr.Length>0) and tr.Length or (
+        kind=="fdash" and CFG.Dash.FWindow or kind=="bdash" and CFG.Dash.BWindow or CFG.Dash.SWindow
+    )
+    local orbitCW = (math.random()<0.5)
+    local didOrbit=false
+    local orbitStart=0.0
+
+    local stopped=false
+    tr.Stopped:Connect(function() stopped=true end)
+
+    self.dashOrientThread = task.spawn(function()
+        while not stopped and os.clock()-t0 <= length do
+            if not (self.run and self.hum and self.hum.Health>0 and self.rp) then break end
+            local tgt = tHRP
+            if not tgt or not tgt.Parent then
+                local pick=self:selectTarget()
+                tgt = pick and pick.hrp or nil
+            end
+            if tgt then
+                local to = flat(tgt.Position - self.rp.Position)
+                if to.Magnitude>1e-3 then
+                    local toU = to.Unit
+                    if kind=="fdash" then
+                        if style=="off" then
+                            if (not didOrbit) then
+                                faceToward(tgt.Position)
+                                if to.Magnitude <= CFG.Dash.OrbitTrigger then
+                                    didOrbit=true; orbitStart=os.clock()
+                                end
+                            else
+                                local elapsed = os.clock()-orbitStart
+                                if elapsed <= CFG.Dash.OrbitDur then facePerp(toU, orbitCW)
+                                else faceToward(tgt.Position) end
+                            end
+                        else
+                            faceAwayFrom(tgt.Position)
+                        end
+                    elseif kind=="bdash" then
+                        if style=="off" then
+                            local timeLeft = (t0+length) - os.clock()
+                            if to.Magnitude <= CFG.Dash.BackClose then
+                                facePerp(toU, orbitCW)
+                            else
+                                faceAwayFrom(tgt.Position)
+                            end
+                            if timeLeft <= CFG.Dash.PreEndBackFace then faceToward(tgt.Position) end
+                        else
+                            faceToward(tgt.Position)
+                        end
+                    else -- side
+                        if style=="off" then
+                            if to.Magnitude <= CFG.Dash.SideOffLock then faceToward(tgt.Position)
+                            else facePerp(toU, orbitCW) end
+                        else
+                            facePerp(toU, orbitCW)
+                        end
+                    end
+                end
+            end
+            RunService.Heartbeat:Wait()
         end
+        local pick=self:selectTarget()
+        local tHRP2 = (tHRP and tHRP.Parent) and tHRP or (pick and pick.hrp)
+        if tHRP2 then
+            if self.hum and self.hum.Health>0 and self.hum:GetState()~=Enum.HumanoidStateType.FallingDown then
+                self.rp.CFrame = CFrame.lookAt(self.rp.Position, Vector3.new(tHRP2.Position.X, self.rp.Position.Y, tHRP2.Position.Z))
+            end
+        end
+        self.inDash=false
+        self.dashOrientThread=nil
+    end)
+end
+
+-- Hook our animations: detect dash plays + attack/M1 chain accounting
+function Bot:_hookMine(h:Humanoid)
+    for _,c in ipairs(self.myHumConns) do pcall(function() c:Disconnect() end) end
+    self.myHumConns={}
+    self.myAnims={}
+    self.attackActive={}
+    self.isAttacking=false
+    self.isM1ing=false
+    self.m1ChainCount=0
+
+    if not h then return end
+    local function hook(an:Animator)
+        local c=an.AnimationPlayed:Connect(function(tr)
+            local tail = tailIdFromTrack(tr)
+            self.myAnims[tr]={id=tail,start=os.clock()}
+            tr.Stopped:Connect(function()
+                self.myAnims[tr]=nil
+                if self.attackActive[tr] then
+                    self.attackActive[tr]=nil
+                    local any=false; local anyM1=false
+                    for t,_ in pairs(self.attackActive) do
+                        if t and t.IsPlaying then
+                            any=true
+                            local tid = tailIdFromTrack(t)
+                            if isM1Tail(tid) then anyM1=true end
+                        end
+                    end
+                    self.isAttacking=any
+                    self.isM1ing=anyM1
+                end
+            end)
+
+            -- Dash begin -> keep-orientation
+            local DA=CFG.Dash.Anim
+            local kind:string? = nil
+            if listHas(DA.fdash, tail) then kind="fdash"
+            elseif listHas(DA.bdash, tail) then kind="bdash"
+            elseif listHas(DA.side,  tail) then kind="side"  end
+            if kind~=nil then
+                local style:("off"|"def") = "off"
+                local tHRP:BasePart? = nil
+                if self.dashPending and self.dashPending.kind==kind then
+                    style = self.dashPending.style
+                    tHRP  = self.dashPending.tHRP
+                    self.dashPending = nil
+                else
+                    local tgt = self:selectTarget()
+                    tHRP = tgt and tgt.hrp or nil
+                    style = "off"
+                end
+                self:_beginDashOrientation(kind, tr, style, tHRP)
+            end
+
+            -- Attack recognition + M1 chain count
+            if isAttackTail(tail) then
+                self.attackActive[tr]=true
+                self.isAttacking=true
+                self.lastAttackTime=os.clock()
+                if isM1Tail(tail) then
+                    -- If too long since last M1, reset chain
+                    if os.clock() - self.lastM1 > 0.8 then
+                        self.m1ChainCount = 0
+                    end
+                    self.m1ChainCount = math.min(4, self.m1ChainCount + 1)
+                    self.isM1ing=true
+                    self.lastM1=os.clock()
+                else
+                    -- non-M1 attack breaks the shove-tech "start only at 1st/2nd M1" requirement
+                end
+            end
+        end)
+        table.insert(self.myHumConns,c)
+    end
+    local an=h:FindFirstChildOfClass("Animator")
+    if an then hook(an) else
+        table.insert(self.myHumConns, h.ChildAdded:Connect(function(ch) if ch:IsA("Animator") then hook(ch) end end))
+    end
+end
+function Bot:_myAnimId():string? local best,ts=nil,-1; for _,v in pairs(self.myAnims) do if v.start>ts then ts=v.start; best=v.id end end; return best end
+
+--------------------------- CHARACTER / LIVE HOOKS ---------------------------
+function Bot:connectChar(char:Model)
+    self.char=char; if not char then return end
+    local hum=char:FindFirstChildOfClass("Humanoid") or char:WaitForChild("Humanoid",5); if not hum then return end
+    self.hum=hum; self.rp=char:FindFirstChild("HumanoidRootPart") or char:WaitForChild("HumanoidRootPart",5)
+    self.alive=hum.Health>0; self.lastHP=hum.Health; self:_hookMine(hum)
+
+    hum.Died:Connect(function()
+        self.alive=false; self.gui:setS("Status: dead"); self.gui:setT("Target: none"); self.run=false; self.pendingResume=true
+        task.spawn(function()
+            local liveModel:Model? = nil
+            while liveModel==nil do local lf=workspace:FindFirstChild("Live"); if lf then liveModel=lf:FindFirstChild(LP.Name) end; task.wait(0.25) end
+            local ch=LP.Character or LP.CharacterAdded:Wait()
+            local h2=ch:FindFirstChildOfClass("Humanoid") or ch:WaitForChild("Humanoid",5)
+            if h2 then repeat task.wait(0.15) until h2.Health>0; if self.pendingResume then self.pendingResume=false; self:start() end end
+        end)
     end)
 
-    humanoid.HealthChanged:Connect(function(health)
-        local damage = self.lastDamageTaken - health
-        if damage > 0 then
-            self.lastDamageAmount = damage
-            self.lastDamageTime = os.clock()
-            self.shouldPanicEvasive = damage > 2 or self.shouldPanicEvasive
-            self.evasiveReady = self:getEvasiveAttribute() or self.evasiveReady
-            self:updateLastAttacker()
-            self.lastDamageBy = self.lastAttackerName
-            if self.lastDamageBy then
-                local record = self:getEnemyByName(self.lastDamageBy)
-                if record then
-                    record.recentDamage = (record.recentDamage or 0) * 0.5 + damage
-                    record.style = record.style or {
-                        aggression = 0,
-                        defense = 0,
-                        evasive = 0,
-                        lastAttackTime = 0,
-                        lastBlockTime = 0,
-                        lastDashTime = 0,
-                    }
-                    record.style.aggression = math.clamp(record.style.aggression + math.min(3, damage / 4), 0, 10)
-                    record.style.lastAttackTime = os.clock()
+    hum.HealthChanged:Connect(function(hp)
+        local dmg=self.lastHP - hp
+        if dmg>0 then
+            self.lastDmg=dmg; self.lastAtkTime=os.clock(); self:updateAttacker()
+            local attacker=self.lastAttacker
+            if attacker then
+                local rec=self:getEnemyByName(attacker)
+                if rec then
+                    rec.recent=(rec.recent or 0)*0.5 + dmg
+                    rec.style.aggr=math.clamp(rec.style.aggr + math.min(3,dmg/4),0,10)
+                    rec.style.lastAtk=os.clock()
+                    local lid=nil; local best=-1; for _,slot in pairs(rec.active) do if slot.start>best then best=slot.start; lid=slot.id end end
+                    if lid then
+                        local wasBlk = self.blocking or (os.clock()<self.blockUntil)
+                        self.ls:dmgFrom(lid, wasBlk, dmg)
+                        for _,slot in pairs(rec.active) do slot.hit=true; if wasBlk then slot.wasBlk=true end end
+                    end
                 end
             end
         end
-        self.lastDamageTaken = health
+        self.lastHP=hp
     end)
-
-    humanoid.StateChanged:Connect(function(_, newState)
-        if newState == Enum.HumanoidStateType.FallingDown or newState == Enum.HumanoidStateType.Physics then
-            self.shouldPanicEvasive = true
-        end
-    end)
-
-    if self.bridge.env and self.bridge.env.RegisterEvasiveListener then
-        pcall(self.bridge.env.RegisterEvasiveListener, function(ready)
-            self.evasiveReady = ready
-        end)
-    end
-
-    if self.autoStart and self.alive and not self.running then
-        task.defer(function()
-            if self.autoStart and self.alive and not self.running then
-                self:start()
-            end
-        end)
-    end
 end
 
-function Bot:getEvasiveAttribute()
-    local attr = LocalPlayer:GetAttribute("EvasiveReady")
-    if typeof(attr) == "boolean" then
-        return attr
-    end
-    local cooldown = LocalPlayer:GetAttribute("EvasiveCooldown")
-    if typeof(cooldown) == "number" then
-        return cooldown <= 0
-    end
-    return nil
+function Bot:onSelfEvasive() self:clearMove(); self.evReady=false; self.evTimer=CFG.EvasiveCD; self.shouldPanic=false; self.gui:setE(("Evasive: %.1fs"):format(math.max(0,self.evTimer))) end
+function Bot:attachLive(model:Model?)
+    if self.liveConn then self.liveConn:Disconnect() end; self.liveChar=model; if not model then return end
+    local function chk(d:Instance) if d.Name=="RagdollCancel" then self:onSelfEvasive() end end
+    for _,d in ipairs(model:GetDescendants()) do chk(d) end
+    self.liveConn=model.DescendantAdded:Connect(chk)
 end
 
-function Bot:addEnemy(model: Model)
-    if model:GetAttribute("NPC") then
+----------------------------- MOVEMENT / LOOK -------------------------------
+function Bot:setKey(k:Enum.KeyCode,down:boolean)
+    if self.moveKeys[k]==down then return end
+    self.moveKeys[k]=down; VIM:SendKeyEvent(down,k,false,game)
+end
+function Bot:clearMove() for k,down in pairs(self.moveKeys) do if down then VIM:SendKeyEvent(false,k,false,game); self.moveKeys[k]=false end end end
+function Bot:setInput(f:number?,r:number?) local th=0.15; f=f or 0; r=r or 0
+    self:setKey(Enum.KeyCode.W, f>th); self:setKey(Enum.KeyCode.S, f<-th); self:setKey(Enum.KeyCode.D, r>th); self:setKey(Enum.KeyCode.A, r<-th)
+end
+function Bot:alignCam()
+    local cam=workspace.CurrentCamera; if not(cam and self.rp) then return end
+    local cp=cam.CFrame.Position; local look=self.rp.CFrame.LookVector; local flatv=Vector3.new(look.X,0,look.Z); if flatv.Magnitude<1e-3 then return end
+    local tgt=cp+flatv.Unit; cam.CFrame=CFrame.new(cp, Vector3.new(tgt.X,cp.Y,tgt.Z))
+end
+
+-- Aim when NOT in dash orientation and not FallingDown
+function Bot:aimAt(tHRP:BasePart?)
+    if not tHRP or not self.rp then return end
+    if self.inDash then return end
+    if self.hum and self.hum:GetState()==Enum.HumanoidStateType.FallingDown then
+        if self.hum then self.hum.AutoRotate=true end
         return
     end
-    if model.Name == LocalPlayer.Name then
-        return
+    if not self.bridge:tryAim(self.rp,tHRP) then aimCFrame(self.rp,tHRP) end
+    if self.hum then self.hum.AutoRotate=false end
+end
+
+-------------------------- COOLDOWNS / GATES ---------------------------------
+local function now() return os.clock() end
+local function distOK(d:number, lo:number, hi:number) return d>=lo and d<=hi end
+
+function Bot:_cdLeft(which:string)
+    local t = now()
+    if which=="F" then return math.max(0, CFG.Cooldown.FDash - (t - self.lastFD)) end
+    if which=="B" then return math.max(0, CFG.Cooldown.BDash - (t - self.lastBD)) end
+    return math.max(0, CFG.Cooldown.Side - (t - self.lastSide))
+end
+
+-------------------------- DASH REQUEST (W/S/A/D+Q) -------------------------
+local function holdQ(d:number?) pressKey(CFG.Dash.KeyQ,true); task.wait(d or CFG.Dash.HoldQ); pressKey(CFG.Dash.KeyQ,false) end
+
+function Bot:_requestSideDash(r:Enemy)
+    if not (self.rp and r and r.hrp) then return end
+    local d = r.dist
+    local g = CFG.Gates.S
+    if not distOK(d, g.lo, g.hi) then return end
+    if self:_cdLeft("S")>0 then return end
+    self.lastSide=now()
+
+    -- OFFENSIVE side dash direction (perp unless very close; then toward lock)
+    local to = flat(r.hrp.Position - self.rp.Position)
+    if to.Magnitude<1e-3 then to = flat(self.rp.CFrame.LookVector) end
+    local toU = to.Unit
+    local right = flat(self.rp.CFrame.RightVector).Unit
+    local dot = right.X*toU.X + right.Z*toU.Z
+    local towardKey = (dot >= 0) and Enum.KeyCode.D or Enum.KeyCode.A
+
+    self.dashPending = {kind="side", style="off", tHRP=r.hrp}
+    pressKey(towardKey,true); task.wait(0.02); holdQ(CFG.Dash.HoldQ); pressKey(towardKey,false)
+end
+
+function Bot:_requestForwardDash(r:Enemy)
+    if not (self.rp and r and r.hrp) then return end
+    local d = r.dist
+    local g = CFG.Gates.F
+    if not distOK(d, g.lo, g.hi) then return end
+    if self:_cdLeft("F")>0 then return end
+    self.lastFD=now()
+
+    self.dashPending = {kind="fdash", style="off", tHRP=r.hrp}
+    pressKey(Enum.KeyCode.W,true); task.wait(0.02); holdQ(CFG.Dash.HoldQ); pressKey(Enum.KeyCode.W,false)
+end
+
+function Bot:_requestBackDash(r:Enemy)
+    if not (self.rp and r and r.hrp) then return end
+    local d = r.dist
+    local g = CFG.Gates.B
+    if not distOK(d, g.lo, g.hi) then return end
+    if self:_cdLeft("B")>0 then return end
+    self.lastBD=now()
+
+    self.dashPending = {kind="bdash", style="off", tHRP=r.hrp} -- offensive-leaning back dash
+    pressKey(Enum.KeyCode.S,true); task.wait(0.02); holdQ(CFG.Dash.HoldQ); pressKey(Enum.KeyCode.S,false)
+end
+
+------------------------------- BLOCKING ------------------------------------
+function Bot:_forceUnblockNow()
+    local b=CFG.Bind.Block; if not b or b.t~="Key" then return end
+    VIM:SendKeyEvent(false,b.k,false,game); task.wait(0.02)
+    local live=self.liveChar
+    for _=1,2 do
+        if not live then break end
+        local blk=live:GetAttribute("Blocking") or live:GetAttribute("IsBlocking") or live:GetAttribute("Block")
+        if not attrOn(blk) then break end
+        VIM:SendKeyEvent(true,b.k,false,game); task.wait(0.04); VIM:SendKeyEvent(false,b.k,false,game); task.wait(0.02)
     end
-    local record: EnemyRecord = {
-        model = model,
-        humanoid = model:FindFirstChildOfClass("Humanoid"),
-        hrp = model:FindFirstChild("HumanoidRootPart"),
-        distance = math.huge,
-        hasEvasive = true,
-        lastEvasive = 0,
-        threatScore = 0,
-        player = Players:FindFirstChild(model.Name),
-        lastKnownHealth = 100,
-        style = {
-            aggression = 0,
-            defense = 0,
-            evasive = 0,
-            lastAttackTime = 0,
-            lastBlockTime = 0,
-            lastDashTime = 0,
-        },
-        recentDamage = 0,
+end
+function Bot:block(dur:number?)
+    if os.clock() < self.blockCooldown then return end
+    local b=CFG.Bind.Block; if not b or b.t~="Key" then return end
+    local hold = math.clamp(dur or 0.35, 0.20, 0.55)
+    if self.blocking and self.blockThread then return end
+    self.blocking=true
+    self.blockStartTime=os.clock()
+    self.blockThread = task.spawn(function()
+        VIM:SendKeyEvent(true,b.k,false,game)
+        local tEnd=os.clock()+hold
+        while os.clock()<tEnd and self.run and self.alive do task.wait(0.03) end
+        VIM:SendKeyEvent(false,b.k,false,game)
+        self:_forceUnblockNow()
+        self.blocking=false; self.blockThread=nil
+        self.blockStartTime=nil
+        self.lastBlockTime=os.clock()
+        self.blockCooldown = self.lastBlockTime + 0.35
+    end)
+end
+
+-------------------------- ENEMY MODEL / SCORING ----------------------------
+local function sidTail(id:string?):string if not id then return "unk" end local n=id:match("(%d+)$"); return n or id end
+
+function Bot:addEnemy(m:Model)
+    if m:GetAttribute("NPC") or m.Name==LP.Name then return end
+    local r:Enemy = {
+        model=m, hum=m:FindFirstChildOfClass("Humanoid"), hrp=m:FindFirstChild("HumanoidRootPart"),
+        dist=math.huge, hasEv=true, lastEv=0, score=0, ply=Players:FindFirstChild(m.Name), hp=100,
+        style={aggr=0,def=0,ev=0,lastAtk=0,lastBlk=0,lastDash=0}, recent=0, aRecent=0, active={}, cons={}, aggro=0
     }
-    if record.humanoid then
-        record.lastKnownHealth = record.humanoid.Health
-        record.humanoid:GetPropertyChangedSignal("Health"):Connect(function()
-            record.lastKnownHealth = record.humanoid and record.humanoid.Health or record.lastKnownHealth
-        end)
+    if r.hum then
+        r.hp=r.hum.Health
+        table.insert(r.cons, r.hum:GetPropertyChangedSignal("Health"):Connect(function()
+            if not r.hum then return end
+            local nh=r.hum.Health; local delta=math.max(0,(r.hp or nh)-nh)
+            if delta>0 then
+                local lh = r.model:GetAttribute("LastHit") or r.model:GetAttribute("lastHit")
+                if lh==LP.Name then
+                    local myA=self:_myAnimId()
+                    if myA then self.ls:deal(myA, delta) end
+                    r.aRecent = (r.aRecent or 0)*0.5 + delta
+                end
+            end
+            r.hp=nh
+        end))
     end
-
-    local function onDescendant(desc)
-        if desc.Name == "RagdollCancel" then
-            record.lastEvasive = tick()
-            record.hasEvasive = false
-            record.style = record.style or {
-                aggression = 0,
-                defense = 0,
-                evasive = 0,
-                lastAttackTime = 0,
-                lastBlockTime = 0,
-                lastDashTime = 0,
-            }
-            record.style.evasive = math.clamp(record.style.evasive + 2, 0, 8)
-            record.style.lastDashTime = tick()
+    local function onDesc(d:Instance) if d.Name=="RagdollCancel" then r.lastEv=os.clock(); r.hasEv=false; r.style.ev=math.clamp(r.style.ev+2,0,8); r.style.lastDash=os.clock() end end
+    for _,d in ipairs(m:GetDescendants()) do onDesc(d) end
+    table.insert(r.cons, m.DescendantAdded:Connect(onDesc))
+    local function hookAnimator(an:Animator)
+        table.insert(r.cons, an.AnimationPlayed:Connect(function(tr)
+            local id=tr.Animation and tostring(tr.Animation.AnimationId) or "unknown"
+            r.active[tr]={id=sidTail(id),start=os.clock(),wasBlk=false,hit=false}
+            if id==CFG.BlockAnimId then r.style.def=math.clamp(r.style.def+2,0,10); r.style.lastBlk=os.clock() end
+            tr.Stopped:Connect(function()
+                local slot=r.active[tr]
+                if slot then
+                    self.ls:seen(slot.id, os.clock()-slot.start)
+                    if slot.wasBlk and not slot.hit then self.ls:prevent(slot.id) end
+                    r.active[tr]=nil
+                end
+            end)
+        end))
+    end
+    if r.hum then
+        local an=r.hum:FindFirstChildOfClass("Animator")
+        if an then hookAnimator(an) else
+            table.insert(r.cons, r.hum.ChildAdded:Connect(function(ch) if ch:IsA("Animator") then hookAnimator(ch) end end))
         end
     end
+    table.insert(r.cons, m.AncestryChanged:Connect(function(_,p)
+        if p==nil then for _,c in ipairs(r.cons) do pcall(function() c:Disconnect() end) end self.enemies[m]=nil end
+    end))
+    self.enemies[m]=r
+end
 
-    for _, desc in ipairs(model:GetDescendants()) do
-        onDescendant(desc)
-    end
-    model.DescendantAdded:Connect(onDescendant)
+function Bot:getEnemyByName(n:string):Enemy? for _,r in pairs(self.enemies) do if r.model and r.model.Name==n then return r end end end
 
-    model.AncestryChanged:Connect(function(_, parent)
-        if parent == nil then
-            self.enemies[model] = nil
+local function hasFreezeOnLive(name:string):boolean
+    local live = workspace:FindFirstChild("Live")
+    local m = live and live:FindFirstChild(name)
+    if not m then return false end
+    return (m:FindFirstChild("Freeze") ~= nil)
+end
+
+function Bot:_animId(rec:Enemy):string? local best,ts=nil,-1; for _,slot in pairs(rec.active) do if slot.start>ts then ts=slot.start; best=slot.id end end; return best end
+
+function Bot:updateEnemies(dt:number)
+    if not self.rp then return end
+    local my=self.rp.Position; local nowT=os.clock()
+    for m,r in pairs(self.enemies) do
+        if not m.Parent then self.enemies[m]=nil
+        else
+            r.hrp = r.hrp or m:FindFirstChild("HumanoidRootPart")
+            r.hum = r.hum or m:FindFirstChildOfClass("Humanoid")
+            r.dist = r.hrp and (r.hrp.Position - my).Magnitude or math.huge
+            local st=r.style
+            r.recent = (r.recent or 0)*math.clamp(1-dt*0.6,0,1)
+            r.aRecent= (r.aRecent or 0)*math.clamp(1-dt*0.6,0,1)
+            st.aggr=math.max(0, st.aggr - dt*0.35); st.def=math.max(0, st.def - dt*0.25); st.ev=math.max(0, st.ev - dt*0.25)
+            if r.lastEv>0 then r.hasEv = (nowT - r.lastEv) >= CFG.EvasiveCD end
+            if attrOn(m:GetAttribute("Attacking") or m:GetAttribute("Attack") or m:GetAttribute("isAttacking")) then st.aggr=math.clamp(st.aggr+dt*3.5,0,10); st.lastAtk=nowT end
+            if attrOn(m:GetAttribute("Blocking") or m:GetAttribute("IsBlocking") or m:GetAttribute("Block")) then st.def=math.clamp(st.def+dt*3,0,10); st.lastBlk=nowT end
+            if attrOn(m:GetAttribute("Dashing") or m:GetAttribute("IsDashing") or m:GetAttribute("Dash")) then st.ev=math.clamp(st.ev+dt*2.5,0,8); st.lastDash=nowT end
+            if r.hum and r.hum.Health<=0 then
+                r.score = -1e9
+            else
+                r.hp = (r.hum and r.hum.Health) or r.hp
+                local hpF   = (100 - r.hp)
+                local distF = math.clamp(40 - r.dist, -40, 40)
+                local evF   = r.hasEv and -25 or 15
+                local agF   = st.aggr*4
+                local defP  = st.def*1.5
+                local dmgF  = (r.recent or 0)*1.2
+                local aid=self:_animId(r); local ath= aid and self.ls:threat(aid) or 0
+                -- blended aggro: who is most engaged with us both ways
+                r.aggro = (r.recent*1.2 + r.aRecent*0.8) + (ath*2)
+                r.score = hpF + distF + evF + agF - defP + dmgF + math.clamp(ath*4, -8, 16) + math.min(40, r.aggro*0.5)
+                if self.lastAttacker and r.model.Name==self.lastAttacker then r.score+=120 end
+                if hasFreezeOnLive(r.model.Name) then r.score = r.score + 60 end
+            end
         end
+    end
+end
+
+function Bot:selectTarget():Enemy?
+    -- prefer sticky unless a new candidate beats by a margin
+    local best,bs=nil,-1e9
+    for _,r in pairs(self.enemies) do
+        if r.model.Parent and r.hum and r.hum.Health>0 and r.dist<80 then
+            if r.score>bs then bs=r.score; best=r end
+        end
+    end
+    if not best then return nil end
+    local nowT=os.clock()
+    if self.sticky and self.sticky.model.Parent and (nowT - self.stickyT) < self.stickyHold then
+        -- keep sticky for hold time
+        return self.sticky
+    end
+    if self.sticky and self.sticky.model.Parent then
+        local curScore = self.sticky.score or -1e9
+        if bs > (curScore + self.switchMargin) then
+            self.sticky = best; self.stickyT = nowT; return best
+        else
+            return self.sticky
+        end
+    else
+        self.sticky = best; self.stickyT = nowT; return best
+    end
+end
+
+------------------------------ REACTIONS ------------------------------------
+function Bot:blockDur(r:Enemy?):number
+    local base=0.35
+    if not r then return base end
+    local st=r.style; if st.aggr>6 then base+=0.12 end
+    if self.lastAttacker==r.model.Name and os.clock()-self.lastAtkTime<0.55 then base+=0.12 end
+    local aid=nil; local best=-1; for _,slot in pairs(r.active) do if slot.start>best then best=slot.start; aid=slot.id end end
+    if aid then local th=self.ls:threat(aid); if th>1.0 then base+=0.10 end; if th>2.0 then base+=0.10 end end
+    return math.clamp(base,0.25,0.55)
+end
+
+function Bot:shouldBlock(r:Enemy?):boolean
+    if not r then return false end
+    if self.blocking then return true end
+    local nowT=os.clock()
+    if nowT<self.blockCooldown then return false end
+    if nowT-self.lastBlockTime<0.30 then return false end
+    if r.dist>CFG.ComboDist+4 then return false end
+    local aid=nil; local best=-1; for _,slot in pairs(r.active) do if slot.start>best then best=slot.start; aid=slot.id end end
+    if aid and self.ls:threat(aid)>=1.5 then return true end
+    local st=r.style
+    if st.aggr>6 and nowT-st.lastAtk<0.50 then return true end
+    if self.lastAttacker==r.model.Name and nowT-self.lastAtkTime<0.75 then return true end
+    if st.lastAtk>0 and nowT-st.lastAtk<0.30 and r.dist<CFG.ComboDist then return true end
+    return false
+end
+
+function Bot:shouldEvasive(r:Enemy?):boolean
+    if not r or not self.evReady then return false end
+    local nowT=os.clock()
+    if r.dist>CFG.ComboDist+6 then return false end
+    if self.lastAttacker==r.model.Name and nowT-self.lastAtkTime<0.35 and self.lastDmg>10 then return true end
+    if r.style.aggr>7 and nowT-r.style.lastAtk<0.35 then return true end
+    if r.style.ev>6 and nowT-r.style.lastDash<0.30 and r.dist<CFG.SpaceMin then return true end
+    return false
+end
+
+function Bot:_judgeEvasive(ts:number)
+    task.delay(2.0, function()
+        local tookAfter = (self.lastAtkTime > ts) and (os.clock()-self.lastAtkTime < 2.2)
+        self.ls:markEv(not tookAfter)
+        self.ls:log("evasive_judge",{t0=ts, optimal=not tookAfter})
+        self.gui:updateCombos(self.ls.data)
     end)
-
-    self.enemies[model] = record
 end
 
-function Bot:getEnemyByName(name: string): EnemyRecord?
-    for _, record in pairs(self.enemies) do
-        if record.model and record.model.Name == name then
-            return record
-        end
-    end
-    return nil
+function Bot:attemptEvasive(reason:string)
+    if not self.evReady then return false end
+    if self.blocking and self.blockThread then self.blockUntil=os.clock(); task.wait(0.05) end
+    self:clearMove(); self.evReady=false; self.evTimer=CFG.EvasiveCD
+    local dk = (math.random()<0.5) and Enum.KeyCode.A or Enum.KeyCode.D
+    local t0=os.clock()
+    VIM:SendKeyEvent(true,dk,false,game); task.wait(0.02)
+    self:_pressAction("Evasive", CFG.TapS)
+    VIM:SendKeyEvent(false,dk,false,game)
+    self.ls:log("evasive",{why=reason,t=t0})
+    self:_judgeEvasive(t0)
+    return true
 end
 
-function Bot:start()
-    if not self.alive then
-        self.gui:setStatus("Status: waiting for spawn")
-        return
+------------------------------ ULT / COOLDOWN AWARE -------------------------
+function Bot:_isUlted():boolean
+    local t=os.clock()
+    if t - self.lastUltCheck < 0.15 then return self.isUlt end
+    self.lastUltCheck=t
+    local live=workspace:FindFirstChild("Live")
+    local me  = live and live:FindFirstChild(LP.Name)
+    local flag = me and attrOn(me:GetAttribute("Ulted"))
+    -- allow test node too
+    if not flag then
+        local test = live and live:FindFirstChild("battlegroundaitest")
+        flag = flag or (test and true or false)
     end
-    if self.running then
-        self.gui:setStatus("Status: running")
-        return
-    end
-
-    self.autoStart = true
-    self.running = true
-    self.sessionFile = self.learningStore:startSession()
-    self.sessionStart = os.clock()
-    self.gui:setStatus("Status: running")
-    self.gui:setCombo("Combo: none")
-    self.learningStore:log("session_start", { character = Config.CharacterKey })
+    self.isUlt = flag and true or false
+    return self.isUlt
 end
 
-function Bot:stop()
-    if not self.running then
-        self:clearMoveKeys()
-        return
+-- Centralized action press with cooldown/ult awareness
+function Bot:_pressAction(name:string, hold:number?)
+    -- M1 and Block/Evasive bypass slot checks
+    if name=="M1" or name=="M1HOLD" then
+        pressMouse(Enum.UserInputType.MouseButton1, hold or CFG.InputTap)
+        return true
     end
-    self.autoStart = false
-    self.running = false
-    self:clearMoveKeys()
-    if self.humanoid then
-        self.humanoid.AutoRotate = true
+    if name=="Block" then pressKey(CFG.Bind.Block.k,true,hold or CFG.InputTap); return true end
+    if name=="Evasive" then pressKey(CFG.Bind.Evasive.k,true,hold or CFG.InputTap); return true end
+
+    local isUlt = self:_isUlted()
+    -- slots 1..4 exist in either mode, semantics change when ulted
+    local slot = (name=="NP" and 1) or (name=="CP" and 2) or (name=="Shove" and 3) or (name=="Upper" and 4) or nil
+    if slot then
+        if not slotReady(slot) then return false end
+        -- Just press the key bound (same keys; game maps to ult skills automatically)
+        local b = CFG.Bind[name]; if b and b.t=="Key" then
+            pressKey(b.k,true, hold or CFG.InputTap)
+            return true
+        end
+        return false
     end
-    self.gui:setStatus("Status: idle")
-    self.gui:setCombo("Combo: none")
-    self.learningStore:log("session_stop", { duration = os.clock() - self.sessionStart })
+    return false
 end
 
-function Bot:panicEvasive(force: boolean)
-    if force then
-        if not self:attemptEvasive("manual") then
-            self.shouldPanicEvasive = true
-        end
-    else
-        self.shouldPanicEvasive = true
-    end
+------------------------------ DASH POLICY ----------------------------------
+function Bot:maybeDash(r:Enemy)
+    if not r or not r.hrp then return end
+    if self.inDash then return end
+
+    local d = r.dist
+    local gF,gS,gB = CFG.Gates.F, CFG.Gates.S, CFG.Gates.B
+    local canF = distOK(d,gF.lo,gF.hi) and (self:_cdLeft("F")==0)
+    local canS = distOK(d,gS.lo,gS.hi) and (self:_cdLeft("S")==0)
+    local canB = distOK(d,gB.lo,gB.hi) and (self:_cdLeft("B")==0)
+
+    -- OB/back preference, then Side, then Forward
+    if canB and math.random()<0.90 then self:_requestBackDash(r); return end
+    if canS and math.random()<0.75 then self:_requestSideDash(r); return end
+    if canF and math.random()<0.35 then self:_requestForwardDash(r); return end
+
+    if canB then self:_requestBackDash(r); return end
+    if canS then self:_requestSideDash(r); return end
+    if canF then self:_requestForwardDash(r); return end
 end
 
-function Bot:resetLearning()
-    self.learningStore:reset()
-    self.gui:updateLearningList(self.learningStore.learning)
-    self.learningStore:log("learning_reset", { ts = os.time() })
+------------------------------ COMBO EXECUTION -------------------------------
+local function probTake(p:number) return math.random() < p end
+
+function Bot:_upperSucceeded(r:Enemy, y0:number):boolean
+    if not (r and r.hrp) then return false end
+    local air = (r.hum and r.hum.FloorMaterial==Enum.Material.Air)
+    local y = r.hrp.Position.Y
+    return air or (y - y0) > 1.8
 end
 
-function Bot:update(dt: number)
-    if not self.character or not self.humanoid or not self.rootPart then
-        return
-    end
-    if self.humanoid.Health <= 0 then
-        self.running = false
-        return
-    end
-
-    self:updateEvasiveState(dt)
-    self:updateEnemyData(dt)
-    self:updateLastAttacker()
-    if self.lastDamageBy and os.clock() - self.lastDamageTime > 3 then
-        self.lastDamageBy = nil
-        self.lastDamageAmount = 0
-    end
-
-    if not self.running then
-        self:clearMoveKeys()
-        return
-    end
-
-    if self.shouldPanicEvasive then
-        if self:attemptEvasive("panic") then
-            self.shouldPanicEvasive = false
-        end
-    end
-
-    if self.actionThread then
-        -- Update aim while combo executing.
-        if self.currentTarget and self.currentTarget.hrp then
-            self:applyAim(self.currentTarget.hrp)
-        end
-        return
-    end
-
-    local target = self:selectTarget()
-    if not target then
-        self.currentTarget = nil
-        self.gui:setTarget("Target: none")
-        self:neutralMovement()
-        return
-    end
-
-    self.currentTarget = target
-    self.gui:setTarget(string.format("Target: %s (%.0f hp)", target.model.Name, target.lastKnownHealth))
-    self:applyAim(target.hrp)
-
-    if self:shouldEvasive(target) then
-        if self:attemptEvasive("reactive") then
-            return
-        end
-    end
-
-    if self:shouldBlock(target) then
-        self:performBlock(self:getBlockDuration(target))
-        self:neutralMovement(target)
-        return
-    end
-
-    if self:shouldStartCombo(target) then
-        local combo = self:chooseCombo(target)
-        if combo then
-            self:executeCombo(combo, target)
-        end
-    else
-        self:neutralMovement(target)
-    end
-end
-
-function Bot:updateEvasiveState(dt: number)
-    local attr = self:getEvasiveAttribute()
-    if attr ~= nil then
-        if attr == true then
-            if self.evasiveTimer <= 0 then
-                self.evasiveReady = true
-                self.evasiveTimer = 0
-            end
-        else
-            self.evasiveReady = false
-            if self.evasiveTimer <= 0 then
-                self.evasiveTimer = Config.EvasiveCooldown
-            end
-        end
-    end
-    if self.evasiveTimer > 0 then
-        self.evasiveTimer -= dt
-        if self.evasiveTimer <= 0 then
-            self.evasiveTimer = 0
-            self.evasiveReady = true
-        else
-            self.evasiveReady = false
-        end
-    end
-    if attr == false then
-        self.evasiveReady = false
-    end
-    local statusText = self.evasiveReady and "Evasive: ready" or string.format("Evasive: %.1fs", math.max(0, self.evasiveTimer))
-    self.gui:setEvasive(statusText)
-end
-
-function Bot:updateEnemyData(dt: number)
-    local myPos = self.rootPart.Position
-    local now = tick()
-    for model, record in pairs(self.enemies) do
-        if model.Parent == nil then
-            self.enemies[model] = nil
-        else
-            record.hrp = record.hrp or model:FindFirstChild("HumanoidRootPart")
-            record.humanoid = record.humanoid or model:FindFirstChildOfClass("Humanoid")
-            if record.hrp then
-                record.distance = (record.hrp.Position - myPos).Magnitude
-            else
-                record.distance = math.huge
-            end
-            record.style = record.style or {
-                aggression = 0,
-                defense = 0,
-                evasive = 0,
-                lastAttackTime = 0,
-                lastBlockTime = 0,
-                lastDashTime = 0,
-            }
-            local style = record.style
-            record.recentDamage = (record.recentDamage or 0) * math.clamp(1 - dt * 0.6, 0, 1)
-            style.aggression = math.max(0, style.aggression - dt * 0.35)
-            style.defense = math.max(0, style.defense - dt * 0.25)
-            style.evasive = math.max(0, style.evasive - dt * 0.25)
-            local evasiveFromBridge = self.bridge:getEvasive(model)
-            if evasiveFromBridge ~= nil then
-                record.hasEvasive = evasiveFromBridge and true or false
-            else
-                if record.lastEvasive > 0 and now - record.lastEvasive > Config.EvasiveCooldown then
-                    record.hasEvasive = true
+function Bot:execCombo(c:Combo, r:Enemy)
+    if self.actThread then return end
+    self.curCombo=c; self:clearMove(); self.lastComboTry=os.clock(); self.gui:setC("Combo: "..c.name)
+    self.ls:att(c.id); self.ls:log("combo_start",{id=c.id,tgt=r.model.Name})
+    local startHP = r.hum and r.hum.Health or r.hp
+    self.actThread = task.spawn(function()
+        local abort=false
+        for _,st in ipairs(c.steps) do
+            if not self.run or not r.model.Parent then abort=true break end
+            if st.kind=="aim" then
+                self:aimAt(r.hrp); task.wait(0.03)
+            elseif st.kind=="press" and st.action then
+                if st.action=="M1" then
+                    self:_pressAction("M1", st.hold); task.wait(st.wait or m1Gap())
+                elseif st.action=="M1HOLD" then
+                    self:_pressAction("M1HOLD", st.hold); task.wait(st.wait or m1Gap())
+                elseif st.action=="Upper" then
+                    local y0 = (r.hrp and r.hrp.Position.Y) or 0
+                    -- Only press Upper if slot ready (avoid spam) and close, or target ragdolled + no ev
+                    local ok = true
+                    if slotReady(SLOT.Upper) then
+                        if (r.dist<=CFG.CloseUseRange+1.0) or (self:_upperUseOK(r)) then
+                            self:_pressAction("Upper", st.hold)
+                        else
+                            ok=false
+                        end
+                    else ok=false end
+                    task.wait(st.wait or 0.26)
+                    if ok and self:_upperSucceeded(r, y0) then
+                        local fired=false
+                        if distOK(r.dist, CFG.Gates.F.lo, CFG.Gates.F.hi) and probTake(0.60) then
+                            self:_requestForwardDash(r); fired=true
+                        end
+                        if not fired and distOK(r.dist, CFG.Gates.S.lo, CFG.Gates.S.hi) and probTake(0.25) then
+                            self:_requestSideDash(r); fired=true
+                        end
+                        if not fired and distOK(r.dist, CFG.Gates.B.lo, CFG.Gates.B.hi) then
+                            self:_requestBackDash(r)
+                        end
+                    else
+                        -- Not a real launch: prefer side or OB
+                        if distOK(r.dist, CFG.Gates.S.lo, CFG.Gates.S.hi) then
+                            self:_requestSideDash(r)
+                        elseif distOK(r.dist, CFG.Gates.B.lo, CFG.Gates.B.hi) then
+                            self:_requestBackDash(r)
+                        end
+                    end
+                else
+                    -- CP, NP, Shove respect cooldowns automatically
+                    self:_pressAction(st.action, st.hold)
+                    task.wait(st.wait or CFG.InputTap)
                 end
-            end
-            local attackingAttr = model:GetAttribute("Attacking") or model:GetAttribute("Attack") or model:GetAttribute("isAttacking")
-            if attributeActive(attackingAttr) then
-                style.aggression = math.clamp(style.aggression + dt * 3.5, 0, 10)
-                style.lastAttackTime = now
-            end
-            local blockingAttr = model:GetAttribute("Blocking") or model:GetAttribute("IsBlocking") or model:GetAttribute("Block")
-            if attributeActive(blockingAttr) then
-                style.defense = math.clamp(style.defense + dt * 3, 0, 10)
-                style.lastBlockTime = now
-            end
-            local dashingAttr = model:GetAttribute("Dashing") or model:GetAttribute("IsDashing") or model:GetAttribute("Dash")
-            if attributeActive(dashingAttr) then
-                style.evasive = math.clamp(style.evasive + dt * 2.5, 0, 8)
-                style.lastDashTime = now
-            end
-            if record.humanoid then
-                local moveMag = record.humanoid.MoveDirection.Magnitude
-                if moveMag > 0.65 and record.distance < 18 then
-                    style.aggression = math.clamp(style.aggression + dt * 1.5, 0, 10)
-                elseif moveMag < 0.1 and record.distance < 12 then
-                    style.defense = math.clamp(style.defense + dt * 1.2, 0, 10)
+            elseif st.kind=="dash" and st.action then
+                if st.action=="side" then
+                    self:_requestSideDash(r)
+                elseif st.action=="fdash" then
+                    self:_requestForwardDash(r)
+                elseif st.action=="bdash" then
+                    self:_requestBackDash(r)
+                elseif st.action=="auto_after_upper" then
+                    -- smart dash follow already done above; here we no-op
                 end
-            end
-            if record.humanoid and record.humanoid.Health <= 0 then
-                record.threatScore = -math.huge
-            else
-                local hp = record.humanoid and record.humanoid.Health or record.lastKnownHealth
-                record.lastKnownHealth = hp
-                local hpFactor = (100 - hp)
-                local distanceFactor = math.clamp(40 - record.distance, -40, 40)
-                local evasiveFactor = record.hasEvasive and -25 or 15
-                local aggressionFactor = style.aggression * 4
-                local defensePenalty = style.defense * 1.5
-                local damageFactor = (record.recentDamage or 0) * 1.2
-                record.threatScore = hpFactor + distanceFactor + evasiveFactor + aggressionFactor - defensePenalty + damageFactor
-                if self.lastAttackerName and record.model.Name == self.lastAttackerName then
-                    record.threatScore += 120
-                end
+                task.wait(st.wait or CFG.InputTap)
+            elseif st.kind=="wait" then
+                task.wait(st.wait or CFG.InputTap)
             end
         end
-    end
+
+        if abort or not self.run then self.gui:setC("Combo: none"); self.curCombo=nil; self.actThread=nil; return end
+
+        -- If target is stunned (Freeze present), extend with quick pressure
+        if hasFreezeOnLive(r.model.Name) then
+            if slotReady(SLOT.CP) then self:_pressAction("CP") end
+            task.wait(0.12)
+            self:_pressAction("M1", CFG.TapS); task.wait(m1Gap())
+            if slotReady(SLOT.NP) then self:_pressAction("NP") end
+        end
+
+        task.wait(0.40)
+        local endHP = r.hum and r.hum.Health or startHP
+        local dmg=math.max(0,startHP-endHP); local ok=dmg>4
+        self.ls:res(c.id,ok,dmg); self.ls:log("combo_res",{id=c.id,ok=ok,dmg=dmg})
+        self.gui:updateCombos(self.ls.data)
+        if r.style then if ok then r.style.def=math.max(0,r.style.def-0.6) else r.style.def=math.clamp(r.style.def+0.8,0,10) end end
+        self.gui:setC("Combo: none"); self.curCombo=nil; self.actThread=nil
+    end)
 end
 
-function Bot:selectTarget(): EnemyRecord?
-    local best: EnemyRecord? = nil
-    local bestScore = -math.huge
-    for _, record in pairs(self.enemies) do
-        if record.model.Parent and record.humanoid and record.humanoid.Health > 0 then
-            if record.distance < 60 then
-                if record.threatScore > bestScore then
-                    bestScore = record.threatScore
-                    best = record
-                end
-            end
+function Bot:_upperUseOK(r:Enemy):boolean
+    -- Good to use Upper when enemy ragdolled / falling down and lacks evasive, within a couple studs
+    local closeOK = r.dist <= (CFG.SpaceMin + 2.0)
+    local noEv    = not r.hasEv
+    local ragdoll = r.hum and (r.hum:GetState()==Enum.HumanoidStateType.FallingDown or r.hum:GetState()==Enum.HumanoidStateType.PlatformStanding)
+    return closeOK and (noEv or ragdoll)
+end
+
+----------------------------- NEUTRAL / CHASE -------------------------------
+function Bot:chase(r:Enemy)
+    if not r or not r.hrp then return end
+    self:alignCam(); self:aimAt(r.hrp)
+    self:setInput(1,0)
+    self:maybeDash(r)
+end
+
+function Bot:_shouldStartCombo(tgt:Enemy):boolean
+    if not tgt or not tgt.hrp then return false end
+    if os.clock() - (self.lastComboTry or 0) < 0.50 then return false end
+    if tgt.dist > CFG.ComboDist then return false end
+    if self.blocking then return false end
+    if tgt.style.lastBlk>0 and os.clock()-tgt.style.lastBlk<0.28 then return false end
+    if not self.hum or self.hum.MoveDirection.Magnitude>0.9 then return false end
+    if tgt.hum and tgt.hum.FloorMaterial==Enum.Material.Air then
+        -- Unless stunned with Freeze (then allow)
+        if not hasFreezeOnLive(tgt.model.Name) then return false end
+    end
+    return true
+end
+
+function Bot:_chooseCombo(tgt:Enemy):Combo?
+    -- Safer weighting: prefer low risk, M1-first, guardbreak if target def high
+    local best,bw=nil,-1
+    for _,c in ipairs(LIB) do
+        local ok=true
+        if c.reqNoEv and tgt.hasEv then ok=false end
+        if c.min and tgt.dist < c.min then ok=false end
+        if c.max and tgt.dist > c.max then ok=false end
+        -- Shove-tech only valid if our M1 chain count is 1 or 2
+        if ok and c.id=="sai_sd_m1h" then
+            if not (self.m1ChainCount==1 or self.m1ChainCount==2) then ok=false end
+        end
+        if ok then
+            local st=self.ls:combo(c.id); local sr=(st.succ+1)/(st.att+2)
+            local mid=((c.min or 0)+(c.max or 20))/2; local dBias=math.max(0.1, 1-math.abs((tgt.dist-mid)/20))
+            local sBias=1; local s=tgt.style
+            if s.def>4 and hasTrait(c,"guardbreak") then sBias+=0.45 end
+            if s.aggr>5 and hasTrait(c,"burst") then sBias+=0.25 end
+            if s.aggr<3 and hasTrait(c,"pressure") then sBias+=0.20 end
+            if s.ev>5 and not c.reqNoEv then sBias-=0.2 end
+            -- Penalize risky routes a bit
+            local risk = c.risk or 0.5
+            local w=sr*dBias*sBias*(1.0 - risk*0.25)
+            if w>bw then bw=w; best=c end
         end
     end
     return best
 end
 
-function Bot:performSideDash(direction: string?, target: EnemyRecord?)
-    local binding = Config.ActionBindings.SideDash
-    if not binding or binding.type ~= "Key" then
-        return
-    end
-    local rotateDirection = direction
-    if rotateDirection ~= "left" and rotateDirection ~= "right" then
-        rotateDirection = math.random() < 0.5 and "left" or "right"
-    end
-
-    local dirKey: Enum.KeyCode = Enum.KeyCode.D
-    if rotateDirection == "right" then
-        dirKey = Enum.KeyCode.A
-    elseif rotateDirection == "left" then
-        dirKey = Enum.KeyCode.D
-    end
-
-    if target and target.hrp and self.rootPart then
-        local targetPos = target.hrp.Position
-        local myPos = self.rootPart.Position
-        local lookAt = CFrame.lookAt(myPos, Vector3.new(targetPos.X, myPos.Y, targetPos.Z))
-        local yaw = rotateDirection == "right" and math.pi / 2 or -math.pi / 2
-        self.rootPart.CFrame = lookAt * CFrame.Angles(0, yaw, 0)
-        self:alignCameraForMovement()
-    end
-
-    VirtualInputManager:SendKeyEvent(true, dirKey, false, game)
-    task.wait(0.02)
-    VirtualInputManager:SendKeyEvent(true, binding.key, false, game)
-    task.wait(Config.InputHoldShort)
-    VirtualInputManager:SendKeyEvent(false, binding.key, false, game)
-    VirtualInputManager:SendKeyEvent(false, dirKey, false, game)
-end
-
-function Bot:getBlockDuration(target: EnemyRecord?): number
-    local base = 0.45
-    if not target or not target.style then
-        return base
-    end
-    local style = target.style
-    if style.aggression > 6 then
-        base += 0.15
-    end
-    if self.lastDamageBy == (target.model and target.model.Name) and os.clock() - self.lastDamageTime < 0.6 then
-        base += 0.2
-    end
-    return math.clamp(base, 0.35, 0.9)
-end
-
-function Bot:performBlock(duration: number?)
-    local binding = Config.ActionBindings.Block
-    if not binding or binding.type ~= "Key" then
-        return
-    end
-    local holdUntil = os.clock() + (duration or 0.4)
-    self.blockHoldUntil = math.max(self.blockHoldUntil, holdUntil)
-    if self.blocking and self.blockThread then
-        return
-    end
-    self.blocking = true
-    self.blockThread = task.spawn(function()
-        VirtualInputManager:SendKeyEvent(true, binding.key, false, game)
-        while os.clock() < self.blockHoldUntil and self.running and self.alive do
-            task.wait(0.03)
-        end
-        VirtualInputManager:SendKeyEvent(false, binding.key, false, game)
-        self.blockHoldUntil = os.clock()
-        self.blocking = false
-        self.blockThread = nil
-        self.lastBlockTime = os.clock()
-    end)
-end
-
-function Bot:shouldBlock(target: EnemyRecord?): boolean
-    if not target or not target.style then
-        return false
-    end
-    if self.blocking then
+function Bot:_maybeUltActions(tgt:Enemy)
+    if not self:_isUlted() then return false end
+    -- 1: Death Counter (good when they’re very aggressive on us)
+    if slotReady(1) and (tgt.style.aggr>6 or (self.lastAttacker==tgt.model.Name and os.clock()-self.lastAtkTime<0.5)) then
+        self:_pressAction("NP")  -- slot 1
         return true
     end
-    local now = os.clock()
-    if now - self.lastBlockTime < 0.45 then
-        return false
-    end
-    if target.distance > Config.ComboConfirmDistance + 4 then
-        return false
-    end
-    if target.style.aggression > 6 and now - target.style.lastAttackTime < 0.6 then
+    -- 2: Table Flip (use within 10 studs on ragdolled/no-ev)
+    if slotReady(2) and tgt.dist<=10.0 and self:_upperUseOK(tgt) then
+        self:_pressAction("CP")  -- slot 2
         return true
     end
-    if self.lastDamageBy == target.model.Name and now - self.lastDamageTime < 0.8 then
+    -- 4: Omni has big range (~30)
+    if slotReady(4) and tgt.dist<=30.0 then
+        self:_pressAction("Upper") -- slot 4
         return true
     end
-    if target.style.lastAttackTime > 0 and now - target.style.lastAttackTime < 0.4 and target.distance < Config.ComboConfirmDistance then
+    -- 3: Serious Punch (similar to 2/4 situational)
+    if slotReady(3) and tgt.dist<=18.0 then
+        self:_pressAction("Shove") -- slot 3
         return true
     end
     return false
 end
 
-function Bot:shouldEvasive(target: EnemyRecord?): boolean
-    if not target or not target.style then
-        return false
-    end
-    if not self.evasiveReady then
-        return false
-    end
-    local now = os.clock()
-    if target.distance > Config.ComboConfirmDistance + 6 then
-        return false
-    end
-    if self.lastDamageBy == target.model.Name and now - self.lastDamageTime < 0.35 and self.lastDamageAmount > 10 then
-        return true
-    end
-    if target.style.aggression > 7 and now - target.style.lastAttackTime < 0.35 then
-        return true
-    end
-    if target.style.evasive > 6 and now - target.style.lastDashTime < 0.3 and target.distance < Config.NeutralSpacingMin then
-        return true
-    end
-    return false
-end
+function Bot:neutral(tgt:Enemy?)
+    if not tgt or not tgt.hrp then self:setInput(0,0); return end
+    self:alignCam(); self:aimAt(tgt.hrp)
+    local d,nowT=tgt.dist,os.clock()
 
-function Bot:applyAim(targetHRP: BasePart?)
-    if not targetHRP or not self.rootPart then
+    -- chase/discipline
+    if d>CFG.FarChase then
+        self:chase(tgt)
+    else
+        if (nowT - self.closeT) > CFG.CloseWindow then
+            if (self.closeD - d) < CFG.CloseGain then
+                self.urgency = math.min(5, self.urgency + 2)
+                self:chase(tgt)
+            end
+            self.closeT=nowT; self.closeD=d
+        end
+    end
+
+    -- Use dashes under gates (OB bias, then side, then forward)
+    self:maybeDash(tgt)
+
+    -- spacing + strafe (WASD variety)
+    local f,rt=0,0
+    if d>CFG.SpaceMax then
+        f=1; self.strafe=0
+    elseif d<CFG.SpaceMin*0.6 then
+        f=-1; self.strafe=0
+    else
+        f=0.85
+        if nowT-self.lastStrafe>0.45 then
+            self.strafe=(math.random()<0.5) and -1 or 1
+            self.lastStrafe=nowT
+        end
+        rt=self.strafe
+    end
+
+    -- Ult opportunities (non-spam; short-circuits if used)
+    if self:_maybeUltActions(tgt) then
+        self:setInput(f,rt)
         return
     end
-    if self.humanoid then
-        local state = self.humanoid:GetState()
-        if state == Enum.HumanoidStateType.FallingDown then
-            self.humanoid.AutoRotate = true
-            return
+
+    -- Pokes / M1 bias: try M1 more within ~6 studs
+    if d<6.2 and nowT-self.lastM1>CFG.M1Min*0.9 then self:_pressAction("M1", CFG.TapS); self.lastM1=nowT; self.lastAttempt=nowT end
+
+    -- Light skill tries (avoid spam; read cooldowns)
+    if d<=CFG.CloseUseRange and (nowT - self.lastSkill)>0.28 then
+        local roll=math.random()
+        if roll<0.30 and slotReady(SLOT.Shove) then self:_pressAction("Shove")
+        elseif roll<0.58 and slotReady(SLOT.CP) then self:_pressAction("CP")
+        elseif roll<0.75 and slotReady(SLOT.NP) then self:_pressAction("NP")
+        elseif roll<0.86 and slotReady(SLOT.Upper) and self:_upperUseOK(tgt) then self:_pressAction("Upper")
         end
+        self.lastSkill=nowT; self.lastAttempt=nowT
     end
-    if not self.bridge:aim(self.rootPart, targetHRP) then
-        aimWithCFrame(self.rootPart, targetHRP)
-    end
-    if self.humanoid then
-        self.humanoid.AutoRotate = false
-    end
+
+    self:setInput(f,rt)
 end
 
-function Bot:shouldStartCombo(target: EnemyRecord)
-    if not target or not target.hrp then
-        return false
-    end
-    if os.clock() - self.lastComboAttempt < 0.8 then
-        return false
-    end
-    if target.distance > Config.ComboConfirmDistance then
-        return false
-    end
-    if self.blocking then
-        return false
-    end
-    if target.style and target.style.lastBlockTime > 0 and os.clock() - target.style.lastBlockTime < 0.4 then
-        return false
-    end
-    if not self.humanoid or self.humanoid.MoveDirection.Magnitude > 0.55 then
-        return false
-    end
-    if target.humanoid and target.humanoid.FloorMaterial == Enum.Material.Air then
-        return false
-    end
-    return true
+------------------------------ STATUS / LOOP --------------------------------
+function Bot:updateAttacker()
+    if not self.liveChar then self.liveChar = self.live and self.live:FindFirstChild(LP.Name) or nil end
+    if not self.liveChar then return end
+    local a=self.liveChar:GetAttribute("LastHit") or self.liveChar:GetAttribute("lastHit")
+    if typeof(a)=="string" and a~="" then self.lastAttacker=a end
 end
 
-function Bot:chooseCombo(target: EnemyRecord): ComboDefinition?
-    local available = {}
-    for _, combo in ipairs(ComboLibrary) do
-        if combo.requiresNoEvasive and target.hasEvasive then
-            continue
-        end
-        if combo.minimumRange and target.distance < combo.minimumRange then
-            continue
-        end
-        if combo.maximumRange and target.distance > combo.maximumRange then
-            continue
-        end
-        local stats = self.learningStore:getCombo(combo.id)
-        local attempts = stats.attempts
-        local successes = stats.successes
-        local successRate = (successes + 1) / (attempts + 2)
-        local distanceBias = math.max(0.1, 1 - math.abs((target.distance - ((combo.minimumRange or 0) + (combo.maximumRange or 20)) / 2) / 20))
-        local styleBias = 1
-        if target.style then
-            if target.style.defense > 4 and comboHasTrait(combo, "guardbreak") then
-                styleBias += 0.45
-            end
-            if target.style.aggression > 5 and comboHasTrait(combo, "burst") then
-                styleBias += 0.3
-            end
-            if target.style.aggression < 3 and comboHasTrait(combo, "pressure") then
-                styleBias += 0.2
-            end
-            if target.style.evasive > 5 and not combo.requiresNoEvasive then
-                styleBias -= 0.2
-            end
-            if target.style.defense > 6 and comboHasTrait(combo, "mixup") then
-                styleBias += 0.25
-            end
-        end
-        table.insert(available, { combo = combo, weight = successRate * distanceBias * styleBias })
-    end
-    if #available == 0 then
-        return nil
-    end
-    table.sort(available, function(a, b)
-        return a.weight > b.weight
-    end)
-    return available[1].combo
+function Bot:start()
+    local h=self.hum
+    if not h or h.Health<=0 then self.gui:setS("Status: waiting spawn"); return end
+    if self.run then self.gui:setS("Status: running"); return end
+    self.autoStart=true; self.run=true; self.sess=self.ls:startSession(); self.since=os.clock()
+    self.gui:setS("Status: running"); self.gui:setC("Combo: none"); self.ls:log("session_start",{char=CFG.CharKey})
+    self.closeT=os.clock(); self.closeD=math.huge
 end
 
-function Bot:executeCombo(combo: ComboDefinition, target: EnemyRecord)
-    if self.actionThread then
+function Bot:stop()
+    if not self.run then self:clearMove(); return end
+    self.autoStart=false; self.run=false; self:clearMove(); if self.hum then self.hum.AutoRotate=true end
+    self.gui:setS("Status: idle"); self.gui:setC("Combo: none"); self.ls:log("session_stop",{dur=os.clock()-self.since})
+end
+
+function Bot:exit()
+    self.autoStart=false; self.run=false; self:clearMove()
+    self.ls:log("exit", {t=os.clock()})
+    self:destroy()
+    getgenv().BattlegroundsBot=nil
+end
+
+-- Bind map (keys same in ult, semantics change in-game)
+CFG.Bind = {
+    M1      = {t="Mouse", b=Enum.UserInputType.MouseButton1},
+    Shove   = {t="Key",   k=Enum.KeyCode.Three},
+    CP      = {t="Key",   k=Enum.KeyCode.Two},
+    Upper   = {t="Key",   k=Enum.KeyCode.Four},
+    NP      = {t="Key",   k=Enum.KeyCode.One},
+    Block   = {t="Key",   k=Enum.KeyCode.F},
+    Evasive = {t="Key",   k=Enum.KeyCode.Q},
+}
+
+function Bot:update(dt:number)
+    self.ls:flush()
+    if not(self.char and self.hum and self.rp) then return end
+    if self.hum.Health<=0 then self.run=false return end
+
+    -- evasive timer
+    if self.evTimer>0 then self.evTimer -= dt; if self.evTimer<=0 then self.evTimer=0; self.evReady=true end end
+    self.gui:setE(self.evReady and "Evasive: ready" or ("Evasive: "..string.format("%.1fs",math.max(0,self.evTimer))))
+
+    self:updateEnemies(dt); self:updateAttacker()
+    if self.lastAttacker and os.clock()-self.lastAtkTime>3 then self.lastAttacker=nil; self.lastDmg=0 end
+
+    local tgt=self:selectTarget()
+    if not tgt then
+        self.gui:setT("Target: none")
+        if not self.run then self:clearMove() end
+        self.gui:updateCDs(self:_cdLeft("F"), self:_cdLeft("B"), self:_cdLeft("S"))
         return
     end
-    self.currentCombo = combo
-    self:clearMoveKeys()
-    self.lastComboAttempt = os.clock()
-    self.gui:setCombo("Combo: " .. combo.name)
-    self.learningStore:recordAttempt(combo.id)
-    self.learningStore:log("combo_start", { id = combo.id, target = target.model.Name })
+    self.gui:setT(("Target: %s (%.0f hp)"):format(tgt.model.Name, tgt.hp))
 
-    local startHealth = target.humanoid and target.humanoid.Health or target.lastKnownHealth
-    local thread
-    thread = task.spawn(function()
-        local aborted = false
-        for _, step in ipairs(combo.steps) do
-            if not self.running then
-                aborted = true
-                break
-            end
-            if not target.model.Parent then
-                aborted = true
-                break
-            end
-            if step.kind == "aim" then
-                self:applyAim(target.hrp)
-                task.wait(0.05)
-            elseif step.kind == "press" and step.action then
-                if step.action == "SideDash" then
-                    self:performSideDash(step.direction, target)
-                elseif step.hold and step.hold > Config.InputTap then
-                    pressAndHold(step.action, step.hold)
-                else
-                    pressBinding(step.action, step.hold)
-                end
-                if step.wait and step.wait > 0 then
-                    task.wait(step.wait)
-                else
-                    task.wait(Config.InputTap)
-                end
-            elseif step.kind == "wait" then
-                task.wait(step.wait or Config.InputTap)
-            end
-        end
-        if aborted or not self.running then
-            self.gui:setCombo("Combo: none")
-            self.currentCombo = nil
-            self.actionThread = nil
-            return
-        end
-        task.wait(0.65)
-        local endHealth = target.humanoid and target.humanoid.Health or startHealth
-        local damage = math.max(0, startHealth - endHealth)
-        local success = damage > 4
-        self.learningStore:recordResult(combo.id, success, damage)
-        self.learningStore:log("combo_result", {
-            id = combo.id,
-            success = success,
-            damage = damage,
-            target = target.model.Name,
-        })
-        if target.style then
-            if success then
-                target.style.defense = math.max(0, target.style.defense - 0.6)
-                target.style.aggression = math.max(0, target.style.aggression - 0.4)
+    -- FORCE UNBLOCK if blocking > 5 seconds, then punish (OB dash/side dash)
+    if self.blocking and self.blockStartTime and (os.clock()-self.blockStartTime)>5.0 then
+        self:_forceUnblockNow()
+        self.blocking=false
+        self.blockStartTime=nil
+        self:maybeDash(tgt)
+    end
+
+    -- stillness punish
+    local md = self.hum.MoveDirection.Magnitude
+    local idleCond = (md<0.10) and (not self.inDash) and (not self.isAttacking) and (not self.blocking)
+    if idleCond then
+        self.stillTimer = self.stillTimer + dt
+        if self.stillTimer > 1.6 then
+            if distOK(tgt.dist, CFG.Gates.S.lo, CFG.Gates.S.hi) and math.random()<0.65 then
+                self:_pressAction("Shove", CFG.TapS); self:_requestSideDash(tgt)
             else
-                target.style.defense = math.clamp(target.style.defense + 0.8, 0, 10)
-                target.style.aggression = math.clamp(target.style.aggression + 0.2, 0, 10)
+                self:maybeDash(tgt)
             end
-        end
-        self.gui:setCombo("Combo: none")
-        self.currentCombo = nil
-        self.actionThread = nil
-        self.gui:updateLearningList(self.learningStore.learning)
-    end)
-    self.actionThread = thread
-end
-
-function Bot:setMoveKey(keyCode: Enum.KeyCode, pressed: boolean)
-    self.moveKeyState = self.moveKeyState or {}
-    if self.moveKeyState[keyCode] == pressed then
-        return
-    end
-    self.moveKeyState[keyCode] = pressed
-    VirtualInputManager:SendKeyEvent(pressed, keyCode, false, game)
-end
-
-function Bot:clearMoveKeys()
-    if not self.moveKeyState then
-        return
-    end
-    for keyCode, pressed in pairs(self.moveKeyState) do
-        if pressed then
-            VirtualInputManager:SendKeyEvent(false, keyCode, false, game)
-            self.moveKeyState[keyCode] = false
-        end
-    end
-end
-
-function Bot:setMoveInput(forward: number?, right: number?)
-    local f = forward or 0
-    local r = right or 0
-    local threshold = 0.15
-    self:setMoveKey(Enum.KeyCode.W, f > threshold)
-    self:setMoveKey(Enum.KeyCode.S, f < -threshold)
-    self:setMoveKey(Enum.KeyCode.D, r > threshold)
-    self:setMoveKey(Enum.KeyCode.A, r < -threshold)
-end
-
-function Bot:alignCameraForMovement()
-    local camera = workspace.CurrentCamera
-    if not (camera and self.rootPart) then
-        return
-    end
-    local camPos = camera.CFrame.Position
-    local look = self.rootPart.CFrame.LookVector
-    local flat = Vector3.new(look.X, 0, look.Z)
-    if flat.Magnitude < 1e-3 then
-        return
-    end
-    local target = camPos + flat.Unit
-    camera.CFrame = CFrame.new(camPos, Vector3.new(target.X, camPos.Y, target.Z))
-end
-
-function Bot:onSelfEvasiveTriggered()
-    if self.humanoid and self.humanoid:GetState() ~= Enum.HumanoidStateType.FallingDown then
-        return
-    end
-    self:clearMoveKeys()
-    self.evasiveReady = false
-    self.evasiveTimer = Config.EvasiveCooldown
-    self.shouldPanicEvasive = false
-    if self.gui then
-        self.gui:setEvasive(string.format("Evasive: %.1fs", math.max(0, self.evasiveTimer)))
-    end
-end
-
-function Bot:attachLiveCharacter(model: Model?)
-    if self.liveCharacterConn then
-        self.liveCharacterConn:Disconnect()
-        self.liveCharacterConn = nil
-    end
-    self.liveCharacter = model
-    if not model then
-        return
-    end
-    local function check(descendant: Instance)
-        if descendant.Name == "RagdollCancel" then
-            self:onSelfEvasiveTriggered()
-        end
-    end
-    for _, desc in ipairs(model:GetDescendants()) do
-        check(desc)
-    end
-    self.liveCharacterConn = model.DescendantAdded:Connect(check)
-end
-
-function Bot:neutralMovement(target: EnemyRecord?)
-    if not target or not target.hrp then
-        self:setMoveInput(0, 0)
-        return
-    end
-
-    self:alignCameraForMovement()
-
-    local distance = target.distance
-    local now = os.clock()
-
-    if self.blocking then
-        if now - self.lastStrafeSwitch > 0.55 then
-            self.currentStrafe = math.random() < 0.5 and -1 or 1
-            self.lastStrafeSwitch = now
-        end
-        self:setMoveInput(0, self.currentStrafe)
-        return
-    end
-
-    local forward = 0
-    local right = 0
-
-    if distance > Config.NeutralSpacingMax then
-        forward = 1
-        self.currentStrafe = 0
-        if now - self.lastForwardDash > 1 then
-            pressBinding("ForwardDash")
-            self.lastForwardDash = now
-            self.nextSideDashTime = now + 0.35
-        end
-    elseif distance < Config.NeutralSpacingMin * 0.6 then
-        forward = -1
-        self.currentStrafe = 0
-        if now - self.lastBackDash > 0.8 then
-            pressBinding("BackDash")
-            self.lastBackDash = now
+            self:setInput(0.95, (math.random()<0.5) and -1 or 1)
+            self.stillTimer = 0
         end
     else
-        forward = 0.55
-        if now - self.lastStrafeSwitch > 0.9 then
-            self.currentStrafe = math.random() < 0.5 and -1 or 1
-            if math.random() < 0.45 then
-                local dir = self.currentStrafe < 0 and "left" or "right"
-                self:performSideDash(dir)
-            end
-            self.lastStrafeSwitch = now
-        end
-        right = self.currentStrafe
+        self.stillTimer = 0
     end
 
-    if distance < Config.ComboConfirmDistance - 0.2 and now - self.lastBasicAttack > 0.65 then
-        pressBinding("M1", Config.InputHoldShort)
-        self.lastBasicAttack = now
-    end
-
-    self:setMoveInput(forward, right)
-end
-
-function Bot:attemptEvasive(reason: string)
-    if not self.evasiveReady then
-        return false
-    end
-    if self.blocking and self.blockThread then
-        self.blockHoldUntil = os.clock()
-        task.wait(0.05)
-    end
-    self:clearMoveKeys()
-    self.evasiveReady = false
-    self.evasiveTimer = Config.EvasiveCooldown
-    local dirKey = math.random() < 0.5 and Enum.KeyCode.A or Enum.KeyCode.D
-    VirtualInputManager:SendKeyEvent(true, dirKey, false, game)
-    task.wait(0.02)
-    pressBinding("Evasive", Config.InputHoldShort)
-    VirtualInputManager:SendKeyEvent(false, dirKey, false, game)
-    self.learningStore:log("evasive", { reason = reason, t = os.clock() })
-    return true
-end
-
-function Bot:updateLastAttacker()
-    if not self.liveCharacter then
-        self.liveCharacter = self.liveFolder and self.liveFolder:FindFirstChild(LocalPlayer.Name) or nil
-    end
-    if not self.liveCharacter then
+    -- aim (disabled during dash by aimAt)
+    self:aimAt(tgt.hrp)
+    if not self.run then
+        self.gui:updateCDs(self:_cdLeft("F"), self:_cdLeft("B"), self:_cdLeft("S"))
         return
     end
-    local attacker = self.liveCharacter:GetAttribute("LastHit")
-    if attacker == nil then
-        attacker = self.liveCharacter:GetAttribute("lastHit")
+
+    -- evasive reactions
+    if self.shouldPanic then if self:attemptEvasive("panic") then self.shouldPanic=false end end
+    if self:shouldEvasive(tgt) then if self:attemptEvasive("react") then self.gui:updateCDs(self:_cdLeft("F"), self:_cdLeft("B"), self:_cdLeft("S")); return end end
+
+    -- snipe NP if low hp and not blocking
+    local likelyBlk = (os.clock()-tgt.style.lastBlk)<0.30 or (tgt.style.def>6)
+    if tgt.hp<=CFG.SnipeHP and not likelyBlk and tgt.dist<=CFG.SnipeRange and (os.clock()-self.lastSnipe>0.8) then
+        if slotReady(SLOT.NP) then
+            self:_pressAction("NP"); self.lastSnipe=os.clock(); self.lastAttempt=os.clock(); self:setInput(0.6,0)
+            self.gui:updateCDs(self:_cdLeft("F"), self:_cdLeft("B"), self:_cdLeft("S"))
+            return
+        end
     end
-    if typeof(attacker) == "string" and attacker ~= "" then
-        self.lastAttackerName = attacker
+
+    -- block if needed
+    if self:shouldBlock(tgt) then self:block(self:blockDur(tgt)); self:neutral(tgt); self.gui:updateCDs(self:_cdLeft("F"), self:_cdLeft("B"), self:_cdLeft("S")); return end
+
+    -- punish idle attack starvation
+    local nowT=os.clock()
+    if nowT - self.lastAttempt > CFG.MaxNoAtk and tgt.dist<=CFG.CloseUseRange+2 then
+        if (nowT - self.lastAttempt) > CFG.ForceAtk then
+            if slotReady(SLOT.Shove) and math.random()<0.55 then self:_pressAction("Shove") elseif slotReady(SLOT.CP) then self:_pressAction("CP") end
+            self.lastAttempt=nowT
+        end
     end
+
+    -- Try a combo (M1-first, shove-tech rule enforced)
+    local canCombo = self:_shouldStartCombo(tgt)
+    if canCombo then
+        local c=self:_chooseCombo(tgt)
+        if c then
+            -- De-weight Upper after Shove: if last action Shove and c is upper path, skip 60% of time
+            if c.id=="sai_upper_path" and math.random()<0.60 then
+                -- fall back to M1x2>CP>M1>NP if available
+                c=nil
+                for _,k in ipairs(LIB) do if k.id=="sai_m1cp_np" then c=k break end end
+            end
+        end
+        if c then self:execCombo(c,tgt); self.gui:updateCDs(self:_cdLeft("F"), self:_cdLeft("B"), self:_cdLeft("S")); return end
+    end
+
+    -- Neutral pressure (includes WASD/dash + M1 bias)
+    self:neutral(tgt)
+    self.gui:updateCDs(self:_cdLeft("F"), self:_cdLeft("B"), self:_cdLeft("S"))
 end
 
--- Initialization -------------------------------------------------------------
-if getgenv().BattlegroundsBot and getgenv().BattlegroundsBot.destroy then
-    pcall(function()
-        getgenv().BattlegroundsBot:destroy()
-    end)
-end
-
-local botInstance = Bot.new()
-getgenv().BattlegroundsBot = botInstance
-BotController = botInstance
-
-return botInstance
+------------------------------ BOOTSTRAP ------------------------------------
+if getgenv().BattlegroundsBot and getgenv().BattlegroundsBot.destroy then pcall(function() getgenv().BattlegroundsBot:destroy() end) end
+local bot=Bot.new(); getgenv().BattlegroundsBot=bot; return bot
+-- Use: getgenv().BattlegroundsBot:start()
