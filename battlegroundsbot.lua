@@ -20,15 +20,31 @@ local CFG = {
     SnipeHP        = 10,
 
 
-    InputTap = 0.045,
+    DashAnim = {
+        F  = "10479335397",
+        B  = "10491993682",
+        SL = "10480796021",
+        SR = "10480793962",
+    },
+
+    Cooldown = {
+        F = 10.0,
+        B = 10.0,
+        S =  2.0,
+    },
+
+    M1Range  = 6.5,
+
+    InputTap = 0.08,
     TapS     = 0.12,
     TapM     = 0.22,
     M1Min    = 0.25,
     M1Rand   = 0.10,
-    M1Range  = 5.0,
+
+    NPFinisherId  = "normal_punch",
+    UPFinisherId  = "uppercut",
 
 
-    Cooldown = { FDash=10, BDash=5.5, Side=0.50 },
     EvasiveCD = 30,
 
 
@@ -56,9 +72,9 @@ local CFG = {
 
 
         Anim = {
-            fdash = { "10479335397" },
-            bdash = { "10491993682" },
-            side  = { "10480796021", "10480793962" },
+            fdash = { CFG.DashAnim.F },
+            bdash = { CFG.DashAnim.B },
+            side  = { CFG.DashAnim.SL, CFG.DashAnim.SR },
         }
     },
 
@@ -466,7 +482,7 @@ function Bot.new()
     self.char=nil; self.hum=nil; self.rp=nil; self.alive=false
 
     self.evReady=true; self.evTimer=0; self.shouldPanic=false
-    self.lastFD=0; self.lastBD=0; self.lastSide=0
+    self.lastRealDash = {F=-1e9, B=-1e9, S=-1e9}
     self.lastM1=0; self.lastSkill=0; self.lastSnipe=0
     self.lastAttacker=nil; self.lastAtkTime=0; self.lastDmg=0; self.lastHP=0
 
@@ -561,7 +577,7 @@ local function isAttackTail(tail:string):boolean
     return isM1Tail(tail) or tail==A.np or tail==A.cp or tail==A.shove or tail==A.upper
 end
 
-function Bot:_beginDashOrientation(kind:string, tr:AnimationTrack, style:("off"|"def"), tHRP:BasePart?)
+function Bot:_beginDashOrientation(kind:string, tr:AnimationTrack, style:("off"|"def"), tHRP:BasePart?, enemy:Enemy?)
     if self.inDash or not self.hum or not self.rp then return end
     self.inDash = true
     if self.hum then self.hum.AutoRotate = false end
@@ -670,6 +686,15 @@ function Bot:_beginDashOrientation(kind:string, tr:AnimationTrack, style:("off"|
             alignCam()
         end
 
+        local scoreKind = (kind=="fdash" and "F") or (kind=="bdash" and "B") or "S"
+        if scoreKind then
+            local scoreTarget = enemy or pick
+            if not scoreTarget and t2 and t2.Parent then
+                scoreTarget = self:getEnemyByName(t2.Parent.Name)
+            end
+            self:_postDashScore(scoreKind, scoreTarget)
+        end
+
         -- If dash produced a stun window, immediately branch a close combo.
         if pick and self:_hasRecentStun(pick) and (pick.dist or 99) <= CFG.CloseUseRange then
             self:execBestCloseCombo(pick)  -- new helper added below
@@ -693,6 +718,10 @@ function Bot:_hookMine(h:Humanoid)
     local function hook(an:Animator)
         local c=an.AnimationPlayed:Connect(function(tr)
             local tail = tailIdFromTrack(tr)
+            local nowT = os.clock()
+            if tail == CFG.DashAnim.F then self.lastRealDash.F = nowT end
+            if tail == CFG.DashAnim.B then self.lastRealDash.B = nowT end
+            if tail == CFG.DashAnim.SL or tail == CFG.DashAnim.SR then self.lastRealDash.S = nowT end
             self.myAnims[tr]={id=tail,start=os.clock()}
             tr.Stopped:Connect(function()
                 self.myAnims[tr]=nil
@@ -720,16 +749,19 @@ function Bot:_hookMine(h:Humanoid)
             if kind~=nil then
                 local style:("off"|"def") = "off"
                 local tHRP:BasePart? = nil
+                local enemy:Enemy? = nil
                 if self.dashPending and self.dashPending.kind==kind then
                     style = self.dashPending.style
                     tHRP  = self.dashPending.tHRP
+                    enemy = self.dashPending.enemy
                     self.dashPending = nil
                 else
                     local tgt = self:selectTarget()
                     tHRP = tgt and tgt.hrp or nil
                     style = "off"
+                    enemy = tgt
                 end
-                self:_beginDashOrientation(kind, tr, style, tHRP)
+                self:_beginDashOrientation(kind, tr, style, tHRP, enemy)
             end
 
 
@@ -859,6 +891,18 @@ function Bot:_registerM1Attempt(r:Enemy?)
     self.lastM1AttemptTime = os.clock()
 end
 
+function Bot:onM1Hit(r:Enemy)
+    if not r or not r.hrp then return end
+    local dist = r.dist
+    if (not dist or dist==math.huge) and self.rp then
+        dist = (r.hrp.Position - self.rp.Position).Magnitude
+        r.dist = dist
+    end
+    if (dist or 99) <= 10.0 and self:dashReady("S") then
+        self:tryDash("S", r.hrp, "off", r)
+    end
+end
+
 function Bot:_noteStun(r:Enemy, tail:string)
     local nowT = os.clock()
     r.lastStun = nowT
@@ -896,32 +940,32 @@ function Bot:_waitForRange(r:Enemy, range:number, timeout:number):boolean
 end
 
 function Bot:_cdLeft(which:string)
-    local t = now()
-    if which=="F" then return math.max(0, CFG.Cooldown.FDash - (t - self.lastFD)) end
-    if which=="B" then return math.max(0, CFG.Cooldown.BDash - (t - self.lastBD)) end
-    return math.max(0, CFG.Cooldown.Side - (t - self.lastSide))
+    local last = self.lastRealDash and self.lastRealDash[which]
+    local cd = CFG.Cooldown[which]
+    if not (last and cd) then return 0 end
+    return math.max(0, cd - (os.clock() - last))
 end
 
 
 local function holdQ(d:number?) pressKey(CFG.Dash.KeyQ,true); task.wait(d or CFG.Dash.HoldQ); pressKey(CFG.Dash.KeyQ,false) end
 
-function Bot:_requestSideDash(r:Enemy)
-    if not (self.rp and r and r.hrp) then return end
-    local d = r.dist
+function Bot:_requestSideDash(tHRP:BasePart?, style:string?, r:Enemy?)
+    if not (self.rp and tHRP) then return end
     local g = CFG.Gates.S
-    if not distOK(d, g.lo, g.hi) then return end
-    if self:_cdLeft("S")>0 then return end
-    self.lastSide=now()
+    local dist = r and r.dist
+    if not dist and self.rp then dist = (tHRP.Position - self.rp.Position).Magnitude end
+    if not dist or not distOK(dist, g.lo, g.hi) then return end
 
-    local to = flat(r.hrp.Position - self.rp.Position)
+    local to = flat(tHRP.Position - self.rp.Position)
     if to.Magnitude<1e-3 then to = flat(self.rp.CFrame.LookVector) end
     local toU = to.Unit
     local right = flat(self.rp.CFrame.RightVector).Unit
     local dot = right.X*toU.X + right.Z*toU.Z
     local towardKey = (dot >= 0) and Enum.KeyCode.D or Enum.KeyCode.A
 
-    self.dashPending = {kind="side", style="off", tHRP=r.hrp}
-    self:aimAt(r.hrp)
+    local dashStyle = style or "off"
+    self.dashPending = {kind="side", style=dashStyle, tHRP=tHRP, enemy=r}
+    self:aimAt(tHRP)
     local wState=self.moveKeys[Enum.KeyCode.W]
     local sideState=self.moveKeys[towardKey]
     pressKey(Enum.KeyCode.W,true)
@@ -937,51 +981,97 @@ function Bot:_requestSideDash(r:Enemy)
     self.lastMoveTime = os.clock()
 end
 
-function Bot:_requestForwardDash(r:Enemy)
-    if not (self.rp and r and r.hrp) then return end
-    local d = r.dist
+function Bot:_requestForwardDash(tHRP:BasePart?, style:string?, r:Enemy?)
+    if not (self.rp and tHRP) then return end
     local g = CFG.Gates.F
-    if not distOK(d, g.lo, g.hi) then return end
-    if self:_cdLeft("F")>0 then return end
-    self.lastFD=now()
+    local dist = r and r.dist
+    if not dist and self.rp then dist = (tHRP.Position - self.rp.Position).Magnitude end
+    if not dist or not distOK(dist, g.lo, g.hi) then return end
 
-    self.dashPending = {kind="fdash", style="off", tHRP=r.hrp}
+    self.dashPending = {kind="fdash", style=style or "off", tHRP=tHRP, enemy=r}
     pressKey(Enum.KeyCode.W,true); task.wait(0.02); holdQ(CFG.Dash.HoldQ); pressKey(Enum.KeyCode.W,false)
     self.lastMoveTime = os.clock()
 end
 
-function Bot:_requestBackDash(r:Enemy)
-    if not (self.rp and r and r.hrp) then return end
-    local d = r.dist
+function Bot:_requestBackDash(tHRP:BasePart?, style:string?, r:Enemy?)
+    if not (self.rp and tHRP) then return end
     local g = CFG.Gates.B
-    if not distOK(d, g.lo, g.hi) then return end
-    if self:_cdLeft("B")>0 then return end
-    self.lastBD=now()
+    local dist = r and r.dist
+    if not dist and self.rp then dist = (tHRP.Position - self.rp.Position).Magnitude end
+    if not dist or not distOK(dist, g.lo, g.hi) then return end
 
-    self.dashPending = {kind="bdash", style="off", tHRP=r.hrp}
+    self.dashPending = {kind="bdash", style=style or "off", tHRP=tHRP, enemy=r}
     pressKey(Enum.KeyCode.S,true); task.wait(0.02); holdQ(CFG.Dash.HoldQ); pressKey(Enum.KeyCode.S,false)
     self.lastMoveTime = os.clock()
 end
 
+function Bot:dashReady(kind:string):boolean
+    local cd = CFG.Cooldown[kind]
+    if not cd then return false end
+    local last = self.lastRealDash and self.lastRealDash[kind] or -1e9
+    return (os.clock() - last) >= cd
+end
+
+function Bot:tryDash(kind:string, tHRP:BasePart?, style:string?, r:Enemy?)
+    if not tHRP or self.inDash then return false end
+    style = style or "off"
+    if kind=="S" then
+        if self:dashReady("S") then self:_requestSideDash(tHRP, style, r); return true end
+        return false
+    elseif kind=="F" then
+        if self:dashReady("F") then self:_requestForwardDash(tHRP, style, r); return true end
+        return false
+    elseif kind=="B" then
+        if self:dashReady("B") then self:_requestBackDash(tHRP, style, r); return true end
+        return false
+    end
+    return false
+end
+
+function Bot:_postDashScore(kind:string, r:Enemy?)
+    local last = self.lastRealDash and self.lastRealDash[kind]
+    if not last then return end
+    local nowT = os.clock()
+    if (nowT - last) >= 1.0 then return end
+    local dist = (r and r.dist) or 99
+    local reward = math.max(0, 8 - math.min(8, dist/4))
+    if r and self:_hasRecentStun(r) then reward = reward + 2.0 end
+    self.ls:moveAdd("dash_"..kind, reward, dist)
+    if self.gui then self.gui:updateCombos(self.ls.data) end
+end
+
+
+function Bot:isSelfBlockingVisual():boolean
+    local live = self.liveChar
+    if live then
+        local blk = live:GetAttribute("Blocking") or live:GetAttribute("IsBlocking") or live:GetAttribute("Block")
+        if attrOn(blk) then return true end
+    end
+    local bid = CFG.BlockAnimId and CFG.BlockAnimId:match("(%d+)$")
+    if bid then
+        for _,meta in pairs(self.myAnims) do
+            if (meta.id or "") == bid then return true end
+        end
+    end
+    return self.blocking or (os.clock() < (self.blockUntil or 0))
+end
 
 function Bot:_forceUnblockNow()
-    local b=CFG.Bind.Block; if not b or b.t~="Key" then return end
-    VIM:SendKeyEvent(false,b.k,false,game); task.wait(0.02)
-    local live=self.liveChar
-    for _=1,2 do
-        if not live then break end
-        local blk=live:GetAttribute("Blocking") or live:GetAttribute("IsBlocking") or live:GetAttribute("Block")
-        if not attrOn(blk) then break end
-        VIM:SendKeyEvent(true,b.k,false,game); task.wait(0.04); VIM:SendKeyEvent(false,b.k,false,game); task.wait(0.02)
+    local b=CFG.Bind.Block
+    if b and b.t=="Key" then
+        VIM:SendKeyEvent(false,b.k,false,game)
     end
+    self.blocking=false
+    self.blockUntil=0
 end
 function Bot:block(dur:number?, target:Enemy?)
     if os.clock() < self.blockCooldown then return end
     local b=CFG.Bind.Block; if not b or b.t~="Key" then return end
-    local hold = math.clamp(dur or 0.35, 0.20, 0.55)
     if self.blocking and self.blockThread then return end
+    local hold = math.clamp(dur or 0.35, 0.25, 0.60)
     self.blocking=true
     self.blockStartTime=os.clock()
+    self.blockUntil = self.blockStartTime + hold
     if target and target.model then
         local aid=self:_animId(target)
         local threat = aid and self.ls:threat(aid) or 0
@@ -990,10 +1080,11 @@ function Bot:block(dur:number?, target:Enemy?)
     self.blockThread = task.spawn(function()
         VIM:SendKeyEvent(true,b.k,false,game)
         local tEnd=os.clock()+hold
-        while os.clock()<tEnd and self.run and self.alive do task.wait(0.03) end
+        while os.clock()<tEnd and self.run and self.alive and self.blocking do task.wait(0.03) end
         VIM:SendKeyEvent(false,b.k,false,game)
-        self:_forceUnblockNow()
-        self.blocking=false; self.blockThread=nil
+        self.blocking=false
+        self.blockUntil=0
+        self.blockThread=nil
         self.blockStartTime=nil
         self.lastBlockTime=os.clock()
         self.blockCooldown = self.lastBlockTime + 0.35
@@ -1021,6 +1112,9 @@ function Bot:addEnemy(m:Model)
                     local myA=self:_myAnimId()
                     if myA then self.ls:deal(myA, delta) end
                     r.aRecent = (r.aRecent or 0)*0.5 + delta
+                    if self.lastM1Target==r and os.clock()-self.lastM1AttemptTime < 0.6 then
+                        self:onM1Hit(r)
+                    end
                 end
             end
             r.hp=nh
@@ -1145,13 +1239,23 @@ end
 
 
 function Bot:blockDur(r:Enemy?):number
-    local base=0.35
+    local base = 0.34
     if not r then return base end
-    local st=r.style; if st.aggr>6 then base+=0.12 end
-    if self.lastAttacker==r.model.Name and os.clock()-self.lastAtkTime<0.55 then base+=0.12 end
-    local aid=nil; local best=-1; for _,slot in pairs(r.active) do if slot.start>best then best=slot.start; aid=slot.id end end
-    if aid then local th=self.ls:threat(aid); if th>1.0 then base+=0.10 end; if th>2.0 then base+=0.10 end end
-    return math.clamp(base,0.25,0.55)
+    if r.style and r.style.aggr>6 then base = base + 0.10 end
+    if self.lastAttacker==r.model.Name and os.clock()-(self.lastAtkTime or 0)<0.55 then base = base + 0.10 end
+
+    local aid, tmax = nil, -1
+    for _,slot in pairs(r.active or {}) do
+        if slot.start>tmax then tmax=slot.start; aid=slot.id end
+    end
+    if aid then
+        local th = self.ls:threat(aid)
+        if th > 1.0 then base = base + 0.08 end
+        if th > 2.0 then base = base + 0.08 end
+    end
+
+    if os.clock() - (self.lastOffenseTime or 0) < 0.6 then base = base - 0.05 end
+    return math.clamp(base, 0.25, 0.60)
 end
 
 function Bot:shouldBlock(r:Enemy?):boolean
@@ -1200,7 +1304,7 @@ end
 
 function Bot:attemptEvasive(reason:string)
     if not self.evReady then return false end
-    if self.blocking and self.blockThread then self.blockUntil=os.clock(); task.wait(0.05) end
+    if self.blocking and self.blockThread then self:_forceUnblockNow(); task.wait(0.05) end
     self:clearMove(); self.evReady=false; self.evTimer=CFG.EvasiveCD
     local dk = (math.random()<0.5) and Enum.KeyCode.A or Enum.KeyCode.D
     local t0=os.clock()
@@ -1237,6 +1341,10 @@ function Bot:_pressAction(name:string, hold:number?)
     end
 
     if name=="M1" or name=="M1HOLD" then
+        if self:isSelfBlockingVisual() then
+            self:_forceUnblockNow()
+            return false
+        end
         pressMouse(Enum.UserInputType.MouseButton1, hold or CFG.InputTap)
         markOffense()
         return true
@@ -1263,22 +1371,27 @@ end
 
 function Bot:maybeDash(r:Enemy)
     if not r or not r.hrp or self.inDash then return end
-    local d = r.dist
-    local canF = (d>=CFG.Gates.F.lo and d<=CFG.Gates.F.hi) and (self:_cdLeft("F")==0)
-    local canS = (d>=CFG.Gates.S.lo and d<=CFG.Gates.S.hi) and (self:_cdLeft("S")==0)
-    local canB = (d>=CFG.Gates.B.lo and d<=CFG.Gates.B.hi) and (self:_cdLeft("B")==0)
+    local d = r.dist or 999
 
-    -- If we just created a stun window, chain a side dash to stay glued.
-    if self:_hasRecentStun(r) and canS then self:_requestSideDash(r); return end
+    local statsS = self.ls:moveStats("dash_S").ravg
+    local statsF = self.ls:moveStats("dash_F").ravg
+    local statsB = self.ls:moveStats("dash_B").ravg
+    if statsS > statsF + 0.5 and self:dashReady("S") then
+        if self:tryDash("S", r.hrp, "off", r) then return end
+    end
+    if statsB > statsF + 0.5 and self:dashReady("B") then
+        if self:tryDash("B", r.hrp, "off", r) then return end
+    end
 
-    -- Offense bias: side > forward > back
-    if canS and math.random()<0.94 then self:_requestSideDash(r); return end
-    if canF and math.random()<0.72 then self:_requestForwardDash(r); return end
-    if canB and math.random()<0.44 then self:_requestBackDash(r); return end
-
-    if canS then self:_requestSideDash(r)
-    elseif canF then self:_requestForwardDash(r)
-    elseif canB then self:_requestBackDash(r) end
+    if d >= 3.0 and d <= 26.0 and self:dashReady("S") then
+        if self:tryDash("S", r.hrp, "off", r) then return end
+    end
+    if d >= 10.0 and d <= 60.0 and self:dashReady("F") then
+        if self:tryDash("F", r.hrp, "off", r) then return end
+    end
+    if d >= 6.0 and d <= 44.0 and self:dashReady("B") then
+        if self:tryDash("B", r.hrp, "off", r) then return end
+    end
 end
 
 
@@ -1351,20 +1464,20 @@ function Bot:execCombo(c:Combo, r:Enemy)
                     if ok and self:_upperSucceeded(r, y0) then
                         local fired=false
                         if distOK(r.dist, CFG.Gates.F.lo, CFG.Gates.F.hi) and probTake(0.60) then
-                            self:_requestForwardDash(r); fired=true
+                            fired = self:tryDash("F", r.hrp, "off", r)
                         end
                         if not fired and distOK(r.dist, CFG.Gates.S.lo, CFG.Gates.S.hi) and probTake(0.25) then
-                            self:_requestSideDash(r); fired=true
+                            fired = self:tryDash("S", r.hrp, "off", r)
                         end
                         if not fired and distOK(r.dist, CFG.Gates.B.lo, CFG.Gates.B.hi) then
-                            self:_requestBackDash(r)
+                            self:tryDash("B", r.hrp, "off", r)
                         end
                     else
 
                         if distOK(r.dist, CFG.Gates.S.lo, CFG.Gates.S.hi) then
-                            self:_requestSideDash(r)
+                            self:tryDash("S", r.hrp, "off", r)
                         elseif distOK(r.dist, CFG.Gates.B.lo, CFG.Gates.B.hi) then
-                            self:_requestBackDash(r)
+                            self:tryDash("B", r.hrp, "off", r)
                         end
                     end
                 else
@@ -1374,11 +1487,11 @@ function Bot:execCombo(c:Combo, r:Enemy)
                 end
             elseif st.kind=="dash" and st.action then
                 if st.action=="side" then
-                    self:_requestSideDash(r)
+                    self:tryDash("S", r.hrp, st.dir or "off", r)
                 elseif st.action=="fdash" then
-                    self:_requestForwardDash(r)
+                    self:tryDash("F", r.hrp, st.dir or "off", r)
                 elseif st.action=="bdash" then
-                    self:_requestBackDash(r)
+                    self:tryDash("B", r.hrp, st.dir or "off", r)
                 elseif st.action=="auto_after_upper" then
 
                 end
@@ -1418,14 +1531,22 @@ end
 
 function Bot:execBestCloseCombo(r:Enemy)
     if not r or not r.hrp then return end
-    -- Prefer 2–3x M1 → CP → M1 → NP, or Shove pressure branch, depending on LS success.
-    local c1, c2 = "sai_m1cp_np", "sai_m1_shove_sd_cp_np"
-    local ls1 = (self.ls.data.combos[c1] and self.ls.data.combos[c1].succ or 0)
-    local ls2 = (self.ls.data.combos[c2] and self.ls.data.combos[c2].succ or 0)
-    local pick = (ls2 > ls1 and math.random()<0.65) and c2 or c1
+    local preferUpper = (not r.hasEv) or self:_targetRagdolled(r) or ((r.dist or math.huge) < 4.0)
+    local npStats = self.ls:combo("sai_m1cp_np")
+    local upStats = self.ls:combo("sai_upper_path")
+    local rNP = npStats.succ or 0
+    local rUP = upStats.succ or 0
+
+    local pick = "sai_m1cp_np"
+    if preferUpper and (rUP >= rNP * 0.8) then
+        pick = "sai_upper_path"
+    end
+
     for _,c in ipairs(LIB) do
         if c.id == pick then
-            if r.dist > (c.max or CFG.M1Range) then self:_waitForRange(r, math.min(CFG.M1Range, 6.5), 0.45) end
+            if r.dist > (c.max or CFG.M1Range) then
+                self:_waitForRange(r, math.min(CFG.M1Range, 6.5), 0.45)
+            end
             self:execCombo(c, r)
             return
         end
@@ -1476,12 +1597,12 @@ function Bot:approachFarTarget(r:Enemy)
     self:setInput(1, side)
 
     -- Use whichever dash is ready to gain ground.
-    local canF = self:_cdLeft("F")==0
-    local canS = self:_cdLeft("S")==0
+    local canF = self:dashReady("F")
+    local canS = self:dashReady("S")
     if canS and d > 70 then
-        self:_requestSideDash(r)
+        self:tryDash("S", r.hrp, "off", r)
     elseif canF and d > 65 then
-        self:_requestForwardDash(r)
+        self:tryDash("F", r.hrp, "off", r)
     end
 end
 
@@ -1700,6 +1821,14 @@ function Bot:update(dt:number)
     if tgt then
         self:approachFarTarget(tgt)
     end
+    if self.run and tgt and (tgt.dist or 999) <= CFG.M1Range and not self.isAttacking and not self:isSelfBlockingVisual() then
+        if os.clock() - (self.lastM1AttemptTime or 0) > 0.25 then
+            self:_registerM1Attempt(tgt)
+            if self:_pressAction("M1", CFG.InputTap) then
+                self.lastM1 = os.clock()
+            end
+        end
+    end
     if not tgt then
         self.gui:setT("Target: none")
         if not self.run then self:clearMove() end
@@ -1752,7 +1881,7 @@ function Bot:update(dt:number)
         self.stillTimer = self.stillTimer + dt
         if self.stillTimer > 1.2 then
             if distOK(tgt.dist, CFG.Gates.S.lo, CFG.Gates.S.hi) and math.random()<0.65 then
-                self:_pressAction("Shove", CFG.TapS); self:_requestSideDash(tgt)
+                self:_pressAction("Shove", CFG.TapS); self:tryDash("S", tgt.hrp, "off", tgt)
             else
                 self:maybeDash(tgt)
             end
