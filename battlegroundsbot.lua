@@ -33,7 +33,7 @@ local CFG = {
     },
 
     M1Range  = 6.5,
-
+    M1MaxGap = 0.60,
     InputTap = 0.08,
     TapS     = 0.12,
     TapM     = 0.22,
@@ -48,9 +48,9 @@ local CFG = {
 
 
     Gates = {
-        F = { lo=14.0, hi=30.0 },
-        S = { lo= 4.5, hi=22.0 },
-        B = { lo= 5.0, hi=40.0 },
+        F = { lo= 20.0, hi=33.0 },
+        S = { lo= 3.5, hi=18.5 },
+        B = { lo= 5.0, hi=35.0 },
     },
 
 
@@ -177,7 +177,12 @@ local function attrOn(v:any):boolean
     return true
 end
 
-local function m1Gap() return CFG.M1Min + math.random() * CFG.M1Rand end
+local function m1Gap()
+    -- random spacing, but never exceed hard cap
+    local w = CFG.M1Min + math.random() * CFG.M1Rand
+    return math.min(w, CFG.M1MaxGap)
+end
+
 
 
 local function flat(v:Vector3) return Vector3.new(v.X,0,v.Z) end
@@ -774,7 +779,7 @@ function Bot:_hookMine(h:Humanoid)
                 self.lastAttackTime=os.clock()
                 if isM1Tail(tail) then
 
-                    if os.clock() - self.lastM1 > 0.8 then
+                    if os.clock() - self.lastM1 > CFG.M1MaxGap then
                         self.m1ChainCount = 0
                     end
                     self.m1ChainCount = math.min(4, self.m1ChainCount + 1)
@@ -984,17 +989,24 @@ function Bot:_requestSideDash(tHRP:BasePart?, style:string?, r:Enemy?)
     self.lastMoveTime = os.clock()
 end
 
-function Bot:_requestForwardDash(tHRP:BasePart?, style:string?, r:Enemy?)
-    if not (self.rp and tHRP) then return end
-    local g = CFG.Gates.F
-    local dist = r and r.dist
-    if not dist and self.rp then dist = (tHRP.Position - self.rp.Position).Magnitude end
-    if not dist or not distOK(dist, g.lo, g.hi) then return end
+function Bot:_requestForwardDash(r:Enemy)
+    if not (self.rp and r and r.hrp) then return end
+    -- NEW: user-intended global limiter (in addition to the real in-game CD)
+    if (os.clock() - (self.lastFDUser or -1e9)) < 30.0 then return end
 
-    self.dashPending = {kind="fdash", style=style or "off", tHRP=tHRP, enemy=r}
+    local d = r.dist
+    local g = CFG.Gates.F
+    if not distOK(d, g.lo, g.hi) then return end
+    if self:_cdLeft("F")>0 then return end
+
+    self.lastFD=now()
+    self.lastFDUser = os.clock()   -- NEW: record user limiter
+
+    self.dashPending = {kind="fdash", style="off", tHRP=r.hrp}
     pressKey(Enum.KeyCode.W,true); task.wait(0.02); holdQ(CFG.Dash.HoldQ); pressKey(Enum.KeyCode.W,false)
     self.lastMoveTime = os.clock()
 end
+
 
 function Bot:_requestBackDash(tHRP:BasePart?, style:string?, r:Enemy?)
     if not (self.rp and tHRP) then return end
@@ -1210,35 +1222,45 @@ function Bot:updateEnemies(dt:number)
 end
 
 function Bot:selectTarget():Enemy?
-    local best, bs, bestAgg = nil, -1e9, -1e9
+    local nowT = os.clock()
+    local reach = 50.0  -- until inside this, just go nearest
+
+    -- 1) Pick nearest alive enemy first (for approach phase)
+    local nearest, nd = nil, 1/0
     for _,r in pairs(self.enemies) do
-        if r.model.Parent and r.hum and r.hum.Health>0 then
-            local s  = r.score or -1e9
-            local ag = r.aggro or 0
-            local w  = s + ag * 0.9  -- weight aggro heavily
-            if w > bs then bs, best, bestAgg = w, r, ag end
+        if r.model.Parent and r.hum and r.hum.Health>0 and r.dist and r.dist<nd then
+            nearest, nd = r, r.dist
         end
     end
-    if not best then return nil end
+    if not nearest then return nil end
 
-    local nowT = os.clock()
-    if self.sticky and self.sticky.model.Parent and (nowT - self.stickyT) < (self.stickyHold or 1.6) then
+    -- If we don't have a sticky or we are still far, lock to nearest
+    if (not self.sticky) or (not self.sticky.model.Parent) or ((self.sticky.dist or 999) > reach) then
+        self.sticky, self.stickyT = nearest, nowT
+        self.stickyHold = 3.0
+        self.switchMargin = 40.0
         return self.sticky
     end
-    if self.sticky and self.sticky.model.Parent then
-        local curAgg = self.sticky.aggro or 0
-        -- Only switch if new aggro beats current by margin, or total score is far better.
-        if (bestAgg > curAgg + (self.switchMargin or 25)) or (bs > ((self.sticky.score or -1e9) + 60)) then
-            self.sticky, self.stickyT = best, nowT
-            return best
-        else
-            return self.sticky
+
+    -- 2) Once within reach, consider switching only if someone very close + much higher aggro
+    local cur = self.sticky
+    local best, bs, bestAgg = cur, (cur.score or -1e9), (cur.aggro or 0)
+    for _,r in pairs(self.enemies) do
+        if r.model.Parent and r.hum and r.hum.Health>0 then
+            local w = (r.score or -1e9) + (r.aggro or 0) * 0.9
+            if w > bs and (r.dist or 999) <= 20.0 then
+                best, bs, bestAgg = r, w, (r.aggro or 0)
+            end
         end
-    else
-        self.sticky, self.stickyT = best, nowT
-        return best
     end
+    if best ~= cur then
+        if (bestAgg > (cur.aggro or 0) + 30) or (bs > ((cur.score or -1e9) + 80)) then
+            self.sticky, self.stickyT = best, nowT
+        end
+    end
+    return self.sticky
 end
+
 
 
 function Bot:blockDur(r:Enemy?):number
@@ -1376,26 +1398,21 @@ function Bot:maybeDash(r:Enemy)
     if not r or not r.hrp or self.inDash then return end
     local d = r.dist or 999
 
-    local statsS = self.ls:moveStats("dash_S").ravg
-    local statsF = self.ls:moveStats("dash_F").ravg
-    local statsB = self.ls:moveStats("dash_B").ravg
-    if statsS > statsF + 0.5 and self:dashReady("S") then
-        if self:tryDash("S", r.hrp, "off", r) then return end
-    end
-    if statsB > statsF + 0.5 and self:dashReady("B") then
-        if self:tryDash("B", r.hrp, "off", r) then return end
-    end
+    local canF = (d>=CFG.Gates.F.lo and d<=CFG.Gates.F.hi) and (self:_cdLeft("F")==0)
+    local canS = (d>=CFG.Gates.S.lo and d<=CFG.Gates.S.hi) and (self:_cdLeft("S")==0)
+    local canB = (d>=CFG.Gates.B.lo and d<=CFG.Gates.B.hi) and (self:_cdLeft("B")==0)
 
-    if d >= 3.0 and d <= 26.0 and self:dashReady("S") then
-        if self:tryDash("S", r.hrp, "off", r) then return end
-    end
-    if d >= 10.0 and d <= 60.0 and self:dashReady("F") then
-        if self:tryDash("F", r.hrp, "off", r) then return end
-    end
-    if d >= 6.0 and d <= 44.0 and self:dashReady("B") then
-        if self:tryDash("B", r.hrp, "off", r) then return end
+    -- glue after stun
+    if self:_hasRecentStun(r) and canS then self:_requestSideDash(r); return end
+
+    -- be very side/back heavy
+    if canS then self:_requestSideDash(r); return end
+    if canB then self:_requestBackDash(r); return end
+    if canF and (os.clock() - (self.lastFDUser or -1e9) >= 30.0) then  -- forward gating handled below
+        self:_requestForwardDash(r); return
     end
 end
+
 
 
 local function probTake(p:number) return math.random() < p end
@@ -1439,9 +1456,15 @@ function Bot:execCombo(c:Combo, r:Enemy)
                     end
                     self:_registerM1Attempt(r)
                     self:_pressAction("M1", st.hold)
-                    self.lastM1=os.clock()
-                    task.wait(st.wait or m1Gap())
-                    waitForStun=true
+                    self.lastM1 = os.clock()
+
+                    -- (A) Clamp the delay after an M1 so the next M1 can’t be > 0.60 s away
+                    local w = st.wait or m1Gap()
+                    w = math.min(w, CFG.M1MaxGap or 0.60)
+                    task.wait(w)
+
+                    waitForStun = true
+
                 elseif st.action=="M1HOLD" then
                     if self:_targetRagdolled(r) then abort=true break end
                     if (r.dist or math.huge) > CFG.M1Range then
@@ -1449,9 +1472,15 @@ function Bot:execCombo(c:Combo, r:Enemy)
                     end
                     self:_registerM1Attempt(r)
                     self:_pressAction("M1HOLD", st.hold)
-                    self.lastM1=os.clock()
-                    task.wait(st.wait or m1Gap())
-                    waitForStun=true
+                    self.lastM1 = os.clock()
+
+                    -- (A) Same clamp for held M1
+                    local w = st.wait or m1Gap()
+                    w = math.min(w, CFG.M1MaxGap or 0.60)
+                    task.wait(w)
+
+                    waitForStun = true
+
                 elseif st.action=="Upper" then
                     local y0 = (r.hrp and r.hrp.Position.Y) or 0
 
@@ -1476,18 +1505,18 @@ function Bot:execCombo(c:Combo, r:Enemy)
                             self:tryDash("B", r.hrp, "off", r)
                         end
                     else
-
                         if distOK(r.dist, CFG.Gates.S.lo, CFG.Gates.S.hi) then
                             self:tryDash("S", r.hrp, "off", r)
                         elseif distOK(r.dist, CFG.Gates.B.lo, CFG.Gates.B.hi) then
                             self:tryDash("B", r.hrp, "off", r)
                         end
                     end
-                else
 
+                else
                     self:_pressAction(st.action, st.hold)
                     task.wait(st.wait or CFG.InputTap)
                 end
+
             elseif st.kind=="dash" and st.action then
                 if st.action=="side" then
                     self:tryDash("S", r.hrp, st.dir or "off", r)
