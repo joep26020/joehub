@@ -492,6 +492,7 @@ type Enemy = {
     active:{[AnimationTrack]:{id:string,start:number,wasBlk:boolean,hit:boolean}},
     cons:{RBXScriptConnection},
     aggro:number,
+    lastStunByMe:number?,
 }
 
 function Bot.new()
@@ -527,6 +528,9 @@ function Bot.new()
 
     self.blocking=false; self.blockUntil=0; self.blockThread=nil; self.lastBlockTime=0; self.blockCooldown=0
     self.blockStartTime=nil
+
+    self.stunFollow=nil
+    self.lastStunTarget=nil
 
     self.moveKeys={ [Enum.KeyCode.W]=false,[Enum.KeyCode.A]=false,[Enum.KeyCode.S]=false,[Enum.KeyCode.D]=false }
     self.strafe=0; self.lastStrafe=0
@@ -630,13 +634,13 @@ function Bot.new()
     end)
 
     self.hb=RunService.Heartbeat:Connect(function(dt) self:update(dt) end)
-            -- Always-on aim lock when not in a dash / not blocking
-        self.alwaysAimHB = RunService.Heartbeat:Connect(function()
-            if not self.run or not self.rp or self.inDash then return end
-            if self.blocking or self.isAttacking then return end
-            local tgt = self:selectTarget()
-            if tgt and tgt.hrp then self:aimAt(tgt.hrp) end
-        end)
+    -- Always-on aim lock when not in a dash / not blocking
+    self.alwaysAimHB = RunService.Heartbeat:Connect(function()
+        if not self.run or not self.rp or self.inDash then return end
+        if self.blocking then return end
+        local tgt = self:selectTarget()
+        if tgt and tgt.hrp then self:aimAt(tgt.hrp) end
+    end)
 
     return self
 end
@@ -788,6 +792,22 @@ function Bot:_beginDashOrientation(kind:string, tr:AnimationTrack, style:("off"|
         if t2 and self.hum and self.hum.Health>0 and self.hum:GetState()~=Enum.HumanoidStateType.FallingDown then
             self.rp.CFrame = CFrame.lookAt(self.rp.Position, Vector3.new(t2.Position.X, self.rp.Position.Y, t2.Position.Z))
             alignCam()
+        end
+
+        local closeEnemy = enemy or pick
+        if closeEnemy and closeEnemy.hrp and self.run and self.alive and not self.actThread then
+            local dist = closeEnemy.dist or math.huge
+            if dist==math.huge and self.rp then
+                dist = (closeEnemy.hrp.Position - self.rp.Position).Magnitude
+            end
+            if dist <= 5.0 and not self.blocking then
+                self:_registerM1Attempt(closeEnemy)
+                if self:_pressAction("M1", CFG.TapS) then
+                    local nowT = os.clock()
+                    self.lastM1 = nowT
+                    self.lastAttempt = nowT
+                end
+            end
         end
 
         -- log dash "reward"
@@ -1330,6 +1350,7 @@ end
 function Bot:_endLife()
     self.lifeStats.deaths = (self.lifeStats.deaths or 0) + 1
     self:_finalizeActionRecords(true)
+    self.stunFollow = nil
     self:savePolicy()
 end
 
@@ -1366,6 +1387,10 @@ function Bot:_noteStun(r:Enemy, tail:string)
     r.stunScore = math.min(1.6, (r.stunScore or 0) + gain)
     r.lastStunAnim = tail
     self.lastStunTarget = r
+    if byMe then
+        r.lastStunByMe = nowT
+        self.stunFollow = {target = r, time = nowT, didM1 = false, didCombo = false}
+    end
     self.ls:log("stun_detected", {enemy = r.model.Name, anim = tail, score = r.stunScore, byMe = byMe})
 end
 
@@ -1374,6 +1399,60 @@ function Bot:_hasRecentStun(r:Enemy?):boolean
     local last = r.lastStun or 0
     if last == 0 then return false end
     return (os.clock() - last) <= 0.75 and (r.stunScore or 0) >= 0.35
+end
+
+function Bot:_processStunFollow(tgt:Enemy?, nowT:number):boolean
+    local data = self.stunFollow
+    if not data then return false end
+    local target = data.target
+    if not target or (tgt and tgt ~= target) then
+        if target and target ~= tgt and (nowT - data.time) > 0.9 then
+            self.stunFollow = nil
+        end
+        return false
+    end
+    if (nowT - data.time) > 1.1 then
+        self.stunFollow = nil
+        return false
+    end
+    if self.blocking or self.inDash then return false end
+    if self.actThread then return false end
+
+    local dist = tgt and (tgt.dist or math.huge) or math.huge
+    if tgt and dist==math.huge and tgt.hrp and self.rp then
+        dist = (tgt.hrp.Position - self.rp.Position).Magnitude
+    end
+
+    if tgt and (not data.didM1) and dist <= CFG.M1Range then
+        if (nowT - (self.lastM1 or 0)) >= CFG.M1Min*0.5 then
+            self:_registerM1Attempt(tgt)
+            if self:_pressAction("M1", CFG.TapS) then
+                self.lastM1 = nowT
+                self.lastAttempt = nowT
+                data.didM1 = true
+            end
+        end
+    end
+
+    local comboReady = tgt and tgt.lastStunByMe and ((nowT - tgt.lastStunByMe) <= 0.75)
+    if tgt and comboReady and not data.didCombo then
+        if self:_shouldStartCombo(tgt) then
+            local combo = self:_chooseCombo(tgt)
+            if combo then
+                data.didCombo = true
+                self.stunFollow = nil
+                self:execCombo(combo, tgt)
+                self.lastAttempt = nowT
+                self.lastOffenseTime = nowT
+                return true
+            end
+        end
+    end
+
+    if data.didM1 and (not comboReady) and (nowT - data.time) > 0.9 then
+        self.stunFollow = nil
+    end
+    return false
 end
 
 function Bot:_waitForRange(r:Enemy, range:number, timeout:number):boolean
@@ -1501,6 +1580,7 @@ end
 
 function Bot:tryDash(kind:string, tHRP:BasePart?, style:string?, r:Enemy?)
     if not tHRP or self.inDash then return false end
+    if self.blocking then return false end
     style = style or "off"
     if kind=="S" then
         if self:dashReady("S") then self:_requestSideDash(tHRP, style, r); return true end
@@ -1587,7 +1667,8 @@ function Bot:addEnemy(m:Model)
     local r:Enemy = {
         model=m, hum=m:FindFirstChildOfClass("Humanoid"), hrp=m:FindFirstChild("HumanoidRootPart"),
         dist=math.huge, hasEv=true, lastEv=0, score=0, ply=Players:FindFirstChild(m.Name), hp=100,
-        style={aggr=0,def=0,ev=0,lastAtk=0,lastBlk=0,lastDash=0}, recent=0, aRecent=0, active={}, cons={}, aggro=0
+        style={aggr=0,def=0,ev=0,lastAtk=0,lastBlk=0,lastDash=0}, recent=0, aRecent=0, active={}, cons={}, aggro=0,
+        lastStunByMe=0,
     }
 
     if not (r.hum and r.hrp) then return end
@@ -1651,7 +1732,13 @@ function Bot:addEnemy(m:Model)
     else table.insert(r.cons, r.hum.ChildAdded:Connect(function(ch) if ch:IsA("Animator") then hookAnimator(ch) end end)) end
 
     table.insert(r.cons, m.AncestryChanged:Connect(function(_,p)
-        if p==nil then for _,c in ipairs(r.cons) do pcall(function() c:Disconnect() end) end self.enemies[m]=nil end
+        if p==nil then
+            for _,c in ipairs(r.cons) do pcall(function() c:Disconnect() end) end
+            if self.stunFollow and self.stunFollow.target == r then
+                self.stunFollow = nil
+            end
+            self.enemies[m]=nil
+        end
     end))
 
     self.enemies[m]=r
@@ -1686,6 +1773,7 @@ function Bot:updateEnemies(dt:number)
             r.recent = (r.recent or 0)*math.clamp(1-dt*0.6,0,1)
             r.aRecent= (r.aRecent or 0)*math.clamp(1-dt*0.6,0,1)
             st.aggr=math.max(0, st.aggr - dt*0.35); st.def=math.max(0, st.def - dt*0.25); st.ev=math.max(0, st.ev - dt*0.25)
+            if r.lastStunByMe and (nowT - r.lastStunByMe) > 1.2 then r.lastStunByMe = nil end
             if r.lastEv>0 then r.hasEv = (nowT - r.lastEv) >= CFG.EvasiveCD end
             if attrOn(m:GetAttribute("Attacking") or m:GetAttribute("Attack") or m:GetAttribute("isAttacking")) then st.aggr=math.clamp(st.aggr+dt*3.5,0,10); st.lastAtk=nowT end
             if attrOn(m:GetAttribute("Blocking") or m:GetAttribute("IsBlocking") or m:GetAttribute("Block")) then st.def=math.clamp(st.def+dt*3,0,10); st.lastBlk=nowT end
@@ -1858,7 +1946,6 @@ function Bot:_pressAction(name:string, hold:number?)
 
     if name=="M1" or name=="M1HOLD" then
         if self:isSelfBlockingVisual() then
-            self:_forceUnblockNow()
             return false
         end
         pressMouse(Enum.UserInputType.MouseButton1, hold or CFG.InputTap)
@@ -1887,6 +1974,7 @@ end
 
 function Bot:maybeDash(r:Enemy)
     if not r or not r.hrp or self.inDash then return end
+    if self.blocking then return end
     local d = r.dist or 999
     local nowT = os.clock()
     local ctx = self:_ctxKey(r)
@@ -1962,6 +2050,7 @@ end
 function Bot:execCombo(c:Combo, r:Enemy)
     if self.actThread then return end
     self:_finalizeActionRecords(true)
+    self.stunFollow = nil
     self.curCombo=c; self:clearMove(); self.lastComboTry=os.clock(); self.gui:setC("Combo: "..c.name)
     local attemptDist = r.dist or 0
     if attemptDist==math.huge then attemptDist=0 end
@@ -2201,6 +2290,10 @@ function Bot:_shouldStartCombo(tgt:Enemy):boolean
 
     local nowT = os.clock()
     local hasBridge = self:_hasRecentStun(tgt)
+    local stunOwned = tgt.lastStunByMe and ((nowT - tgt.lastStunByMe) <= 0.75)
+    if stunOwned then
+        hasBridge = true
+    end
     local m1Recent  = (nowT - (self.lastM1 or 0)) <= 0.55
     local idlePush  = (nowT - (self.lastOffenseTime or 0)) > 0.90 and tgt.dist <= (CFG.M1Range + 0.5)
 
@@ -2328,7 +2421,7 @@ function Bot:neutral(tgt:Enemy?)
     local ragdolled = self:_targetRagdolled(tgt)
     local skillCandidates = {}
 
-    if d<=CFG.M1Range and nowT-self.lastM1>CFG.M1Min*0.9 and not ragdolled and not self.isAttacking then
+    if d<=CFG.M1Range and nowT-self.lastM1>CFG.M1Min*0.9 and not ragdolled and not self.isAttacking and not self.blocking then
         table.insert(skillCandidates, {
             name = "M1",
             bias = 0.4,
@@ -2420,7 +2513,7 @@ function Bot:neutral(tgt:Enemy?)
                 self:_noteAction(pick.name, ctx, tgt)
             end
         end
-        if (not self.isAttacking) and d <= CFG.M1Range and not ragdolled then
+        if (not self.isAttacking) and d <= CFG.M1Range and not ragdolled and not self.blocking then
             self:_registerM1Attempt(tgt)
             if self:_pressAction("M1", CFG.TapS) then
                 self.lastM1 = nowT
@@ -2430,6 +2523,10 @@ function Bot:neutral(tgt:Enemy?)
         end
     end
 
+    if self.blocking then
+        forward = math.clamp(forward, -0.25, 0.35)
+        strafe  = math.clamp(strafe, -0.35, 0.35)
+    end
     self:setInput(forward,strafe)
 end
 
@@ -2454,6 +2551,7 @@ function Bot:stop()
     if not self.run then self:clearMove(); return end
     self.autoStart=false; self.run=false; self:clearMove(); if self.hum then self.hum.AutoRotate=true end
     self.gui:setS("Status: idle"); self.gui:setC("Combo: none"); self.ls:log("session_stop",{dur=os.clock()-self.since})
+    self.stunFollow = nil
 end
 
 function Bot:exit()
@@ -2478,6 +2576,10 @@ function Bot:update(dt:number)
     self.ls:flush()
     if not(self.char and self.hum and self.rp) then return end
     if self.hum.Health<=0 then self.run=false return end
+
+    if not self.run then
+        self:_autoResumeTick()
+    end
 
 
     self:_finalizeActionRecords(false)
@@ -2517,6 +2619,11 @@ function Bot:update(dt:number)
         self.blocking=false
         self.blockStartTime=nil
         self:maybeDash(tgt)
+    end
+
+    if self:_processStunFollow(tgt, nowT) then
+        self.gui:updateCDs(self:_cdLeft("F"), self:_cdLeft("B"), self:_cdLeft("S"))
+        return
     end
 
 
