@@ -106,12 +106,12 @@ local CFG = {
     },
 
 
-    MaxNoAtk = 1.3,
+    MaxNoAtk = 1.5,
     ForceAtk = 2.4,
     CloseGain = 3.0, CloseWindow = 5.0, FarChase = 45.0,
 
     StillPunish = 5.0,
-    AttackPunish = 15.0,
+    AttackPunish = 8.0,
 
 
     Data  = "bgbot",
@@ -640,16 +640,29 @@ function Bot.new()
 
     return self
 end
+function Bot:_autoResumeTick()
+    -- If we’re spawned and healthy but not "running", auto-start
+    if self.autoStart and (not self.run) and self.hum and self.hum.Health > 0 then
+        self:start()
+    end
+end
 
 function Bot:destroy()
-    if self.hb then self.hb:Disconnect() end
-    if self.liveConn then self.liveConn:Disconnect() end
+    if self.hb           then self.hb:Disconnect() end
+    if self.alwaysAimHB  then self.alwaysAimHB:Disconnect() end
+    if self.liveConn     then self.liveConn:Disconnect() end
     for _,c in ipairs(self.myHumConns) do pcall(function() c:Disconnect() end) end
+    -- (Optional) also clear enemy connections
+    for _,rec in pairs(self.enemies or {}) do
+        for _,c in ipairs(rec.cons or {}) do pcall(function() c:Disconnect() end) end
+    end
     self:clearMove()
+    if self.hum then self.hum.AutoRotate = true end
     self:_finalizeActionRecords(true)
     self:savePolicy()
     if self.gui then self.gui:destroy() end
 end
+
 
 
 local function tailIdFromTrack(tr:AnimationTrack?):string
@@ -1398,15 +1411,18 @@ function Bot:_requestSideDash(tHRP:BasePart?, style:string?, r:Enemy?)
     if not dist and self.rp then dist = (tHRP.Position - self.rp.Position).Magnitude end
     if not dist or not distOK(dist, g.lo, g.hi) then return end
 
-    -- decide which side key dashes TOWARD the target’s flank
+    -- Direction to target (flat) and our right vector (flat)
     local to = flat(tHRP.Position - self.rp.Position)
     if to.Magnitude < 1e-3 then to = flat(self.rp.CFrame.LookVector) end
     local toU   = to.Unit
     local right = flat(self.rp.CFrame.RightVector).Unit
-    local dot   = right.X*toU.X + right.Z*toU.Z
-    local sideKey = (dot >= 0) and Enum.KeyCode.D or Enum.KeyCode.A
+    local dot   = right.X * toU.X + right.Z * toU.Z
 
-    -- TEMPORARILY release W/S so the engine can’t convert it into a forward/back dash
+    -- BEFORE: (dot >= 0) -> D else A
+    -- NOW: press the OPPOSITE key (flip) so we wrap correctly around the enemy
+    local sideKey = (dot >= 0) and Enum.KeyCode.A or Enum.KeyCode.D
+
+    -- Avoid diagonal converting to F/B dash
     local wasW = self.moveKeys[Enum.KeyCode.W]
     local wasS = self.moveKeys[Enum.KeyCode.S]
     if wasW then self:setKey(Enum.KeyCode.W, false) end
@@ -1420,12 +1436,11 @@ function Bot:_requestSideDash(tHRP:BasePart?, style:string?, r:Enemy?)
     holdQ(CFG.Dash.HoldQ)
     pressKey(sideKey, false)
 
-    -- restore any key states we temporarily released
     if wasW then self:setKey(Enum.KeyCode.W, true) end
     if wasS then self:setKey(Enum.KeyCode.S, true) end
-
     self.lastMoveTime = os.clock()
 end
+
 
 
 function Bot:_requestForwardDash(r:Enemy)
@@ -2179,23 +2194,21 @@ end
 
 function Bot:_shouldStartCombo(tgt:Enemy):boolean
     if not tgt or not tgt.hrp then return false end
-    if os.clock() - (self.lastComboTry or 0) < 0.50 then return false end
+    if os.clock() - (self.lastComboTry or 0) < 0.35 then return false end
     if tgt.dist > CFG.ComboDist then return false end
-    if self.blocking then return false end
-    if tgt.style.lastBlk>0 and os.clock()-tgt.style.lastBlk<0.28 then return false end
-    if not self.hum or self.hum.MoveDirection.Magnitude>0.9 then return false end
+    if self.blocking or self.inDash then return false end
     if self:_targetRagdolled(tgt) then return false end
-    if self.m1ChainCount>=3 then return false end
-    if self.lastM1Target~=tgt or (os.clock()-self.lastM1AttemptTime)>0.7 then return false end
+
+    local nowT = os.clock()
     local hasBridge = self:_hasRecentStun(tgt)
-    if not hasBridge then
-        if self.m1ChainCount>=1 and (os.clock()-self.lastM1)<=0.55 then
-            hasBridge = true
-        end
-    end
-    if not hasBridge then return false end
-    return true
+    local m1Recent  = (nowT - (self.lastM1 or 0)) <= 0.55
+    local idlePush  = (nowT - (self.lastOffenseTime or 0)) > 0.90 and tgt.dist <= (CFG.M1Range + 0.5)
+
+    -- Allow combos if we just stunned them, or we recently tapped M1,
+    -- or we’ve been idle a bit but are in range.
+    return hasBridge or m1Recent or idlePush
 end
+
 
 function Bot:_chooseCombo(tgt:Enemy):Combo?
 
@@ -2318,7 +2331,7 @@ function Bot:neutral(tgt:Enemy?)
     if d<=CFG.M1Range and nowT-self.lastM1>CFG.M1Min*0.9 and not ragdolled and not self.isAttacking then
         table.insert(skillCandidates, {
             name = "M1",
-            bias = 0.1,
+            bias = 0.4,
             exec = function()
                 self:_registerM1Attempt(tgt)
                 local fired = self:_pressAction("M1", CFG.TapS)
@@ -2334,7 +2347,7 @@ function Bot:neutral(tgt:Enemy?)
     local skillWindow = d<=CFG.CloseUseRange and (nowT - self.lastSkill)>0.28
     if skillWindow then
         if slotReady(SLOT.Shove) then
-            local bias = 0.0
+            local bias = 0.20
             if tgt.style and (nowT - (tgt.style.lastBlk or 0)) < 0.3 then bias += 0.5 end
             table.insert(skillCandidates, {
                 name = "SHOVE",
@@ -2405,6 +2418,14 @@ function Bot:neutral(tgt:Enemy?)
         if pick and pick.exec then
             if pick.exec() then
                 self:_noteAction(pick.name, ctx, tgt)
+            end
+        end
+        if (not self.isAttacking) and d <= CFG.M1Range and not ragdolled then
+            self:_registerM1Attempt(tgt)
+            if self:_pressAction("M1", CFG.TapS) then
+                self.lastM1 = nowT
+                self.lastAttempt = nowT
+                self:_noteAction("M1", ctx, tgt)
             end
         end
     end
@@ -2636,5 +2657,9 @@ function Bot:update(dt:number)
 end
 
 
-if getgenv().BattlegroundsBot and getgenv().BattlegroundsBot.destroy then pcall(function() getgenv().BattlegroundsBot:destroy() end) end
-local bot=Bot.new(); getgenv().BattlegroundsBot=bot; return bot
+if getgenv().BattlegroundsBot and getgenv().BattlegroundsBot.destroy then
+    pcall(function() getgenv().BattlegroundsBot:destroy() end)
+end
+local bot = Bot.new()
+getgenv().BattlegroundsBot = bot
+return bot
