@@ -483,6 +483,74 @@ local LIB:{Combo} = {
 
 
 local Bot={}; Bot.__index=Bot
+
+function Bot:_trackConnection(conn)
+    if not conn then return nil end
+    self.connections = self.connections or {}
+    table.insert(self.connections, conn)
+    return conn
+end
+
+function Bot:_aimCameraAt(tHRP:BasePart?)
+    if not (tHRP) then return end
+    local cam = workspace.CurrentCamera
+    if not cam then return end
+    local camPos = cam.CFrame.Position
+    local dir = tHRP.Position - camPos
+    if dir.Magnitude < 1e-3 then return end
+    cam.CFrame = CFrame.new(camPos, camPos + dir.Unit)
+end
+
+function Bot:_ensureCameraLock(tHRP:BasePart?)
+    local cam = workspace.CurrentCamera
+    if not cam then return end
+    if not self.savedCameraType then
+        self.savedCameraType = cam.CameraType
+    end
+    if cam.CameraType ~= Enum.CameraType.Scriptable then
+        cam.CameraType = Enum.CameraType.Scriptable
+    end
+    if tHRP then
+        self:_aimCameraAt(tHRP)
+    end
+end
+
+function Bot:_restoreCamera()
+    local cam = workspace.CurrentCamera
+    if cam and self.savedCameraType then
+        cam.CameraType = self.savedCameraType
+    end
+    self.savedCameraType = nil
+end
+
+function Bot:_cancelActiveCombo()
+    if self.actThread then
+        pcall(task.cancel, self.actThread)
+        self.actThread = nil
+    end
+    self.curCombo = nil
+    if self.gui then
+        self.gui:setC("Combo: none")
+    end
+end
+
+function Bot:_stopDashOrientation()
+    if self.dashOrientThread then
+        pcall(task.cancel, self.dashOrientThread)
+        self.dashOrientThread = nil
+    end
+end
+
+function Bot:_stopBlocking()
+    if self.blockThread then
+        pcall(task.cancel, self.blockThread)
+        self.blockThread = nil
+    end
+    if self.blocking then
+        self:_forceUnblockNow()
+    end
+    self.blockStartTime = nil
+end
 type Enemy = {
     model:Model, hum:Humanoid?, hrp:BasePart?, dist:number,
     hasEv:boolean, lastEv:number, score:number, ply:Player?, hp:number,
@@ -520,6 +588,11 @@ function Bot.new()
         meta = nil,
     }
     self.lifeStats = {index = 0, damageDealt = 0, damageTaken = 0, reward = 0, kills = 0}
+
+    self.connections = {}
+    self.destroyed = false
+    self.reconcileTask = nil
+    self.savedCameraType = nil
 
     self.evReady=true; self.evTimer=0; self.shouldPanic=false
     self.lastRealDash = {F=-1e9, B=-1e9, S=-1e9}
@@ -575,48 +648,58 @@ function Bot.new()
     self.isUlt=false
     self.lastUltCheck=0
 
-    self.gui.startB.MouseButton1Click:Connect(function() if getgenv().BattlegroundsBot then getgenv().BattlegroundsBot:start() end end)
-    self.gui.stopB.MouseButton1Click:Connect(function() if getgenv().BattlegroundsBot then getgenv().BattlegroundsBot:stop() end end)
-    self.gui.exitB.MouseButton1Click:Connect(function() if getgenv().BattlegroundsBot then getgenv().BattlegroundsBot:exit() end end)
+    self:_trackConnection(self.gui.startB.MouseButton1Click:Connect(function()
+        if getgenv().BattlegroundsBot then getgenv().BattlegroundsBot:start() end
+    end))
+    self:_trackConnection(self.gui.stopB.MouseButton1Click:Connect(function()
+        if getgenv().BattlegroundsBot then getgenv().BattlegroundsBot:stop() end
+    end))
+    self:_trackConnection(self.gui.exitB.MouseButton1Click:Connect(function()
+        if getgenv().BattlegroundsBot then getgenv().BattlegroundsBot:exit() end
+    end))
 
     self.gui:setS("Status: idle"); self.gui:setT("Target: none"); self.gui:setC("Combo: none"); self.gui:setE("Evasive: unknown")
     self.gui:updateCombos(self.ls.data); self.gui:updateCDs(0,0,0)
 
     self:connectChar(LP.Character or LP.CharacterAdded:Wait())
-    LP.CharacterAdded:Connect(function(c) self:connectChar(c) end)
+    self:_trackConnection(LP.CharacterAdded:Connect(function(c) self:connectChar(c) end))
 
     self:attachLive(self.liveChar)
     for _,m in ipairs(self.live:GetChildren()) do self:addEnemy(m) end
-    self.live.ChildAdded:Connect(function(m) if m.Name==LP.Name then self:attachLive(m) else self:addEnemy(m) end end)
-    self.live.ChildRemoved:Connect(function(m)
+    self:_trackConnection(self.live.ChildAdded:Connect(function(m)
+        if m.Name==LP.Name then self:attachLive(m) else self:addEnemy(m) end
+    end))
+    self:_trackConnection(self.live.ChildRemoved:Connect(function(m)
         local r=self.enemies[m]; if r then for _,c in ipairs(r.cons) do pcall(function() c:Disconnect() end) end self.enemies[m]=nil end
         if m==self.liveChar then self:attachLive(nil) end
-    end)
+    end))
 
     -- Also watch Players so we prep enemy records fast
-    Players.PlayerAdded:Connect(function(p)
-        p.CharacterAdded:Connect(function(ch)
+    self:_trackConnection(Players.PlayerAdded:Connect(function(p)
+        self:_trackConnection(p.CharacterAdded:Connect(function(ch)
             task.defer(function()
+                if self.destroyed then return end
                 local live = workspace:FindFirstChild("Live")
                 local mdl = live and live:FindFirstChild(p.Name)
                 if mdl then self:addEnemy(mdl) end
             end)
-        end)
-    end)
+        end))
+    end))
 
-    Players.PlayerRemoving:Connect(function(p)
+    self:_trackConnection(Players.PlayerRemoving:Connect(function(p)
         for m,rec in pairs(self.enemies) do
             if rec.ply == p then
                 for _,c in ipairs(rec.cons) do pcall(function() c:Disconnect() end) end
                 self.enemies[m] = nil
             end
         end
-    end)
+    end))
 
     -- Lightweight reconciler in case Live hiccups
-    task.spawn(function()
-        while true do
+    self.reconcileTask = task.spawn(function()
+        while not self.destroyed do
             task.wait(2.0)
+            if self.destroyed then break end
             local live = workspace:FindFirstChild("Live")
             if live then
                 -- add any missing
@@ -631,6 +714,7 @@ function Bot.new()
                 end
             end
         end
+        self.reconcileTask = nil
     end)
 
     self.hb=RunService.Heartbeat:Connect(function(dt) self:update(dt) end)
@@ -655,19 +739,56 @@ function Bot:_autoResumeTick()
 end
 
 function Bot:destroy()
-    if self.hb           then self.hb:Disconnect() end
-    if self.alwaysAimHB  then self.alwaysAimHB:Disconnect() end
-    if self.liveConn     then self.liveConn:Disconnect() end
+    if self.destroyed then return end
+    self.destroyed = true
+    self.autoStart = false
+    self.run = false
+    self.alive = false
+    self.pendingResume = false
+
+    self:_cancelActiveCombo()
+    self:_stopDashOrientation()
+    self.inDash = false
+    self:_stopBlocking()
+    self:_restoreCamera()
+
+    if self.hb then self.hb:Disconnect() end
+    if self.alwaysAimHB then self.alwaysAimHB:Disconnect() end
+    if self.liveConn then self.liveConn:Disconnect() end
+    self.hb = nil
+    self.alwaysAimHB = nil
+    self.liveConn = nil
+
+    if self.reconcileTask then
+        pcall(task.cancel, self.reconcileTask)
+        self.reconcileTask = nil
+    end
+
+    for _,conn in ipairs(self.connections or {}) do
+        pcall(function() conn:Disconnect() end)
+    end
+    self.connections = {}
+
     for _,c in ipairs(self.myHumConns) do pcall(function() c:Disconnect() end) end
-    -- (Optional) also clear enemy connections
+    self.myHumConns = {}
+
     for _,rec in pairs(self.enemies or {}) do
         for _,c in ipairs(rec.cons or {}) do pcall(function() c:Disconnect() end) end
     end
+    self.enemies = {}
+
     self:clearMove()
     if self.hum then self.hum.AutoRotate = true end
+    self.char = nil
+    self.hum = nil
+    self.rp = nil
+    self.liveChar = nil
     self:_finalizeActionRecords(true)
     self:savePolicy()
-    if self.gui then self.gui:destroy() end
+    if self.gui then
+        self.gui:destroy()
+        self.gui = nil
+    end
 end
 
 
@@ -740,7 +861,8 @@ function Bot:_beginDashOrientation(kind:string, tr:AnimationTrack, style:("off"|
     local stopped = false
     tr.Stopped:Connect(function() stopped = true end)
 
-    task.spawn(function()
+    self:_stopDashOrientation()
+    self.dashOrientThread = task.spawn(function()
         while not stopped and os.clock()-t0 <= length do
             if not (self.run and self.hum and self.hum.Health>0 and self.rp) then break end
             local tgt = tHRP
@@ -832,6 +954,7 @@ function Bot:_beginDashOrientation(kind:string, tr:AnimationTrack, style:("off"|
         self.allowDashExtend = nil
 
         self.inDash = false
+        self.dashOrientThread = nil
     end)
 end
 
@@ -925,6 +1048,7 @@ function Bot:_myAnimId():string? local best,ts=nil,-1; for _,v in pairs(self.myA
 
 
 function Bot:connectChar(char:Model)
+    if self.destroyed then return end
     self.char=char; if not char then return end
     local hum=char:FindFirstChildOfClass("Humanoid") or char:WaitForChild("Humanoid",5); if not hum then return end
     self.hum=hum; self.rp=char:FindFirstChild("HumanoidRootPart") or char:WaitForChild("HumanoidRootPart",5)
@@ -938,17 +1062,36 @@ function Bot:connectChar(char:Model)
     end
 
     hum.Died:Connect(function()
+        if self.destroyed then return end
+        self:_cancelActiveCombo()
+        self:_stopDashOrientation()
+        self:_stopBlocking()
+        self:clearMove()
+        self.allowDashExtend = nil
+        self.inDash = false
+        self:_restoreCamera()
         self:_endLife()
         self.alive=false; self.gui:setS("Status: dead"); self.gui:setT("Target: none"); self.run=false; self.pendingResume=true
         task.spawn(function()
             local liveModel:Model? = nil
-            while liveModel==nil do local lf=workspace:FindFirstChild("Live"); if lf then liveModel=lf:FindFirstChild(LP.Name) end; task.wait(0.25) end
+            while not self.destroyed and liveModel==nil do
+                local lf=workspace:FindFirstChild("Live")
+                if lf then liveModel=lf:FindFirstChild(LP.Name) end
+                task.wait(0.25)
+            end
+            if self.destroyed then return end
             local ch=LP.Character or LP.CharacterAdded:Wait()
+            if self.destroyed then return end
             if ch and ch~=self.char then
                 self:connectChar(ch)
             end
-            local h2=ch:FindFirstChildOfClass("Humanoid") or ch:WaitForChild("Humanoid",5)
-            if h2 then repeat task.wait(0.15) until h2.Health>0; if self.pendingResume then self.pendingResume=false; self:start() end end
+            local h2=ch and (ch:FindFirstChildOfClass("Humanoid") or ch:WaitForChild("Humanoid",5)) or nil
+            if self.destroyed then return end
+            if h2 then
+                repeat task.wait(0.15) until self.destroyed or h2.Health>0
+                if self.destroyed then return end
+                if self.pendingResume then self.pendingResume=false; self:start() end
+            end
         end)
     end)
 
@@ -987,6 +1130,7 @@ end
 
 function Bot:onSelfEvasive() self:clearMove(); self.evReady=false; self.evTimer=CFG.EvasiveCD; self.shouldPanic=false; self.gui:setE(("Evasive: %.1fs"):format(math.max(0,self.evTimer))) end
 function Bot:attachLive(model:Model?)
+    if self.destroyed then return end
     if self.liveConn then self.liveConn:Disconnect() end; self.liveChar=model; if not model then return end
     local function chk(d:Instance) if d.Name=="RagdollCancel" then self:onSelfEvasive() end end
     for _,d in ipairs(model:GetDescendants()) do chk(d) end
@@ -1033,13 +1177,26 @@ end
 
 
 function Bot:aimAt(tHRP:BasePart?)
+    if self.destroyed then return end
     if not tHRP or not self.rp then return end
     if self.inDash then return end
     if self.hum and self.hum:GetState()==Enum.HumanoidStateType.FallingDown then
         if self.hum then self.hum.AutoRotate=true end
         return
     end
-    if not self.bridge:tryAim(self.rp,tHRP) then aimCFrame(self.rp,tHRP) end
+    local aimed = self.bridge:tryAim(self.rp,tHRP)
+    if not aimed then
+        aimCFrame(self.rp,tHRP)
+    else
+        local to = tHRP.Position - self.rp.Position
+        if to.Magnitude > 1e-3 then
+            local look = self.rp.CFrame.LookVector
+            if look:Dot(to.Unit) < 0.995 then
+                aimCFrame(self.rp,tHRP)
+            end
+        end
+    end
+    self:_ensureCameraLock(tHRP)
     if self.hum then self.hum.AutoRotate=false end
 end
 
@@ -1388,6 +1545,34 @@ function Bot:_targetRagdolled(r:Enemy?):boolean
     return false
 end
 
+function Bot:_targetIsBlocking(r:Enemy?, window:number?):boolean
+    if not r then return false end
+    local nowT = os.clock()
+    local limit = window or 0.35
+
+    if r.model then
+        local attr = r.model:GetAttribute("Blocking") or r.model:GetAttribute("IsBlocking") or r.model:GetAttribute("Block")
+        if attrOn(attr) then return true end
+    end
+
+    if r.style and (nowT - (r.style.lastBlk or 0)) <= limit then
+        return true
+    end
+
+    if r.active then
+        local blockTail = CFG.BlockAnimId and CFG.BlockAnimId:match("(%d+)$")
+        if blockTail then
+            for _,slot in pairs(r.active) do
+                if slot and slot.id == blockTail then
+                    return true
+                end
+            end
+        end
+    end
+
+    return false
+end
+
 function Bot:_registerM1Attempt(r:Enemy?)
     self.lastM1Target = r
     self.lastM1AttemptTime = os.clock()
@@ -1522,10 +1707,14 @@ function Bot:_requestSideDash(tHRP:BasePart?, style:string?, r:Enemy?)
     local toU   = to.Unit
     local right = flat(self.rp.CFrame.RightVector).Unit
     local dot   = right.X * toU.X + right.Z * toU.Z
+    local offensive = (style or "off") == "off"
 
-    -- BEFORE: (dot >= 0) -> D else A
-    -- NOW: press the OPPOSITE key (flip) so we wrap correctly around the enemy
-    local sideKey = (dot >= 0) and Enum.KeyCode.A or Enum.KeyCode.D
+    local sideKey
+    if offensive then
+        sideKey = (dot >= 0) and Enum.KeyCode.D or Enum.KeyCode.A
+    else
+        sideKey = (dot >= 0) and Enum.KeyCode.A or Enum.KeyCode.D
+    end
 
     -- Avoid diagonal converting to F/B dash
     local wasW = self.moveKeys[Enum.KeyCode.W]
@@ -2631,6 +2820,11 @@ end
 function Bot:stop()
     if not self.run then self:clearMove(); return end
     self.autoStart=false; self.run=false; self:clearMove(); if self.hum then self.hum.AutoRotate=true end
+    self:_cancelActiveCombo()
+    self:_stopDashOrientation()
+    self.inDash = false
+    self:_stopBlocking()
+    self:_restoreCamera()
     self.gui:setS("Status: idle"); self.gui:setC("Combo: none"); self.ls:log("session_stop",{dur=os.clock()-self.since})
     self.stunFollow = nil
 end
@@ -2654,6 +2848,7 @@ CFG.Bind = {
 }
 
 function Bot:update(dt:number)
+    if self.destroyed then return end
     self.ls:flush()
     self:_ensureCharacterBindings()
     if not(self.char and self.hum and self.rp) then return end
@@ -2810,6 +3005,28 @@ function Bot:update(dt:number)
         self:neutral(tgt)
         self.gui:updateCDs(self:_cdLeft("F"), self:_cdLeft("B"), self:_cdLeft("S"))
         return
+    end
+
+    local closeForCombo = tgt.dist <= (CFG.M1Range + 0.5)
+    if closeForCombo and not self.blocking and not self.inDash and not self.actThread then
+        local targetBlocking = self:_targetIsBlocking(tgt)
+        if targetBlocking then
+            if tgt.hrp and self:dashReady("S") and (nowT - (self.lastAttempt or 0)) > 0.25 then
+                if self:tryDash("S", tgt.hrp, "off", tgt) then
+                    self.lastAttempt = nowT
+                end
+            end
+        elseif not self.isAttacking then
+            local sinceM1 = nowT - (self.lastM1 or 0)
+            if sinceM1 >= CFG.M1Min then
+                self:_registerM1Attempt(tgt)
+                if self:_pressAction("M1", CFG.TapS) then
+                    self.lastM1 = nowT
+                    self.lastAttempt = nowT
+                    self.lastOffenseTime = nowT
+                end
+            end
+        end
     end
 
 
