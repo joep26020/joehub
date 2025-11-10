@@ -501,20 +501,6 @@ function Bot:_aimCameraAt(tHRP:BasePart?)
     cam.CFrame = CFrame.new(camPos, camPos + dir.Unit)
 end
 
-function Bot:_ensureCameraLock(tHRP:BasePart?)
-    local cam = workspace.CurrentCamera
-    if not cam then return end
-    if not self.savedCameraType then
-        self.savedCameraType = cam.CameraType
-    end
-    if cam.CameraType ~= Enum.CameraType.Scriptable then
-        cam.CameraType = Enum.CameraType.Scriptable
-    end
-    if tHRP then
-        self:_aimCameraAt(tHRP)
-    end
-end
-
 function Bot:_restoreCamera()
     local cam = workspace.CurrentCamera
     if cam and self.savedCameraType then
@@ -1196,7 +1182,7 @@ function Bot:aimAt(tHRP:BasePart?)
             end
         end
     end
-    self:_ensureCameraLock(tHRP)
+
     if self.hum then self.hum.AutoRotate=false end
 end
 
