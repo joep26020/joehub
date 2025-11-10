@@ -634,12 +634,15 @@ function Bot.new()
     end)
 
     self.hb=RunService.Heartbeat:Connect(function(dt) self:update(dt) end)
-    -- Always-on aim lock when not in a dash / not blocking
+    -- Always-on aim lock when not in a dash sequence
     self.alwaysAimHB = RunService.Heartbeat:Connect(function()
-        if not self.run or not self.rp or self.inDash then return end
-        if self.blocking then return end
-        local tgt = self:selectTarget()
-        if tgt and tgt.hrp then self:aimAt(tgt.hrp) end
+        if not self.rp or self.inDash then return end
+        local tgt = self.currentTarget or self:selectTarget()
+        if not tgt or not tgt.hrp then return end
+        -- Maintain aim even while blocking to satisfy constant lock requirement
+        if self.run or self.blocking then
+            self:aimAt(tgt.hrp)
+        end
     end)
 
     return self
@@ -941,6 +944,9 @@ function Bot:connectChar(char:Model)
             local liveModel:Model? = nil
             while liveModel==nil do local lf=workspace:FindFirstChild("Live"); if lf then liveModel=lf:FindFirstChild(LP.Name) end; task.wait(0.25) end
             local ch=LP.Character or LP.CharacterAdded:Wait()
+            if ch and ch~=self.char then
+                self:connectChar(ch)
+            end
             local h2=ch:FindFirstChildOfClass("Humanoid") or ch:WaitForChild("Humanoid",5)
             if h2 then repeat task.wait(0.15) until h2.Health>0; if self.pendingResume then self.pendingResume=false; self:start() end end
         end)
@@ -985,6 +991,26 @@ function Bot:attachLive(model:Model?)
     local function chk(d:Instance) if d.Name=="RagdollCancel" then self:onSelfEvasive() end end
     for _,d in ipairs(model:GetDescendants()) do chk(d) end
     self.liveConn=model.DescendantAdded:Connect(chk)
+end
+
+
+function Bot:_ensureCharacterBindings()
+    local char = LP.Character
+    if char and char ~= self.char then
+        self:connectChar(char)
+    end
+
+    if (not self.liveChar) or (not self.liveChar.Parent) then
+        local live = workspace:FindFirstChild("Live")
+        local mdl = live and live:FindFirstChild(LP.Name) or nil
+        if mdl and mdl ~= self.liveChar then
+            self:attachLive(mdl)
+        end
+    end
+
+    if self.hum and self.hum.Parent==nil and char then
+        self:connectChar(char)
+    end
 end
 
 
@@ -1525,7 +1551,7 @@ end
 function Bot:_requestForwardDash(r:Enemy)
     if not (self.rp and r and r.hrp) then return end
     -- NEW: user-intended global limiter (in addition to the real in-game CD)
-    if (os.clock() - (self.lastFDUser or -1e9)) < 30.0 then return end
+    if (os.clock() - (self.lastFDUser or -1e9)) < 45.0 then return end
 
     local d = r.dist
     local g = CFG.Gates.F
@@ -1582,15 +1608,19 @@ function Bot:tryDash(kind:string, tHRP:BasePart?, style:string?, r:Enemy?)
     if not tHRP or self.inDash then return false end
     if self.blocking then return false end
     style = style or "off"
+    local executed=false
     if kind=="S" then
-        if self:dashReady("S") then self:_requestSideDash(tHRP, style, r); return true end
-        return false
+        if self:dashReady("S") then self:_requestSideDash(tHRP, style, r); executed=true end
     elseif kind=="F" then
-        if self:dashReady("F") then self:_requestForwardDash(tHRP, style, r); return true end
-        return false
+        if self:dashReady("F") then self:_requestForwardDash(r); executed=true end
     elseif kind=="B" then
-        if self:dashReady("B") then self:_requestBackDash(tHRP, style, r); return true end
-        return false
+        if self:dashReady("B") then self:_requestBackDash(tHRP, style, r); executed=true end
+    end
+    if executed then
+        local ctx=self:_ctxKey(r)
+        self:_noteAction(kind, ctx, r)
+        self.ls:log("dash",{kind=kind, enemy=r and r.model and r.model.Name or "none", dist=r and r.dist or nil, style=style})
+        return true
     end
     return false
 end
@@ -1631,7 +1661,7 @@ function Bot:_forceUnblockNow()
     self.blocking=false
     self.blockUntil=0
 end
-function Bot:block(dur:number?, target:Enemy?)
+function Bot:block(dur:number?, target:Enemy?, reason:string?)
     if os.clock() < self.blockCooldown then return end
     local b=CFG.Bind.Block; if not b or b.t~="Key" then return end
     if self.blocking and self.blockThread then return end
@@ -1642,7 +1672,7 @@ function Bot:block(dur:number?, target:Enemy?)
     if target and target.model then
         local aid=self:_animId(target)
         local threat = aid and self.ls:threat(aid) or 0
-        self.ls:log("block", {enemy=target.model.Name, anim=aid, threat=threat, dur=hold})
+        self.ls:log("block", {enemy=target.model.Name, anim=aid, threat=threat, dur=hold, reason=reason or "auto"})
     end
     self.blockThread = task.spawn(function()
         VIM:SendKeyEvent(true,b.k,false,game)
@@ -1862,29 +1892,47 @@ function Bot:blockDur(r:Enemy?):number
     return math.clamp(base, 0.25, 0.60)
 end
 
-function Bot:shouldBlock(r:Enemy?):boolean
-    if not r then return false end
-    if self.blocking then return true end
-    if self.isAttacking then return false end
-    if self:_hasRecentStun(r) then return false end
+function Bot:shouldBlock(r:Enemy?):(boolean,string?)
+    if not r then return false,nil end
+    if self.blocking then return true,"holding" end
+    if self.isAttacking then return false,nil end
+    if self:_hasRecentStun(r) then return false,nil end
     local nowT=os.clock()
-    if nowT<self.blockCooldown then return false end
-    if nowT-self.lastBlockTime<0.22 then return false end
-    if r.dist>CFG.ComboDist+4 then return false end
-    local aid=nil; local best=-1; for _,slot in pairs(r.active) do if slot.start>best then best=slot.start; aid=slot.id end end
-    if aid then
-        local threat=self.ls:threat(aid)
-        if threat>=1.5 then return true end
-        if threat>=1.0 and nowT-(r.style.lastAtk or 0)<0.65 then return true end
+    if nowT<self.blockCooldown then return false,nil end
+    if nowT-self.lastBlockTime<0.18 then return false,nil end
+    if r.dist>CFG.ComboDist+5 then return false,nil end
+
+    local recentM1=false
+    local newestId=nil
+    local best=-1
+    for _,slot in pairs(r.active) do
+        if slot.start>best then
+            best=slot.start
+            newestId=slot.id
+        end
+        if slot.id and isM1Tail(slot.id) and (nowT - slot.start) <= 0.55 then
+            recentM1=true
+        end
     end
+
+    if newestId then
+        local threat=self.ls:threat(newestId)
+        if threat>=1.5 then return true,"high_threat" end
+        if threat>=1.0 and nowT-(r.style.lastAtk or 0)<0.70 then return true,"threat_follow" end
+    end
+
+    if recentM1 and r.dist<=CFG.M1Range+0.8 then
+        return true,"m1_detected"
+    end
+
     local st=r.style
-    if st.aggr>6 and nowT-st.lastAtk<0.50 then return true end
-    if st.aggr>4 and nowT-st.lastAtk<0.70 and r.dist<=CFG.ComboDist then return true end
-    if self.lastAttacker==r.model.Name and nowT-self.lastAtkTime<0.75 then return true end
-    if st.lastAtk>0 and nowT-st.lastAtk<0.30 and r.dist<CFG.ComboDist then return true end
-    if st.lastDash>0 and nowT-st.lastDash<0.25 and r.dist<=CFG.SpaceMax then return true end
-    if st.def>4 and nowT-st.lastBlk>1.0 and r.dist<=CFG.ComboDist then return true end
-    return false
+    if st.aggr>6 and nowT-st.lastAtk<0.55 then return true,"aggressive_combo" end
+    if st.aggr>4 and nowT-st.lastAtk<0.75 and r.dist<=CFG.ComboDist then return true,"pressure_close" end
+    if self.lastAttacker==r.model.Name and nowT-self.lastAtkTime<0.85 then return true,"retaliate" end
+    if st.lastAtk>0 and nowT-st.lastAtk<0.32 and r.dist<CFG.ComboDist+0.5 then return true,"swing_follow" end
+    if st.lastDash>0 and nowT-st.lastDash<0.35 and r.dist<=CFG.SpaceMax+2 then return true,"dash_gap_close" end
+    if st.def>4 and nowT-st.lastBlk>1.0 and r.dist<=CFG.ComboDist then return true,"guard_break" end
+    return false,nil
 end
 
 function Bot:shouldEvasive(r:Enemy?):boolean
@@ -1982,18 +2030,18 @@ function Bot:maybeDash(r:Enemy)
     local candidates = {}
     local canS = self:dashReady("S") and distOK(d, CFG.Gates.S.lo, CFG.Gates.S.hi)
     local canB = self:dashReady("B") and distOK(d, CFG.Gates.B.lo, CFG.Gates.B.hi)
-    local canF = self:dashReady("F") and distOK(d, CFG.Gates.F.lo, CFG.Gates.F.hi) and ((nowT - (self.lastFDUser or -1e9)) >= 30.0)
+    local canF = self:dashReady("F") and distOK(d, CFG.Gates.F.lo, CFG.Gates.F.hi) and ((nowT - (self.lastFDUser or -1e9)) >= 45.0)
 
     if canS then
-        table.insert(candidates, {name = "S", bias = 0.25, exec = function()
+        table.insert(candidates, {name = "S", bias = 0.55, exec = function()
             self:_requestSideDash(r.hrp, "off", r)
             return true
         end})
     end
 
     if canB then
-        local bBias = -0.05
-        if not canS then bBias += 0.25 end
+        local bBias = 0.35
+        if not canS then bBias += 0.35 end
         if r.style and r.style.aggr>6 and (nowT - (r.style.lastAtk or 0)) < 0.35 and d>=5 and d<=14 and not canS then
             bBias += 0.8
         end
@@ -2004,7 +2052,7 @@ function Bot:maybeDash(r:Enemy)
     end
 
     if canF then
-        local fBias = -0.25
+        local fBias = -0.60
         if d > 50 then fBias += 0.35 end
         table.insert(candidates, {name = "F", bias = fBias, exec = function()
             self:_requestForwardDash(r)
@@ -2031,6 +2079,7 @@ function Bot:maybeDash(r:Enemy)
         local ok = pick.exec()
         if ok ~= false then
             self:_noteAction(pick.name, ctx, r)
+            self.ls:log("dash_auto", {kind = pick.name, enemy = r and r.model and r.model.Name or "none", dist = d, ctx = ctx})
         end
     end
 end
@@ -2274,7 +2323,7 @@ function Bot:approachFarTarget(r:Enemy)
     -- Prefer Side(off) spam to close safely; F only on 30s limiter
     if self:dashReady("S") then
         self:tryDash("S", r.hrp, "off", r)
-    elseif self:dashReady("F") and (t - (self.lastFDUser or -1e9) >= 30.0) then
+    elseif self:dashReady("F") and (t - (self.lastFDUser or -1e9) >= 45.0) then
         self:tryDash("F", r.hrp, "off", r)
     end
 end
@@ -2283,7 +2332,7 @@ end
 
 function Bot:_shouldStartCombo(tgt:Enemy):boolean
     if not tgt or not tgt.hrp then return false end
-    if os.clock() - (self.lastComboTry or 0) < 0.35 then return false end
+    if os.clock() - (self.lastComboTry or 0) < 0.25 then return false end
     if tgt.dist > CFG.ComboDist then return false end
     if self.blocking or self.inDash then return false end
     if self:_targetRagdolled(tgt) then return false end
@@ -2294,12 +2343,13 @@ function Bot:_shouldStartCombo(tgt:Enemy):boolean
     if stunOwned then
         hasBridge = true
     end
-    local m1Recent  = (nowT - (self.lastM1 or 0)) <= 0.55
+    local m1Recent  = (nowT - (self.lastM1 or 0)) <= 0.60
+    local chainReady = (self.m1ChainCount or 0) >= 2 and (nowT - (self.lastM1 or 0)) <= 0.75
     local idlePush  = (nowT - (self.lastOffenseTime or 0)) > 0.90 and tgt.dist <= (CFG.M1Range + 0.5)
 
     -- Allow combos if we just stunned them, or we recently tapped M1,
     -- or we’ve been idle a bit but are in range.
-    return hasBridge or m1Recent or idlePush
+    return hasBridge or m1Recent or idlePush or chainReady
 end
 
 
@@ -2377,37 +2427,68 @@ function Bot:neutral(tgt:Enemy?)
     self:maybeDash(tgt)
 
     local forward,strafe=0,0
-    if d>CFG.SpaceMax then
-        forward=1
-        self.strafe=0
-    elseif d<CFG.SpaceMin*0.45 then
-        forward=-0.6
-        self.strafe=0
-    else
-        local rangeSpan=math.max(0.1, CFG.SpaceMax-CFG.SpaceMin)
-        local closeness=math.clamp((CFG.SpaceMax - d)/rangeSpan,0,1)
-        forward=0.65 + 0.35*closeness
-        local lateral=Vector3.new(0,0,0)
-        if tgt.hrp then
-            local vel=tgt.hrp.AssemblyLinearVelocity or tgt.hrp.Velocity
-            if vel then lateral=flat(vel) end
+    local spacingMode = (not self.curCombo) and (not self.isAttacking)
+    local idealSpace = math.clamp((CFG.Gates.F.lo + CFG.Gates.F.hi) * 0.5, CFG.SpaceMax + 6, CFG.Gates.F.hi)
+    local nearIdeal = idealSpace - 6
+    local farIdeal = idealSpace + 8
+
+    if spacingMode then
+        if d < CFG.SpaceMin*0.85 then
+            forward = -0.75
+        elseif d < nearIdeal then
+            forward = -0.35
+        elseif d > farIdeal then
+            forward = 0.85
+        else
+            forward = 0.25
         end
-        if lateral.Magnitude>1 then
-            local right=flat(self.rp.CFrame.RightVector)
-            if right.Magnitude>1e-3 then
-                local side=lateral:Dot(right.Unit)
-                if math.abs(side)>0.5 then
-                    self.strafe=side>0 and 1 or -1
-                    self.lastStrafe=nowT
-                end
+
+        if d < nearIdeal and self:dashReady("B") and not self.inDash then
+            self:tryDash("B", tgt.hrp, "off", tgt)
+        elseif d < idealSpace and self:dashReady("S") and not self.inDash then
+            if math.random() < 0.35 then
+                self:tryDash("S", tgt.hrp, "off", tgt)
             end
         end
-        if nowT-self.lastStrafe>0.35 then
-            self.strafe=(math.random()<0.5) and -1 or 1
+
+        if nowT-self.lastStrafe>0.25 then
+            self.strafe = (math.random()<0.5) and -1 or 1
             self.lastStrafe=nowT
         end
-        local strafeWeight=0.4 + 0.6*closeness
-        strafe=self.strafe*strafeWeight
+        strafe = self.strafe * 0.65
+    else
+        if d>CFG.SpaceMax then
+            forward=1
+            self.strafe=0
+        elseif d<CFG.SpaceMin*0.45 then
+            forward=-0.6
+            self.strafe=0
+        else
+            local rangeSpan=math.max(0.1, CFG.SpaceMax-CFG.SpaceMin)
+            local closeness=math.clamp((CFG.SpaceMax - d)/rangeSpan,0,1)
+            forward=0.65 + 0.35*closeness
+            local lateral=Vector3.new(0,0,0)
+            if tgt.hrp then
+                local vel=tgt.hrp.AssemblyLinearVelocity or tgt.hrp.Velocity
+                if vel then lateral=flat(vel) end
+            end
+            if lateral.Magnitude>1 then
+                local right=flat(self.rp.CFrame.RightVector)
+                if right.Magnitude>1e-3 then
+                    local side=lateral:Dot(right.Unit)
+                    if math.abs(side)>0.5 then
+                        self.strafe=side>0 and 1 or -1
+                        self.lastStrafe=nowT
+                    end
+                end
+            end
+            if nowT-self.lastStrafe>0.35 then
+                self.strafe=(math.random()<0.5) and -1 or 1
+                self.lastStrafe=nowT
+            end
+            local strafeWeight=0.4 + 0.6*closeness
+            strafe=self.strafe*strafeWeight
+        end
     end
 
 
@@ -2574,6 +2655,7 @@ CFG.Bind = {
 
 function Bot:update(dt:number)
     self.ls:flush()
+    self:_ensureCharacterBindings()
     if not(self.char and self.hum and self.rp) then return end
     if self.hum.Health<=0 then self.run=false return end
 
@@ -2607,10 +2689,13 @@ function Bot:update(dt:number)
     self.gui:setT(("Target: %s (%.0f hp)"):format(tgt.model.Name, tgt.hp))
 
     nowT=os.clock()
+    local preBlockEval, preBlockReason = self:shouldBlock(tgt)
+    local blockedOnDash = false
     if tgt and tgt.dist <= CFG.SpaceMax then
         local justDashed = (tgt.style.lastDash>0) and (nowT - tgt.style.lastDash < 0.25)
-        if justDashed and self:shouldBlock(tgt) then
-            self:block(self:blockDur(tgt), tgt)
+        if justDashed and preBlockEval then
+            self:block(self:blockDur(tgt), tgt, preBlockReason or "dash")
+            blockedOnDash = true
         end
     end
 
@@ -2673,9 +2758,7 @@ function Bot:update(dt:number)
                         end
                     end)
                 end
-                if self:tryDash("S", tgt.hrp, "off", tgt) then
-                    self:_noteAction("S", idleCtx, tgt)
-                end
+                self:tryDash("S", tgt.hrp, "off", tgt)
             else
                 self:maybeDash(tgt)
             end
@@ -2714,7 +2797,20 @@ function Bot:update(dt:number)
     end
 
 
-    if self:shouldBlock(tgt) then self:block(self:blockDur(tgt), tgt); self:neutral(tgt); self.gui:updateCDs(self:_cdLeft("F"), self:_cdLeft("B"), self:_cdLeft("S")); return end
+    local shouldBlockNow, blockReason
+    if blockedOnDash then
+        shouldBlockNow, blockReason = false, nil
+    else
+        shouldBlockNow, blockReason = self:shouldBlock(tgt)
+    end
+    if shouldBlockNow then
+        if not self.blocking then
+            self:block(self:blockDur(tgt), tgt, blockReason)
+        end
+        self:neutral(tgt)
+        self.gui:updateCDs(self:_cdLeft("F"), self:_cdLeft("B"), self:_cdLeft("S"))
+        return
+    end
 
 
     if nowT - self.lastAttempt > CFG.MaxNoAtk and tgt.dist<=CFG.CloseUseRange+2 then
