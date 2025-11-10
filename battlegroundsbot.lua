@@ -28,7 +28,7 @@ local CFG = {
 
     Cooldown = {
         F = 10.0,
-        B = 10.0,
+        B =  8.0,
         S =  2.0,
     },
 
@@ -50,7 +50,7 @@ local CFG = {
     Gates = {
         F = { lo= 20.0, hi=33.0 },
         S = { lo= 3.5, hi=18.5 },
-        B = { lo= 5.0, hi=35.0 },
+        B = { lo= 3.5, hi=36.0 },
     },
 
 
@@ -118,6 +118,24 @@ local CFG = {
     Flush = 2.0,
 
     BlockAnimId = "rbxassetid://10470389827",
+}
+
+
+local BASE_COOLDOWN = {
+    F = CFG.Cooldown.F,
+    B = CFG.Cooldown.B,
+    S = CFG.Cooldown.S,
+}
+
+local BASE_GATES = {
+    F = { lo = CFG.Gates.F.lo, hi = CFG.Gates.F.hi },
+    S = { lo = CFG.Gates.S.lo, hi = CFG.Gates.S.hi },
+    B = { lo = CFG.Gates.B.lo, hi = CFG.Gates.B.hi },
+}
+
+CFG.Config = {
+    Cooldown = CFG.Cooldown,
+    Gates = CFG.Gates,
 }
 
 
@@ -489,6 +507,19 @@ function Bot.new()
     self.run=false; self.state="idle"; self.actThread=nil
     self.char=nil; self.hum=nil; self.rp=nil; self.alive=false
 
+    self.policyPath = CFG.Data.."/policy.json"
+    self.kpiPath = CFG.Data.."/gen_kpis.json"
+    self.policy = {}
+    self.bandit = {
+        epsilon = 0.15,
+        generation = 0,
+        actions = {},
+        lastAction = nil,
+        tune = {},
+        meta = nil,
+    }
+    self.lifeStats = {index = 0, damageDealt = 0, damageTaken = 0, reward = 0, kills = 0}
+
     self.evReady=true; self.evTimer=0; self.shouldPanic=false
     self.lastRealDash = {F=-1e9, B=-1e9, S=-1e9}
     self.lastM1=0; self.lastSkill=0; self.lastSnipe=0
@@ -501,6 +532,8 @@ function Bot.new()
     self.strafe=0; self.lastStrafe=0
 
     self.live=workspace:WaitForChild("Live"); self.liveChar=self.live:FindFirstChild(LP.Name); self.liveConn=nil
+
+    self:loadPolicy()
 
 
     self.myAnims={}; self.myHumConns={}
@@ -515,6 +548,7 @@ function Bot.new()
     self.lastAttempt=nowT; self.urgency=0
     self.arcUntil=0; self.closeT=os.clock(); self.closeD=math.huge
     self.pendingResume=false
+    self.pendingLifeStart=false
 
 
     self.inDash=false
@@ -555,6 +589,46 @@ function Bot.new()
         if m==self.liveChar then self:attachLive(nil) end
     end)
 
+    -- Also watch Players so we prep enemy records fast
+    Players.PlayerAdded:Connect(function(p)
+        p.CharacterAdded:Connect(function(ch)
+            task.defer(function()
+                local live = workspace:FindFirstChild("Live")
+                local mdl = live and live:FindFirstChild(p.Name)
+                if mdl then self:addEnemy(mdl) end
+            end)
+        end)
+    end)
+
+    Players.PlayerRemoving:Connect(function(p)
+        for m,rec in pairs(self.enemies) do
+            if rec.ply == p then
+                for _,c in ipairs(rec.cons) do pcall(function() c:Disconnect() end) end
+                self.enemies[m] = nil
+            end
+        end
+    end)
+
+    -- Lightweight reconciler in case Live hiccups
+    task.spawn(function()
+        while true do
+            task.wait(2.0)
+            local live = workspace:FindFirstChild("Live")
+            if live then
+                -- add any missing
+                for _,m in ipairs(live:GetChildren()) do
+                    if m.Name ~= LP.Name and not self.enemies[m] then
+                        self:addEnemy(m)
+                    end
+                end
+                -- prune dead references
+                for m,_ in pairs(self.enemies) do
+                    if not m.Parent then self.enemies[m] = nil end
+                end
+            end
+        end
+    end)
+
     self.hb=RunService.Heartbeat:Connect(function(dt) self:update(dt) end)
             -- Always-on aim lock when not in a dash / not blocking
         self.alwaysAimHB = RunService.Heartbeat:Connect(function()
@@ -572,6 +646,8 @@ function Bot:destroy()
     if self.liveConn then self.liveConn:Disconnect() end
     for _,c in ipairs(self.myHumConns) do pcall(function() c:Disconnect() end) end
     self:clearMove()
+    self:_finalizeActionRecords(true)
+    self:savePolicy()
     if self.gui then self.gui:destroy() end
 end
 
@@ -818,7 +894,15 @@ function Bot:connectChar(char:Model)
     self.hum=hum; self.rp=char:FindFirstChild("HumanoidRootPart") or char:WaitForChild("HumanoidRootPart",5)
     self.alive=hum.Health>0; self.lastHP=hum.Health; self:_hookMine(hum)
 
+    if hum.Health>0 then
+        self.pendingLifeStart=false
+        self:_beginLife()
+    else
+        self.pendingLifeStart=true
+    end
+
     hum.Died:Connect(function()
+        self:_endLife()
         self.alive=false; self.gui:setS("Status: dead"); self.gui:setT("Target: none"); self.run=false; self.pendingResume=true
         task.spawn(function()
             local liveModel:Model? = nil
@@ -830,9 +914,18 @@ function Bot:connectChar(char:Model)
     end)
 
     hum.HealthChanged:Connect(function(hp)
+        if self.pendingLifeStart and hp>0 then
+            self.pendingLifeStart=false
+            self.alive=true
+            self:_beginLife()
+        end
         local dmg=self.lastHP - hp
         if dmg>0 then
             self.lastDmg=dmg; self.lastAtkTime=os.clock(); self:updateAttacker()
+            self.lifeStats.damageTaken = (self.lifeStats.damageTaken or 0) + dmg
+            local curTarget = self.currentTarget
+            local curDist = curTarget and curTarget.dist or nil
+            self:_recordDamageEvent(nil, dmg, false, {dist = curDist})
             local attacker=self.lastAttacker
             if attacker then
                 local rec=self:getEnemyByName(attacker)
@@ -898,6 +991,335 @@ local FALL_STATES = {
     [Enum.HumanoidStateType.FallingDown] = true,
     [Enum.HumanoidStateType.Ragdoll] = true,
 }
+
+local BANDIT_ACTION_WINDOW = 1.6
+
+local function isBehind(self:any, tgt:Enemy?):boolean
+    if not (self and self.rp and tgt and tgt.hrp) then return false end
+    local toMe = flat(self.rp.Position - tgt.hrp.Position)
+    local look = flat(tgt.hrp.CFrame.LookVector)
+    if toMe.Magnitude < 1e-3 or look.Magnitude < 1e-3 then return false end
+    return toMe.Unit:Dot(look.Unit) < -0.25
+end
+
+function Bot:_ctxKey(tgt:Enemy?):string
+    local dist = math.huge
+    if tgt then
+        dist = tgt.dist or dist
+        if dist==math.huge and tgt.hrp and self.rp then
+            dist = (tgt.hrp.Position - self.rp.Position).Magnitude
+        end
+    end
+    local range = "chase"
+    if dist <= 6 then range = "near"
+    elseif dist <= 14 then range = "mid"
+    elseif dist <= 35 then range = "far"
+    end
+
+    local nowT = os.clock()
+    local blkRecent = (tgt and tgt.style and (nowT - (tgt.style.lastBlk or 0)) <= 0.45) and 1 or 0
+    local hasEv = (tgt and tgt.hasEv) and 1 or 0
+    local rag = self:_targetRagdolled(tgt) and 1 or 0
+    local attk = (tgt and tgt.style and (nowT - (tgt.style.lastAtk or 0)) <= 0.5) and 1 or 0
+    local m1Chain = math.clamp(self.m1ChainCount or 0, 0, 4)
+    local fReady = self:dashReady("F") and 1 or 0
+    local sReady = self:dashReady("S") and 1 or 0
+    local bReady = self:dashReady("B") and 1 or 0
+
+    local myHP = (self.hum and self.hum.Health) or 0
+    local enemyHP = 0
+    if tgt then
+        enemyHP = (tgt.hum and tgt.hum.Health) or tgt.hp or 0
+    end
+    local diff = myHP - enemyHP
+    local hpBin = "close"
+    if diff >= 25 then hpBin = "high" elseif diff <= -25 then hpBin = "low" end
+
+    return ("range=%s|blk=%d|ev=%d|rag=%d|attk=%d|m1=%d|F=%d|S=%d|B=%d|hp=%s")
+        :format(range, blkRecent, hasEv, rag, attk, m1Chain, fReady, sReady, bReady, hpBin)
+end
+
+function Bot:_getOrInit(ctx:string, action:string)
+    if not self.policy then self.policy = {} end
+    local bucket = self.policy[ctx]
+    if not bucket then
+        bucket = {}
+        self.policy[ctx] = bucket
+    end
+    local entry = bucket[action]
+    if not entry then
+        local seed = 0.0
+        if action == "B" and string.find(ctx, "range=mid", 1, true) and string.find(ctx, "attk=1", 1, true) then
+            seed = 1.0
+        end
+        entry = {n = 0, ravg = seed}
+        bucket[action] = entry
+    end
+    entry.n = entry.n or 0
+    entry.ravg = entry.ravg or 0.0
+    return entry
+end
+
+function Bot:update_ravg(ctx:string?, action:string?, reward:number, weight:number?)
+    if not (ctx and action) then return end
+    local entry = self:_getOrInit(ctx, action)
+    local w = math.max(0.0, weight or 1.0)
+    local alpha = math.clamp(0.1 * w, 0.02, 0.5)
+    entry.ravg = entry.ravg * (1 - alpha) + reward * alpha
+    entry.n += w
+end
+
+function Bot:choose_action(ctx:string, candidates:{[number]:{name:string, bias:number?, exec:(()->boolean?)?, meta:any}}?, epsilon:number?)
+    local list = candidates or {}
+    local len = #list
+    if len == 0 then return nil end
+    local eps = epsilon or self.bandit.epsilon or 0.15
+    if math.random() < eps then
+        return list[math.random(1, len)]
+    end
+    local best, bestScore = list[1], -math.huge
+    for _,cand in ipairs(list) do
+        local entry = self:_getOrInit(ctx, cand.name)
+        local score = entry.ravg + (cand.bias or 0)
+        if score > bestScore then
+            bestScore = score
+            best = cand
+        end
+    end
+    return best
+end
+
+function Bot:_noteAction(actionName:string, ctx:string, tgt:Enemy?)
+    self.bandit.actions = self.bandit.actions or {}
+    local prev = self.bandit.lastAction
+    local nowT = os.clock()
+    local rec = {
+        action = actionName,
+        ctx = ctx,
+        time = nowT,
+        enemy = (tgt and tgt.model and tgt.model.Name) or nil,
+        targetBlocking = tgt and tgt.style and ((nowT - (tgt.style.lastBlk or 0)) <= 0.35) or false,
+        ragdolled = self:_targetRagdolled(tgt),
+        startDist = tgt and tgt.dist or nil,
+        prevCtx = prev and prev.ctx or nil,
+        prevAction = prev and prev.action or nil,
+        isFinisher = (actionName == "NP" or actionName == "UPPER"),
+        isDash = (actionName == "S" or actionName == "B" or actionName == "F"),
+        behindStart = isBehind(self, tgt),
+        damageDealt = 0.0,
+        damageTaken = 0.0,
+        keptAdvantage = false,
+        forcedUnblock = false,
+        lostSpacing = false,
+        firstDamageTaken = nil,
+    }
+    table.insert(self.bandit.actions, rec)
+    self.bandit.lastAction = {ctx = ctx, action = actionName}
+end
+
+function Bot:_recordDamageEvent(targetName:string?, amount:number, isDealt:boolean, info:{dist:number?}?)
+    if amount <= 0 then return end
+    self.bandit.actions = self.bandit.actions or {}
+    local nowT = os.clock()
+    for _,act in ipairs(self.bandit.actions) do
+        if (nowT - act.time) <= BANDIT_ACTION_WINDOW then
+            local targetMatch = (not targetName) or (act.enemy == targetName) or (act.enemy == nil)
+            if targetMatch then
+                if isDealt then
+                    act.damageDealt += amount
+                    if act.isFinisher then act.keptAdvantage = true end
+                    if act.targetBlocking then act.forcedUnblock = true end
+                    if act.ragdolled then act.keptAdvantage = true end
+                else
+                    act.damageTaken += amount
+                    act.firstDamageTaken = act.firstDamageTaken or nowT
+                    if info and info.dist and info.dist < CFG.SpaceMin then
+                        act.lostSpacing = true
+                    end
+                end
+            end
+        end
+    end
+end
+
+function Bot:_applyActionReward(act)
+    local reward = (act.damageDealt or 0) - 0.7 * (act.damageTaken or 0)
+    local nowT = os.clock()
+    if act.isFinisher and act.damageDealt > 0 then reward += 6 end
+    if act.forcedUnblock then reward += 3 end
+    local kept = act.keptAdvantage or (act.behindStart and act.damageTaken <= 0)
+    if kept then reward += 2 end
+    if act.firstDamageTaken and (act.damageDealt or 0) <= 0 and (act.firstDamageTaken - act.time) <= 0.8 then
+        reward -= 5
+    end
+    if act.targetBlocking and (act.damageDealt or 0) <= 0 then reward -= 3 end
+    if act.lostSpacing then reward -= 2 end
+
+    self:update_ravg(act.ctx, act.action, reward * 0.7, 1.0)
+    if act.prevCtx and act.prevAction then
+        self:update_ravg(act.prevCtx, act.prevAction, reward * 0.3, 0.5)
+    end
+    self.lifeStats.reward = (self.lifeStats.reward or 0) + reward
+end
+
+function Bot:_finalizeActionRecords(force:boolean?)
+    self.bandit.actions = self.bandit.actions or {}
+    if #self.bandit.actions == 0 then return end
+    local nowT = os.clock()
+    local i = 1
+    while i <= #self.bandit.actions do
+        local act = self.bandit.actions[i]
+        if force or (nowT - act.time) >= BANDIT_ACTION_WINDOW then
+            self:_applyActionReward(act)
+            table.remove(self.bandit.actions, i)
+        else
+            i += 1
+        end
+    end
+end
+
+function Bot:_averageReward(actionName:string, filters:{string}?)
+    if not self.policy then return nil end
+    local sum, count = 0.0, 0
+    for ctx, actions in pairs(self.policy) do
+        local ok = true
+        if filters then
+            for _,f in ipairs(filters) do
+                if not string.find(ctx, f, 1, true) then ok=false break end
+            end
+        end
+        if ok then
+            local entry = actions[actionName]
+            if entry and entry.n and entry.n > 0 then
+                sum += entry.ravg or 0
+                count += 1
+            end
+        end
+    end
+    if count == 0 then return nil end
+    return sum / count
+end
+
+function Bot:_applyTune(tune:any)
+    CFG.Cooldown.F = BASE_COOLDOWN.F
+    CFG.Cooldown.S = BASE_COOLDOWN.S
+    CFG.Cooldown.B = BASE_COOLDOWN.B
+    CFG.Gates.F.lo = BASE_GATES.F.lo; CFG.Gates.F.hi = BASE_GATES.F.hi
+    CFG.Gates.S.lo = BASE_GATES.S.lo; CFG.Gates.S.hi = BASE_GATES.S.hi
+    CFG.Gates.B.lo = BASE_GATES.B.lo; CFG.Gates.B.hi = BASE_GATES.B.hi
+
+    local tuneB = tune and tune.B
+    if tuneB then
+        CFG.Cooldown.B = math.clamp(BASE_COOLDOWN.B + (tuneB.cooldown or 0), 6.5, 12.0)
+        CFG.Gates.B.lo = math.clamp(BASE_GATES.B.lo + (tuneB.gateLo or 0), 2.5, 6.5)
+        CFG.Gates.B.hi = math.clamp(BASE_GATES.B.hi + (tuneB.gateHi or 0), 30.0, 40.0)
+    end
+end
+
+function Bot:_applyGenerationKnobs(meta:any?)
+    meta = meta or self.bandit.meta or {}
+    local baseEps = meta.epsilon or self.bandit.epsilon or 0.15
+    local newEps = baseEps
+    local last = meta.lastLife
+    if last then
+        if last.reward and last.reward > 12 then newEps -= 0.02 end
+        if last.reward and last.reward < -12 then newEps += 0.02 end
+        if last.kd and last.kd > 1.2 then newEps -= 0.01 elseif last.kd and last.kd < 0.8 then newEps += 0.01 end
+    end
+    newEps = math.clamp(newEps, 0.05, 0.30)
+    meta.epsilon = newEps
+    meta.generation = (meta.generation or 0) + 1
+    self.bandit.epsilon = newEps
+    self.bandit.generation = meta.generation
+    self.bandit.tune = meta.tune or self.bandit.tune or {}
+    self:_applyTune(self.bandit.tune)
+    self.bandit.meta = meta
+end
+
+function Bot:savePolicy()
+    mkfolder(CFG.Data)
+    self:_finalizeActionRecords(true)
+    local avgB = self:_averageReward("B", {"range=mid", "attk=1"})
+    self.bandit.tune = self.bandit.tune or {}
+    local tuneB = self.bandit.tune.B or {cooldown = 0, gateLo = 0, gateHi = 0}
+    if avgB then
+        if avgB > 0.15 then
+            tuneB.cooldown = math.max(-2.0, (tuneB.cooldown or 0) - 1.0)
+            tuneB.gateLo = math.max(-2.0, (tuneB.gateLo or 0) - 0.5)
+        elseif avgB < -0.15 then
+            tuneB.cooldown = math.min(2.0, (tuneB.cooldown or 0) + 1.0)
+            tuneB.gateLo = math.min(2.0, (tuneB.gateLo or 0) + 0.5)
+        end
+    end
+    self.bandit.tune.B = tuneB
+
+    local deaths = (self.lifeStats.deaths or 0)
+    local kd = (self.lifeStats.kills or 0) / math.max(1, deaths)
+    local meta = self.bandit.meta or {}
+    meta.tune = self.bandit.tune
+    meta.epsilon = self.bandit.epsilon
+    meta.lastLife = {
+        reward = self.lifeStats.reward or 0,
+        kd = kd,
+        damage = {dealt = self.lifeStats.damageDealt or 0, taken = self.lifeStats.damageTaken or 0},
+        kills = self.lifeStats.kills or 0,
+        deaths = deaths,
+    }
+    meta.generation = self.bandit.generation or meta.generation or 0
+    self.bandit.meta = meta
+
+    local data = {policy = self.policy or {}, meta = meta}
+    local ok, encoded = pcall(function() return HttpService:JSONEncode(data) end)
+    if ok and encoded then wfile(self.policyPath, encoded) end
+
+    local kpi = {
+        generation = meta.generation,
+        epsilon = meta.epsilon,
+        lastLife = meta.lastLife,
+        savedAt = os.time(),
+    }
+    local okK, encK = pcall(function() return HttpService:JSONEncode(kpi) end)
+    if okK and encK then wfile(self.kpiPath, encK) end
+end
+
+function Bot:loadPolicy()
+    mkfolder(CFG.Data)
+    local raw = rfile(self.policyPath)
+    if raw then
+        local ok, decoded = pcall(function() return HttpService:JSONDecode(raw) end)
+        if ok and typeof(decoded)=="table" then
+            self.policy = decoded.policy or self.policy or {}
+            self.bandit.meta = decoded.meta or self.bandit.meta or {}
+            self.bandit.tune = (self.bandit.meta and self.bandit.meta.tune) or self.bandit.tune or {}
+            self.bandit.epsilon = (self.bandit.meta and self.bandit.meta.epsilon) or self.bandit.epsilon or 0.15
+            self.bandit.generation = self.bandit.meta and self.bandit.meta.generation or 0
+        end
+    end
+    self.policy = self.policy or {}
+    self.bandit.meta = self.bandit.meta or {epsilon = self.bandit.epsilon, generation = self.bandit.generation, tune = self.bandit.tune}
+    self.bandit.tune = self.bandit.meta.tune or self.bandit.tune or {}
+end
+
+function Bot:_beginLife()
+    self.lifeStats = {
+        index = (self.lifeStats and self.lifeStats.index or 0) + 1,
+        damageDealt = 0,
+        damageTaken = 0,
+        reward = 0,
+        kills = 0,
+        deaths = 0,
+    }
+    self.bandit.actions = {}
+    self.bandit.lastAction = nil
+    self:_applyGenerationKnobs(self.bandit.meta)
+end
+
+function Bot:_endLife()
+    self.lifeStats.deaths = (self.lifeStats.deaths or 0) + 1
+    self:_finalizeActionRecords(true)
+    self:savePolicy()
+end
+
 
 function Bot:_targetRagdolled(r:Enemy?):boolean
     if not r or not r.hum then return false end
@@ -1164,6 +1586,8 @@ function Bot:addEnemy(m:Model)
             if lh==LP.Name then
                 local myA=self:_myAnimId()
                 if myA then self.ls:deal(myA, delta) end
+                self.lifeStats.damageDealt = (self.lifeStats.damageDealt or 0) + delta
+                self:_recordDamageEvent(r.model.Name, delta, true, {dist = r.dist})
                 r.aRecent = (r.aRecent or 0)*0.5 + delta
                 if self.lastM1Target==r and os.clock()-self.lastM1AttemptTime < 0.6 then
                     self:onM1Hit(r)
@@ -1172,6 +1596,15 @@ function Bot:addEnemy(m:Model)
         end
         r.hp=nh
     end))
+
+    if r.hum then
+        table.insert(r.cons, r.hum.Died:Connect(function()
+            local last = r.model:GetAttribute("LastHit") or r.model:GetAttribute("lastHit")
+            if last == LP.Name then
+                self.lifeStats.kills = (self.lifeStats.kills or 0) + 1
+            end
+        end))
+    end
 
     local function onDesc(d:Instance)
         if d.Name=="RagdollCancel" then
@@ -1441,46 +1874,61 @@ function Bot:maybeDash(r:Enemy)
     if not r or not r.hrp or self.inDash then return end
     local d = r.dist or 999
     local nowT = os.clock()
+    local ctx = self:_ctxKey(r)
 
+    local candidates = {}
     local canS = self:dashReady("S") and distOK(d, CFG.Gates.S.lo, CFG.Gates.S.hi)
     local canB = self:dashReady("B") and distOK(d, CFG.Gates.B.lo, CFG.Gates.B.hi)
-    local canF = self:dashReady("F") and distOK(d, CFG.Gates.F.lo, CFG.Gates.F.hi)
-                  and ((nowT - (self.lastFDUser or -1e9)) >= 30.0)  -- keep your 30s limiter
+    local canF = self:dashReady("F") and distOK(d, CFG.Gates.F.lo, CFG.Gates.F.hi) and ((nowT - (self.lastFDUser or -1e9)) >= 30.0)
 
-    -- If we just stunned them (upper hit, shove tech, etc.), snap a Side(off) glue
-    if self:_hasRecentStun(r) and canS then
-        self:_requestSideDash(r.hrp, "off", r)
-        return
-    end
-
-    -- Far chase rule: if >60 studs, spam Side(off) zig-zags; sprinkle F only by 30s gate
-    if d > 60 then
-        if self:dashReady("S") then
-            self:_requestSideDash(r.hrp, "off", r)
-            return
-        end
-        if canF then
-            self:_requestForwardDash(r)
-            return
-        end
-        return
-    end
-
-    -- Normal bias: heavy Side(off) first, then occasional Back(off) to juke/space
     if canS then
-        self:_requestSideDash(r.hrp, "off", r)
-        return
+        table.insert(candidates, {name = "S", bias = 0.25, exec = function()
+            self:_requestSideDash(r.hrp, "off", r)
+            return true
+        end})
     end
 
-    if canB and probTake(0.50) then
-        self:_requestBackDash(r.hrp, "off", r)
-        return
+    if canB then
+        local bBias = -0.05
+        if not canS then bBias += 0.25 end
+        if r.style and r.style.aggr>6 and (nowT - (r.style.lastAtk or 0)) < 0.35 and d>=5 and d<=14 and not canS then
+            bBias += 0.8
+        end
+        table.insert(candidates, {name = "B", bias = bBias, exec = function()
+            self:_requestBackDash(r.hrp, "off", r)
+            return true
+        end})
     end
 
-    -- F only if we're still far enough and user-gate allows
-    if canF and d >= 50 then
-        self:_requestForwardDash(r)
-        return
+    if canF then
+        local fBias = -0.25
+        if d > 50 then fBias += 0.35 end
+        table.insert(candidates, {name = "F", bias = fBias, exec = function()
+            self:_requestForwardDash(r)
+            return true
+        end})
+    end
+
+    if #candidates == 0 then return end
+
+    if self:_hasRecentStun(r) then
+        for _,cand in ipairs(candidates) do
+            if cand.name == "S" then cand.bias = (cand.bias or 0) + 0.8 end
+        end
+    end
+
+    if d > 60 then
+        for _,cand in ipairs(candidates) do
+            if cand.name == "S" then cand.bias = (cand.bias or 0) + 0.5 end
+        end
+    end
+
+    local pick = self:choose_action(ctx, candidates, self.bandit.epsilon)
+    if pick and pick.exec then
+        local ok = pick.exec()
+        if ok ~= false then
+            self:_noteAction(pick.name, ctx, r)
+        end
     end
 end
 
@@ -1498,6 +1946,7 @@ end
 
 function Bot:execCombo(c:Combo, r:Enemy)
     if self.actThread then return end
+    self:_finalizeActionRecords(true)
     self.curCombo=c; self:clearMove(); self.lastComboTry=os.clock(); self.gui:setC("Combo: "..c.name)
     local attemptDist = r.dist or 0
     if attemptDist==math.huge then attemptDist=0 end
@@ -1862,24 +2311,102 @@ function Bot:neutral(tgt:Enemy?)
     end
 
 
-    if d<=CFG.M1Range and nowT-self.lastM1>CFG.M1Min*0.9 then
-        if not self:_targetRagdolled(tgt) then
-            self:_registerM1Attempt(tgt)
-            self:_pressAction("M1", CFG.TapS)
-            self.lastM1=nowT
-            self.lastAttempt=nowT
+    local ctx = self:_ctxKey(tgt)
+    local ragdolled = self:_targetRagdolled(tgt)
+    local skillCandidates = {}
+
+    if d<=CFG.M1Range and nowT-self.lastM1>CFG.M1Min*0.9 and not ragdolled and not self.isAttacking then
+        table.insert(skillCandidates, {
+            name = "M1",
+            bias = 0.1,
+            exec = function()
+                self:_registerM1Attempt(tgt)
+                local fired = self:_pressAction("M1", CFG.TapS)
+                if fired then
+                    self.lastM1 = nowT
+                    self.lastAttempt = nowT
+                end
+                return fired
+            end,
+        })
+    end
+
+    local skillWindow = d<=CFG.CloseUseRange and (nowT - self.lastSkill)>0.28
+    if skillWindow then
+        if slotReady(SLOT.Shove) then
+            local bias = 0.0
+            if tgt.style and (nowT - (tgt.style.lastBlk or 0)) < 0.3 then bias += 0.5 end
+            table.insert(skillCandidates, {
+                name = "SHOVE",
+                bias = bias,
+                exec = function()
+                    if not self:_pressAction("Shove") then return false end
+                    self.lastShoveAt = os.clock()
+                    self.lastSkill = nowT
+                    self.lastAttempt = nowT
+                    task.delay(0.10, function()
+                        if not (self.run and self.alive) then return end
+                        if not (tgt and tgt.model and tgt.model.Parent) then return end
+                        self:_registerM1Attempt(tgt)
+                        if self:_pressAction("M1", CFG.TapM) then
+                            self.lastM1 = os.clock()
+                        end
+                    end)
+                    return true
+                end,
+            })
+        end
+
+        if slotReady(SLOT.CP) then
+            table.insert(skillCandidates, {
+                name = "CP",
+                bias = ragdolled and 0.2 or 0.0,
+                exec = function()
+                    if not self:_pressAction("CP") then return false end
+                    self.lastSkill = nowT
+                    self.lastAttempt = nowT
+                    return true
+                end,
+            })
+        end
+
+        if slotReady(SLOT.NP) then
+            local npBias = 0.0
+            if tgt.hp <= CFG.SnipeHP then npBias += 0.4 end
+            table.insert(skillCandidates, {
+                name = "NP",
+                bias = npBias,
+                exec = function()
+                    if not self:_pressAction("NP") then return false end
+                    self.lastSkill = nowT
+                    self.lastAttempt = nowT
+                    return true
+                end,
+            })
+        end
+
+        if slotReady(SLOT.Upper) and self:_upperUseOK(tgt) then
+            local upBias = ragdolled and 0.6 or 0.1
+            table.insert(skillCandidates, {
+                name = "UPPER",
+                bias = upBias,
+                exec = function()
+                    if not self:_pressAction("Upper") then return false end
+                    self.lastSkill = nowT
+                    self.lastAttempt = nowT
+                    return true
+                end,
+            })
         end
     end
 
-
-    if d<=CFG.CloseUseRange and (nowT - self.lastSkill)>0.28 then
-        local roll=math.random()
-        if roll<0.30 and slotReady(SLOT.Shove) then self:_pressAction("Shove")
-        elseif roll<0.58 and slotReady(SLOT.CP) then self:_pressAction("CP")
-        elseif roll<0.75 and slotReady(SLOT.NP) then self:_pressAction("NP")
-        elseif roll<0.86 and slotReady(SLOT.Upper) and self:_upperUseOK(tgt) then self:_pressAction("Upper")
+    if #skillCandidates > 0 then
+        local pick = self:choose_action(ctx, skillCandidates, self.bandit.epsilon)
+        if pick and pick.exec then
+            if pick.exec() then
+                self:_noteAction(pick.name, ctx, tgt)
+            end
         end
-        self.lastSkill=nowT; self.lastAttempt=nowT
     end
 
     self:setInput(forward,strafe)
@@ -1932,6 +2459,9 @@ function Bot:update(dt:number)
     if self.hum.Health<=0 then self.run=false return end
 
 
+    self:_finalizeActionRecords(false)
+
+
     if self.evTimer>0 then self.evTimer -= dt; if self.evTimer<=0 then self.evTimer=0; self.evReady=true end end
     self.gui:setE(self.evReady and "Evasive: ready" or ("Evasive: "..string.format("%.1fs",math.max(0,self.evTimer))))
 
@@ -1940,16 +2470,10 @@ function Bot:update(dt:number)
     if self.lastAttacker and nowT-self.lastAtkTime>3 then self.lastAttacker=nil; self.lastDmg=0 end
 
     local tgt=self:selectTarget()
+    self.currentTarget = tgt
+    self.lastTargetDist = tgt and tgt.dist or nil
     if tgt then
         self:approachFarTarget(tgt)
-    end
-    if self.run and tgt and (tgt.dist or 999) <= CFG.M1Range and not self.isAttacking and not self:isSelfBlockingVisual() then
-        if os.clock() - (self.lastM1AttemptTime or 0) > 0.25 then
-            self:_registerM1Attempt(tgt)
-            if self:_pressAction("M1", CFG.InputTap) then
-                self.lastM1 = os.clock()
-            end
-        end
     end
     if not tgt then
         self.gui:setT("Target: none")
@@ -1988,7 +2512,10 @@ function Bot:update(dt:number)
         if (nowT - self.lastOffenseTime) >= CFG.AttackPunish and not self.isAttacking then
             if tgt.dist <= (CFG.M1Range + 1.2) and not self:_targetRagdolled(tgt) then
                 self:_registerM1Attempt(tgt)
-                if self:_pressAction("M1", CFG.TapS) then self.lastM1 = nowT end
+                if self:_pressAction("M1", CFG.TapS) then
+                    self:_noteAction("M1", self:_ctxKey(tgt), tgt)
+                    self.lastM1 = nowT
+                end
             else
                 self:chase(tgt)
                 self:maybeDash(tgt)
@@ -2002,8 +2529,25 @@ function Bot:update(dt:number)
     if idleCond then
         self.stillTimer = self.stillTimer + dt
         if self.stillTimer > 1.2 then
+            local idleCtx = self:_ctxKey(tgt)
             if distOK(tgt.dist, CFG.Gates.S.lo, CFG.Gates.S.hi) and math.random()<0.85 then
-                self:_pressAction("Shove", CFG.TapS); self:tryDash("S", tgt.hrp, "off", tgt)
+                local fired = self:_pressAction("Shove", CFG.TapS)
+                if fired then
+                    self:_noteAction("SHOVE", idleCtx, tgt)
+                    self.lastSkill = nowT
+                    self.lastAttempt = nowT
+                    task.delay(0.10, function()
+                        if not (self.run and self.alive) then return end
+                        if not (tgt and tgt.model and tgt.model.Parent) then return end
+                        self:_registerM1Attempt(tgt)
+                        if self:_pressAction("M1", CFG.TapM) then
+                            self.lastM1 = os.clock()
+                        end
+                    end)
+                end
+                if self:tryDash("S", tgt.hrp, "off", tgt) then
+                    self:_noteAction("S", idleCtx, tgt)
+                end
             else
                 self:maybeDash(tgt)
             end
@@ -2030,7 +2574,12 @@ function Bot:update(dt:number)
     local likelyBlk = (nowT-tgt.style.lastBlk)<0.30 or (tgt.style.def>6)
     if tgt.hp<=CFG.SnipeHP and not likelyBlk and tgt.dist<=CFG.SnipeRange and (nowT-self.lastSnipe>0.8) then
         if slotReady(SLOT.NP) then
-            self:_pressAction("NP"); self.lastSnipe=nowT; self.lastAttempt=nowT; self:setInput(0.6,0)
+            if self:_pressAction("NP") then
+                self:_noteAction("NP", self:_ctxKey(tgt), tgt)
+                self.lastSkill = nowT
+                self.lastAttempt=nowT
+            end
+            self.lastSnipe=nowT; self:setInput(0.6,0)
             self.gui:updateCDs(self:_cdLeft("F"), self:_cdLeft("B"), self:_cdLeft("S"))
             return
         end
@@ -2042,7 +2591,26 @@ function Bot:update(dt:number)
 
     if nowT - self.lastAttempt > CFG.MaxNoAtk and tgt.dist<=CFG.CloseUseRange+2 then
         if (nowT - self.lastAttempt) > CFG.ForceAtk then
-            if slotReady(SLOT.Shove) and math.random()<0.55 then self:_pressAction("Shove") elseif slotReady(SLOT.CP) then self:_pressAction("CP") end
+            local forceCtx = self:_ctxKey(tgt)
+            if slotReady(SLOT.Shove) and math.random()<0.55 then
+                if self:_pressAction("Shove") then
+                    self:_noteAction("SHOVE", forceCtx, tgt)
+                    self.lastSkill = nowT
+                    task.delay(0.10, function()
+                        if not (self.run and self.alive) then return end
+                        if not (tgt and tgt.model and tgt.model.Parent) then return end
+                        self:_registerM1Attempt(tgt)
+                        if self:_pressAction("M1", CFG.TapM) then
+                            self.lastM1 = os.clock()
+                        end
+                    end)
+                end
+            elseif slotReady(SLOT.CP) then
+                if self:_pressAction("CP") then
+                    self:_noteAction("CP", forceCtx, tgt)
+                    self.lastSkill = nowT
+                end
+            end
             self.lastAttempt=nowT
         end
     end
