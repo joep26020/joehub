@@ -17,10 +17,10 @@ local CFG = {
     CharKey = "saitama",
 
 
-    ComboDist      = 6,
+    ComboDist      = 5,
     SpaceMin       = 4.6,
-    SpaceMax       = 7,
-    CloseUseRange  = 6.5,
+    SpaceMax       = 5.5,
+    CloseUseRange  = 5,
     SnipeRange     = 60.0,
     SnipeHP        = 10,
 
@@ -28,17 +28,17 @@ local CFG = {
 
     Cooldown = {
         F = 10.0,
-        B =  8.0,
-        S =  2.0,
+        B =  10.0,
+        S =  5.0,
     },
 
-    M1Range  = 6.5,
-    M1MaxGap = 0.55,
-    InputTap = 0.08,
-    TapS     = 0.10,
-    TapM     = 0.22,
-    M1Min    = 0.25,
-    M1Rand   = 0.10,
+    M1Range  = 5,
+    M1MaxGap = 0.7,
+    InputTap = 0.10,
+    TapS     = 0.05,
+    TapM     = 0.25,
+    M1Min    = 0.5,
+    M1Rand   = 0.05,
 
     NPFinisherId  = "normal_punch",
     UPFinisherId  = "uppercut",
@@ -48,9 +48,9 @@ local CFG = {
 
 
     Gates = {
-        F = { lo= 20.0, hi=33.0 },
-        S = { lo= 3.5, hi=18.5 },
-        B = { lo= 3.5, hi=36.0 },
+        F = { lo= 23.0, hi=33.0 },
+        S = { lo= 7, hi=16 },
+        B = { lo= 8, hi=35.0 },
     },
 
 
@@ -60,18 +60,18 @@ local CFG = {
 
     Dash = {
         KeyQ        = Enum.KeyCode.Q,
-        HoldQ       = 0.12,
-        RefaceTail  = 0.50,
+        HoldQ       = 0.10,
+        RefaceTail  = 0.60,
 
         FWindow     = 0.80,
-        BWindow     = 1.25,
-        SWindow     = 0.50,
+        BWindow     = 1.2,
+        SWindow     = 0.40,
 
-        OrbitTrigger   = 2.0,
-        OrbitDur       = 0.30,
-        BackClose      = 4.0,
-        SideOffLock    = 3.5,
-        PreEndBackFace = 0.25,
+        OrbitTrigger   = 5.0,
+        OrbitDur       = 0.35,
+        BackClose      = 2.0,
+        SideOffLock    = 6,
+        PreEndBackFace = 0.20,
 
 
         Anim = {
@@ -106,16 +106,16 @@ local CFG = {
     },
 
 
-    MaxNoAtk = 1.5,
-    ForceAtk = 2.4,
-    CloseGain = 3.0, CloseWindow = 5.0, FarChase = 45.0,
+    MaxNoAtk = .5,
+    ForceAtk = 2,
+    CloseGain = 4.0, CloseWindow = 3.0, FarChase = 40.0,
 
     StillPunish = 5.0,
-    AttackPunish = 8.0,
+    AttackPunish = 6.5,
 
 
     Data  = "bgbot",
-    Flush = 2.0,
+    Flush = 0.25,
 
     BlockAnimId = "rbxassetid://10470389827",
 }
@@ -1571,8 +1571,7 @@ function Bot:onM1Hit(r:Enemy)
         dist = (r.hrp.Position - self.rp.Position).Magnitude
         r.dist = dist
     end
-
-    -- Only dash if we deliberately opened an extend window (e.g., after Shove/Upper).
+    -- Only dash-extend if a prior step armed the window (Shove->M1(HOLD) or Upper hit)
     if self.allowDashExtend and os.clock() < self.allowDashExtend then
         if self:dashReady("S") and distOK(dist or 99, CFG.Gates.S.lo, CFG.Gates.S.hi) then
             self:tryDash("S", r.hrp, "off", r)
@@ -1692,39 +1691,52 @@ function Bot:_requestSideDash(tHRP:BasePart?, style:string?, r:Enemy?)
     if not dist and self.rp then dist = (tHRP.Position - self.rp.Position).Magnitude end
     if not dist or not distOK(dist, g.lo, g.hi) then return end
 
-    -- Direction to target (flat) and our right vector (flat)
-    local to = flat(tHRP.Position - self.rp.Position)
-    if to.Magnitude < 1e-3 then to = flat(self.rp.CFrame.LookVector) end
-    local toU   = to.Unit
-    local right = flat(self.rp.CFrame.RightVector).Unit
-    local dot   = right.X * toU.X + right.Z * toU.Z
-    local offensive = (style or "off") == "off"
+    -- Ensure we're actually facing the target before picking a side
+    self:aimAt(tHRP)
 
+    local myPos   = self.rp.Position
+    local tPos    = tHRP.Position
+    local right   = flat(self.rp.CFrame.RightVector)
+    if right.Magnitude < 1e-3 then right = Vector3.new(1,0,0) end
+    right = right.Unit
+
+    local sideLen = CFG.Dash.SideLen or 10.0
+    local aPos    = myPos - right * sideLen -- A = left
+    local dPos    = myPos + right * sideLen -- D = right
+
+    local dA = (tPos - aPos).Magnitude
+    local dD = (tPos - dPos).Magnitude
+
+    local offensive = (style or "off") == "off"
     local sideKey
     if offensive then
-        sideKey = (dot >= 0) and Enum.KeyCode.D or Enum.KeyCode.A
+        -- pick the side that REDUCES distance more
+        sideKey = (dA < dD) and Enum.KeyCode.A or Enum.KeyCode.D
     else
-        sideKey = (dot >= 0) and Enum.KeyCode.A or Enum.KeyCode.D
+        -- defensive: pick the side that INCREASES distance
+        sideKey = (dA > dD) and Enum.KeyCode.A or Enum.KeyCode.D
     end
 
-    -- Avoid diagonal converting to F/B dash
+    -- Avoid diagonal turning this into F/B dash
     local wasW = self.moveKeys[Enum.KeyCode.W]
     local wasS = self.moveKeys[Enum.KeyCode.S]
     if wasW then self:setKey(Enum.KeyCode.W, false) end
     if wasS then self:setKey(Enum.KeyCode.S, false) end
 
     self.dashPending = {kind="side", style=(style or "off"), tHRP=tHRP, enemy=r}
-    self:aimAt(tHRP)
 
     pressKey(sideKey, true)
     task.wait(0.02)
-    holdQ(CFG.Dash.HoldQ)
+    pressKey(CFG.Dash.KeyQ, true); task.wait(CFG.Dash.HoldQ); pressKey(CFG.Dash.KeyQ, false)
     pressKey(sideKey, false)
 
     if wasW then self:setKey(Enum.KeyCode.W, true) end
     if wasS then self:setKey(Enum.KeyCode.S, true) end
+
+    self.lastDashTime = os.clock() -- NEW: for “no Upper right after dash”
     self.lastMoveTime = os.clock()
 end
+
 
 
 
@@ -1885,22 +1897,39 @@ function Bot:addEnemy(m:Model)
     r.hp=r.hum.Health
 
     table.insert(r.cons, r.hum:GetPropertyChangedSignal("Health"):Connect(function()
-        if not r.hum then return end
-        local nh=r.hum.Health; local delta=math.max(0,(r.hp or nh)-nh)
-        if delta>0 then
-            local lh = r.model:GetAttribute("LastHit") or r.model:GetAttribute("lastHit")
-            if lh==LP.Name then
-                local myA=self:_myAnimId()
-                if myA then self.ls:deal(myA, delta) end
-                self.lifeStats.damageDealt = (self.lifeStats.damageDealt or 0) + delta
-                self:_recordDamageEvent(r.model.Name, delta, true, {dist = r.dist})
-                r.aRecent = (r.aRecent or 0)*0.5 + delta
-                if self.lastM1Target==r and os.clock()-self.lastM1AttemptTime < 0.6 then
-                    self:onM1Hit(r)
-                end
+    local nh = r.hum.Health
+    local delta = math.max(0, (r.hp or nh) - nh)
+    if delta > 0 then
+        -- Determine if *I* caused this damage
+        local wasMe = false
+        local last = r.model:GetAttribute("LastHit") or r.model:GetAttribute("lastHit")
+        if last == LP.Name then
+            wasMe = true
+        end
+        if not wasMe then
+            local creator = r.hum:FindFirstChild("creator")
+            if creator and creator.Value == LP then wasMe = true end
+        end
+        if not wasMe then
+            local dam = r.model:GetAttribute("LastDamager") or r.model:GetAttribute("lastDamager") or r.model:GetAttribute("LastDamagerName")
+            if typeof(dam) == "Instance" and dam == LP then wasMe = true
+            elseif typeof(dam) == "string" and dam == LP.Name then wasMe = true end
+        end
+    
+        if wasMe then
+            local myA = self:_myAnimId()
+            if myA then self.ls:deal(myA, delta) end
+            self.lifeStats.damageDealt = (self.lifeStats.damageDealt or 0) + delta
+            self:_recordDamageEvent(r.model.Name, delta, true, {dist = r.dist})
+            r.aRecent = (r.aRecent or 0)*0.5 + delta
+    
+            -- If that hit was from a close M1, allow a short dash-extend window
+            if self.lastM1Target == r and os.clock() - (self.lastM1AttemptTime or 0) < 0.6 then
+                self:onM1Hit(r)
             end
         end
-        r.hp=nh
+    end
+    r.hp = nh
     end))
 
     if r.hum then
@@ -2208,9 +2237,14 @@ end
 
 
 function Bot:maybeDash(r:Enemy)
-    if self.isM1ing then return end
-    if not r or not r.hrp or self.inDash then return end
-    if self.blocking then return end
+    if not r or not r.hrp then return end
+    if self.inDash or self.blocking or self.isM1ing then return end
+
+    -- NEW: if in jab range and free to swing, DON'T dash—jab instead
+    if r.dist and r.dist <= (CFG.M1Range + 0.4) and (os.clock() - (self.lastM1 or 0)) >= (CFG.M1Min * 0.7) and not self.isAttacking then
+        return
+    end
+
     local d = r.dist or 999
     local nowT = os.clock()
     local ctx = self:_ctxKey(r)
@@ -2222,11 +2256,9 @@ function Bot:maybeDash(r:Enemy)
 
     if canS then
         table.insert(candidates, {name = "S", bias = 0.55, exec = function()
-            self:_requestSideDash(r.hrp, "off", r)
-            return true
+            self:_requestSideDash(r.hrp, "off", r); return true
         end})
     end
-
     if canB then
         local bBias = 0.35
         if not canS then bBias += 0.35 end
@@ -2234,20 +2266,16 @@ function Bot:maybeDash(r:Enemy)
             bBias += 0.8
         end
         table.insert(candidates, {name = "B", bias = bBias, exec = function()
-            self:_requestBackDash(r.hrp, "off", r)
-            return true
+            self:_requestBackDash(r.hrp, "off", r); return true
         end})
     end
-
     if canF then
         local fBias = -0.60
         if d > 50 then fBias += 0.35 end
         table.insert(candidates, {name = "F", bias = fBias, exec = function()
-            self:_requestForwardDash(r)
-            return true
+            self:_requestForwardDash(r); return true
         end})
     end
-
     if #candidates == 0 then return end
 
     if self:_hasRecentStun(r) then
@@ -2255,7 +2283,6 @@ function Bot:maybeDash(r:Enemy)
             if cand.name == "S" then cand.bias = (cand.bias or 0) + 0.8 end
         end
     end
-
     if d > 60 then
         for _,cand in ipairs(candidates) do
             if cand.name == "S" then cand.bias = (cand.bias or 0) + 0.5 end
@@ -2264,8 +2291,8 @@ function Bot:maybeDash(r:Enemy)
 
     local pick = self:choose_action(ctx, candidates, self.bandit.epsilon)
     if pick and pick.exec then
-        local ok = pick.exec()
-        if ok ~= false then
+        if pick.exec() ~= false then
+            self.lastDashTime = os.clock() -- NEW
             self:_noteAction(pick.name, ctx, r)
             self.ls:log("dash_auto", {kind = pick.name, enemy = r and r.model and r.model.Name or "none", dist = d, ctx = ctx})
         end
@@ -2355,33 +2382,29 @@ function Bot:execCombo(c:Combo, r:Enemy)
 
                 elseif st.action=="Upper" then
                     local y0 = (r.hrp and r.hrp.Position.Y) or 0
-                    local ok = true
-                    if slotReady(SLOT.Upper) then
-                        if (r.dist<=CFG.CloseUseRange+1.0) or (self:_upperUseOK(r)) then
-                            self:_pressAction("Upper", st.hold)
-                        else
-                            ok=false
-                        end
-                    else ok=false end
-
+                    local ok = false
+                    if slotReady(SLOT.Upper) and self:_upperUseOK(r) and (os.clock() - (self.lastDashTime or 0) >= 0.45) then
+                        self:_pressAction("Upper", st.hold)
+                        ok = true
+                    end
                     task.wait(st.wait or 0.26)
-
+                
                     if ok and self:_upperSucceeded(r, y0) then
-                        -- arm longer dash-extend after a real Upper hit
+                        -- arm longer dash-extend after a real Upper hit (combo confirm)
                         self.allowDashExtend = os.clock() + 0.90
-
+                        -- prefer F/S only if gates make sense (unchanged)
                         local fired=false
-                        if distOK(r.dist, CFG.Gates.F.lo, CFG.Gates.F.hi) and probTake(0.60) then
+                        if distOK(r.dist, CFG.Gates.F.lo, CFG.Gates.F.hi) and math.random()<0.60 then
                             fired = self:tryDash("F", r.hrp, "off", r)
                         end
-                        if not fired and distOK(r.dist, CFG.Gates.S.lo, CFG.Gates.S.hi) and probTake(0.25) then
+                        if not fired and distOK(r.dist, CFG.Gates.S.lo, CFG.Gates.S.hi) and math.random()<0.25 then
                             fired = self:tryDash("S", r.hrp, "off", r)
                         end
                         if not fired and distOK(r.dist, CFG.Gates.B.lo, CFG.Gates.B.hi) then
                             self:tryDash("B", r.hrp, "off", r)
                         end
                     else
-                        -- reposition if it whiffed
+                        -- whiffed Upper: do NOT chain into immediate Upper again; reposition lightly
                         if distOK(r.dist, CFG.Gates.S.lo, CFG.Gates.S.hi) then
                             self:tryDash("S", r.hrp, "off", r)
                         elseif distOK(r.dist, CFG.Gates.B.lo, CFG.Gates.B.hi) then
@@ -2467,11 +2490,17 @@ function Bot:execBestCloseCombo(r:Enemy)
 end
 
 function Bot:_upperUseOK(r:Enemy):boolean
-
-    local closeOK = r.dist <= (CFG.SpaceMin + 2.0)
+    if not r then return false end
+    local dist    = r.dist or math.huge
+    local ragdoll = self:_targetRagdolled(r)
     local noEv    = not r.hasEv
-    local ragdoll = r.hum and (r.hum:GetState()==Enum.HumanoidStateType.FallingDown or r.hum:GetState()==Enum.HumanoidStateType.PlatformStanding)
-    return closeOK and (noEv or ragdoll)
+    local behindT = isBehind(self, r)
+
+    -- Favor: ragdoll (≤8), or very close (≤ ~SpaceMin+1.5) with no evasive or behind
+    local closeOK = dist <= math.min((CFG.SpaceMin or 4.6) + 1.5, 5.2)
+    if ragdoll and dist <= 8.0 then return true end
+    if closeOK and (noEv or behindT) then return true end
+    return false
 end
 
 
@@ -2690,21 +2719,23 @@ function Bot:neutral(tgt:Enemy?)
     local ragdolled = self:_targetRagdolled(tgt)
     local skillCandidates = {}
 
-    if d<=CFG.M1Range and nowT-self.lastM1>CFG.M1Min*0.8 and not ragdolled and not self.isAttacking and not self.blocking then
+    if d<=CFG.M1Range and nowT-self.lastM1>CFG.M1Min*0.75 and not ragdolled and not self.isAttacking and not self.blocking then
         table.insert(skillCandidates, {
             name = "M1",
-            bias = 0.4,
+            bias = 0.65, -- was ~0.4; higher = more jab priority
             exec = function()
                 self:_registerM1Attempt(tgt)
                 local fired = self:_pressAction("M1", CFG.TapS)
                 if fired then
-                    self.lastM1 = nowT
-                    self.lastAttempt = nowT
+                    self.lastM1        = nowT
+                    self.lastAttempt   = nowT
+                    self.lastOffenseTime = nowT
                 end
                 return fired
             end,
         })
     end
+
 
     local skillWindow = d<=CFG.CloseUseRange and (nowT - self.lastSkill)>0.28
     if skillWindow then
@@ -2760,15 +2791,19 @@ function Bot:neutral(tgt:Enemy?)
             })
         end
 
-        if slotReady(SLOT.Upper) and self:_upperUseOK(tgt) then
-            local upBias = ragdolled and 0.6 or 0.1
+        if slotReady(SLOT.Upper)
+           and self:_upperUseOK(tgt)
+           and (nowT - (self.lastDashTime or 0) >= 0.45)    -- NEW: no dash->upper
+           and (self.m1ChainCount >= 1 or ragdolled)        -- NEW: prefer after at least one M1
+        then
+            local upBias = ragdolled and 0.50 or 0.08       -- lower default bias
             table.insert(skillCandidates, {
                 name = "UPPER",
                 bias = upBias,
                 exec = function()
                     if not self:_pressAction("Upper") then return false end
-                    self.lastSkill = nowT
-                    self.lastAttempt = nowT
+                    self.lastSkill  = nowT
+                    self.lastAttempt= nowT
                     return true
                 end,
             })
