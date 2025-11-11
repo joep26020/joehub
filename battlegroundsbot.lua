@@ -3063,9 +3063,135 @@ function Bot:update(dt:number)
 end
 
 
-if getgenv().BattlegroundsBot and getgenv().BattlegroundsBot.destroy then
-    pcall(function() getgenv().BattlegroundsBot:destroy() end)
+
+local AI = {
+    version = "1.0",
+    _bot = nil,
+}
+
+
+function AI.Init(opts)
+    if getgenv().BattlegroundsBot and getgenv().BattlegroundsBot.destroy then
+        pcall(function() getgenv().BattlegroundsBot:destroy() end)
+    end
+    local bot = Bot.new()
+    getgenv().BattlegroundsBot = bot
+    AI._bot = bot
+    if opts and opts.autorun then bot:start() end
+    return true
 end
-local bot = Bot.new()
-getgenv().BattlegroundsBot = bot
-return bot
+
+
+function AI.Decide(input)
+    local bot = AI._bot
+    if not bot then return "idle" end
+
+    local tgt = (input and input.target) or bot.currentTarget or bot:selectTarget()
+    local ctx = bot:_ctxKey(tgt)
+    local d   = (tgt and tgt.dist) or math.huge
+    local nowT = os.clock()
+
+    local candidates = {}
+    local function add(c) table.insert(candidates, c) end
+
+    -- Dashes (gated by your CFG + CDs)
+    if tgt and bot:dashReady("S") and d>=CFG.Gates.S.lo and d<=CFG.Gates.S.hi then
+        add({name="S", bias=0.40, exec=function() return bot:tryDash("S", tgt.hrp, "off", tgt) end})
+    end
+    if tgt and bot:dashReady("B") and d>=CFG.Gates.B.lo and d<=CFG.Gates.B.hi then
+        add({name="B", bias=0.20, exec=function() return bot:tryDash("B", tgt.hrp, "off", tgt) end})
+    end
+    if tgt and bot:dashReady("F")
+       and d>=CFG.Gates.F.lo and d<=CFG.Gates.F.hi
+       and (os.clock() - (bot.lastFDUser or -1e9) >= 45.0) then
+        add({name="F", bias=-0.20, exec=function() return bot:tryDash("F", tgt.hrp, "off", tgt) end})
+    end
+
+    -- Skills/M1 (same gates you already use)
+    if tgt and d<=CFG.M1Range and (nowT - (bot.lastM1 or 0)) > CFG.M1Min and not bot:_targetRagdolled(tgt) then
+        add({name="M1", bias=0.50, exec=function()
+            bot:_registerM1Attempt(tgt)
+            return bot:_pressAction("M1", CFG.TapS)
+        end})
+    end
+
+    if tgt and d<=CFG.CloseUseRange and slotReady(SLOT.Shove) then
+        add({name="SHOVE", bias=0.15, exec=function() return bot:_pressAction("Shove") end})
+    end
+    if slotReady(SLOT.CP) then
+        add({name="CP", bias=0.00, exec=function() return bot:_pressAction("CP") end})
+    end
+    if slotReady(SLOT.NP) then
+        local finBias = (tgt and tgt.hp and tgt.hp <= CFG.SnipeHP) and 0.40 or 0.00
+        add({name="NP", bias=finBias, exec=function() return bot:_pressAction("NP") end})
+    end
+    if tgt and slotReady(SLOT.Upper) and bot:_upperUseOK(tgt) then
+        add({name="UPPER", bias=0.10, exec=function() return bot:_pressAction("Upper") end})
+    end
+
+    if #candidates == 0 then return "idle", ctx end
+    local pick = bot:choose_action(ctx, candidates, bot.bandit.epsilon)
+    return pick and pick.name or "idle", ctx, pick and pick.exec or nil
+end
+
+
+function AI.Learn(input, output, reward)
+    local bot = AI._bot
+    if not bot then return end
+    local ctx  = (type(input)=="table" and (input.ctx or input.context)) or input
+    local dist = (type(input)=="table" and input.dist) or nil
+    bot:update_ravg(ctx, output, reward, 1.0)
+    bot.ls:moveAdd(output, reward, dist)
+    bot:savePolicy()
+end
+
+
+function AI.OnEvent(eventType, data)
+    local bot = AI._bot
+    if not bot then return end
+    data = data or {}
+
+    if eventType == "player_spotted" and typeof(data.model) == "Instance" then
+        bot:addEnemy(data.model)
+
+    elseif eventType == "damage_dealt" then
+        bot:_recordDamageEvent(data.target, tonumber(data.amount) or 0, true, {dist=data.dist})
+
+    elseif eventType == "damage_taken" then
+        bot:_recordDamageEvent(nil, tonumber(data.amount) or 0, false, {dist=data.dist})
+
+    elseif eventType == "kill" then
+        bot.lifeStats.kills = (bot.lifeStats.kills or 0) + 1
+
+    elseif eventType == "death" then
+        bot:_endLife()
+
+    elseif eventType == "stun" and data.target then
+        local rec = bot:getEnemyByName(data.target)
+        if rec then bot:_noteStun(rec, tostring(data.animTail or "manual")) end
+
+    elseif eventType == "save" then
+        bot:savePolicy(); bot.ls:flush()
+
+    elseif eventType == "load" then
+        bot:loadPolicy()
+    end
+end
+
+function AI.Save() local b=AI._bot if b then b:savePolicy(); b.ls:flush() end end
+function AI.Load() local b=AI._bot if b then b:loadPolicy() end end
+function AI.Start() local b=AI._bot if b then b:start() end end
+function AI.Stop()  local b=AI._bot if b then b:stop()  end end
+
+-- For exporting the learned state (policy + meta + combo stats) as JSON
+function AI.ExportMemory()
+    local b = AI._bot
+    if not b then return "{}" end
+    local pkt = { policy=b.policy, meta=b.bandit.meta, combos=b.ls and b.ls.data and b.ls.data.combos or {} }
+    return HttpService:JSONEncode(pkt)
+end
+
+
+AI.Init({autorun = false})
+return AI
+
