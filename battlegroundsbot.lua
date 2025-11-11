@@ -24,6 +24,16 @@ local CFG = {
     SnipeRange     = 60.0,
     SnipeHP        = 10,
 
+    Orbit = {
+        enable     = true,   -- turn orbit shaping on/off
+        near       = 5.5,    -- very close: halve strafe
+        far        = 14.0,   -- start orbit shaping under this distance
+        minStrafe  = 0.18,   -- light orbit floor
+        maxStrafe  = 0.45,   -- cap so it never over-orbits
+        ema        = 0.25,   -- smoothing (0..1); higher = snappier
+        flipMin    = 0.3,    -- seconds before direction can flip
+        flipMax    = 1.6,    -- randomize flips a bit so it’s not robotic
+    },
 
 
     Cooldown = {
@@ -501,6 +511,12 @@ function Bot:_aimCameraAt(tHRP:BasePart?)
     cam.CFrame = CFrame.new(camPos, camPos + dir.Unit)
 end
 
+local function yawLook(from: Vector3, to: Vector3): CFrame?
+    local flat = Vector3.new(to.X, from.Y, to.Z) - from
+    if flat.Magnitude < 1e-3 then return nil end
+    return CFrame.lookAt(from, from + flat.Unit)
+end
+
 function Bot:_restoreCamera()
     local cam = workspace.CurrentCamera
     if cam and self.savedCameraType then
@@ -704,16 +720,29 @@ function Bot.new()
     end)
 
     self.hb=RunService.Heartbeat:Connect(function(dt) self:update(dt) end)
-    -- Always-on aim lock when not in a dash sequence
-    self.alwaysAimHB = RunService.Heartbeat:Connect(function()
-        if not self.rp or self.inDash then return end
-        local tgt = self.currentTarget or self:selectTarget()
-        if not tgt or not tgt.hrp then return end
-        -- Maintain aim even while blocking to satisfy constant lock requirement
-        if self.run or self.blocking then
-            self:aimAt(tgt.hrp)
+        -- Always-on aim lock when not in a dash sequence
+    self.hardAimHB = RunService.RenderStepped:Connect(function()
+        if not (self.rp and (self.run or self.blocking)) then return end
+        if self.inDash then return end
+        if self.hum and self.hum:GetState()==Enum.HumanoidStateType.FallingDown then return end
+    
+        local tgt = (self.currentTarget and self.currentTarget.hrp) or nil
+        if not tgt then return end
+    
+        local cf = yawLook(self.rp.Position, tgt.Position)
+        if not cf then return end
+    
+        self.hum.AutoRotate = false
+        self.rp.CFrame = cf
+    
+        local cam = workspace.CurrentCamera
+        if cam then
+            local cp = cam.CFrame.Position
+            local lv = cf.LookVector
+            cam.CFrame = CFrame.new(cp, Vector3.new(cp.X + lv.X, cp.Y, cp.Z + lv.Z))
         end
     end)
+
 
     return self
 end
@@ -775,6 +804,8 @@ function Bot:destroy()
         self.gui:destroy()
         self.gui = nil
     end
+    if self.hardAimHB then self.hardAimHB:Disconnect() end
+    self.hardAimHB = nil
 end
 
 
@@ -1149,12 +1180,65 @@ function Bot:setKey(k:Enum.KeyCode,down:boolean)
     self.moveKeys[k]=down; VIM:SendKeyEvent(down,k,false,game)
 end
 function Bot:clearMove() for k,down in pairs(self.moveKeys) do if down then VIM:SendKeyEvent(false,k,false,game); self.moveKeys[k]=false end end end
-function Bot:setInput(f:number?,r:number?) local th=0.15; f=f or 0; r=r or 0
-    self:setKey(Enum.KeyCode.W, f>th); self:setKey(Enum.KeyCode.S, f<-th); self:setKey(Enum.KeyCode.D, r>th); self:setKey(Enum.KeyCode.A, r<-th)
-    if self.moveKeys[Enum.KeyCode.W] or self.moveKeys[Enum.KeyCode.S] or self.moveKeys[Enum.KeyCode.A] or self.moveKeys[Enum.KeyCode.D] then
+function Bot:setInput(f:number?, r:number?)
+    local th = 0.15
+    f = f or 0
+    r = r or 0
+
+    -- Controlled orbit when close (no spam)
+    do
+        local orb = CFG.Orbit
+        local tgt = self.currentTarget
+        local d   = (tgt and tgt.dist) or math.huge
+
+        if orb and orb.enable and not self.inDash and not self.blocking then
+            if d <= orb.far and d > orb.near * 0.5 then
+                local now = os.clock()
+
+                -- persistent orbit direction with rare flips
+                if not self._orbitDir then
+                    self._orbitDir = (math.random() < 0.5) and -1 or 1
+                    self._orbitNextFlipAt = now + (orb.flipMin + math.random() * (orb.flipMax - orb.flipMin))
+                elseif now >= (self._orbitNextFlipAt or 0) then
+                    self._orbitDir = -self._orbitDir
+                    self._orbitNextFlipAt = now + (orb.flipMin + math.random() * (orb.flipMax - orb.flipMin))
+                end
+
+                -- distance-shaped strafe: closer → smaller (but not zero)
+                local t = math.clamp((orb.far - d) / math.max(0.001, (orb.far - orb.near)), 0, 1)
+                local targetR = self._orbitDir * (orb.minStrafe + (orb.maxStrafe - orb.minStrafe) * t)
+
+                -- if we’re pushing in/out hard, reduce orbit strength
+                local inout = math.min(1, math.abs(f))
+                targetR = targetR * (1 - 0.6 * inout)
+
+                -- extra clamp when *very* close
+                if d < orb.near then
+                    targetR = targetR * 0.5
+                end
+
+                -- smooth so we don’t A/D flicker
+                self._rEma = self._rEma and (self._rEma + orb.ema * (targetR - self._rEma)) or targetR
+                r = 0.3 * r + 0.7 * self._rEma
+            else
+                -- decay stored strafe when not in the orbit zone
+                if self._rEma then self._rEma = self._rEma * (1 - orb.ema) end
+            end
+        end
+    end
+
+    -- Map analog f/r to WASD
+    self:setKey(Enum.KeyCode.W, f >  th)
+    self:setKey(Enum.KeyCode.S, f < -th)
+    self:setKey(Enum.KeyCode.D, r >  th)
+    self:setKey(Enum.KeyCode.A, r < -th)
+
+    if self.moveKeys[Enum.KeyCode.W] or self.moveKeys[Enum.KeyCode.S]
+       or self.moveKeys[Enum.KeyCode.A] or self.moveKeys[Enum.KeyCode.D] then
         self.lastMoveTime = os.clock()
     end
 end
+
 function Bot:alignCam()
     local cam=workspace.CurrentCamera; if not(cam and self.rp) then return end
     local cp=cam.CFrame.Position; local look=self.rp.CFrame.LookVector; local flatv=Vector3.new(look.X,0,look.Z); if flatv.Magnitude<1e-3 then return end
