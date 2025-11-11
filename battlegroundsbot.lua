@@ -33,9 +33,9 @@ local CFG = {
     },
 
     M1Range  = 6.5,
-    M1MaxGap = 0.60,
+    M1MaxGap = 0.55,
     InputTap = 0.08,
-    TapS     = 0.12,
+    TapS     = 0.10,
     TapM     = 0.22,
     M1Min    = 0.25,
     M1Rand   = 0.10,
@@ -1571,10 +1571,15 @@ function Bot:onM1Hit(r:Enemy)
         dist = (r.hrp.Position - self.rp.Position).Magnitude
         r.dist = dist
     end
-    if (dist or 99) <= 10.0 and self:dashReady("S") then
-        self:tryDash("S", r.hrp, "off", r)
+
+    -- Only dash if we deliberately opened an extend window (e.g., after Shove/Upper).
+    if self.allowDashExtend and os.clock() < self.allowDashExtend then
+        if self:dashReady("S") and distOK(dist or 99, CFG.Gates.S.lo, CFG.Gates.S.hi) then
+            self:tryDash("S", r.hrp, "off", r)
+        end
     end
 end
+
 
 function Bot:_noteStun(r:Enemy, tail:string)
     local nowT = os.clock()
@@ -2069,6 +2074,13 @@ end
 
 function Bot:shouldBlock(r:Enemy?):(boolean,string?)
     if not r then return false,nil end
+    if r and r.dist <= (CFG.M1Range + 0.25)
+       and not self.isAttacking
+       and not self.inDash
+       and (os.clock() - (self.lastM1 or 0)) >= (CFG.M1Min * 0.85) then
+        return false, nil
+    end
+
     if self.blocking then return true,"holding" end
     if self.isAttacking then return false,nil end
     if self:_hasRecentStun(r) then return false,nil end
@@ -2196,6 +2208,7 @@ end
 
 
 function Bot:maybeDash(r:Enemy)
+    if self.isM1ing then return end
     if not r or not r.hrp or self.inDash then return end
     if self.blocking then return end
     local d = r.dist or 999
@@ -2677,7 +2690,7 @@ function Bot:neutral(tgt:Enemy?)
     local ragdolled = self:_targetRagdolled(tgt)
     local skillCandidates = {}
 
-    if d<=CFG.M1Range and nowT-self.lastM1>CFG.M1Min*0.9 and not ragdolled and not self.isAttacking and not self.blocking then
+    if d<=CFG.M1Range and nowT-self.lastM1>CFG.M1Min*0.8 and not ragdolled and not self.isAttacking and not self.blocking then
         table.insert(skillCandidates, {
             name = "M1",
             bias = 0.4,
@@ -3014,6 +3027,29 @@ function Bot:update(dt:number)
             end
         end
     end
+    -- If we've tried 2 quick M1s and didn't secure a stun, bail out smartly.
+    do
+        local sinceM1 = nowT - (self.lastM1 or 0)
+        if tgt and not self.inDash and not self.blocking
+           and self.m1ChainCount >= 2
+           and sinceM1 <= (CFG.M1MaxGap * 1.3)
+           and not self:_hasRecentStun(tgt) then
+            -- Prefer a backward disengage if very close; otherwise defensive side or block.
+            if self:dashReady("B") and tgt.dist <= (CFG.SpaceMin + 2.0) then
+                self:tryDash("B", tgt.hrp, "off", tgt)
+            elseif self:dashReady("S") then
+                self:tryDash("S", tgt.hrp, "def", tgt) -- defensive (perpendicular) side step
+            else
+                self:block(self:blockDur(tgt), tgt, "m1_fail_fallback")
+            end
+            self.m1ChainCount   = 0
+            self.lastAttempt    = nowT
+            self.lastOffenseTime= nowT
+            self.gui:updateCDs(self:_cdLeft("F"), self:_cdLeft("B"), self:_cdLeft("S"))
+            return
+        end
+    end
+
 
 
     if nowT - self.lastAttempt > CFG.MaxNoAtk and tgt.dist<=CFG.CloseUseRange+2 then
