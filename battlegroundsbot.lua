@@ -27,17 +27,17 @@ local CFG = {
 
 
     Cooldown = {
-        F = 10.0,
-        B =  10.0,
-        S =  5.0,
+        F = 15.0,
+        B =  12.0,
+        S =  7.0,
     },
 
     M1Range  = 5,
-    M1MaxGap = 0.7,
+    M1MaxGap = 0.62,
     InputTap = 0.10,
     TapS     = 0.05,
     TapM     = 0.25,
-    M1Min    = 0.5,
+    M1Min    = 0.4,
     M1Rand   = 0.05,
 
     NPFinisherId  = "normal_punch",
@@ -50,7 +50,7 @@ local CFG = {
     Gates = {
         F = { lo= 23.0, hi=33.0 },
         S = { lo= 7, hi=16 },
-        B = { lo= 8, hi=35.0 },
+        B = { lo= 12, hi=30.0 },
     },
 
 
@@ -64,7 +64,7 @@ local CFG = {
         RefaceTail  = 0.60,
 
         FWindow     = 0.80,
-        BWindow     = 1.2,
+        BWindow     = .90,
         SWindow     = 0.40,
 
         OrbitTrigger   = 5.0,
@@ -1185,27 +1185,22 @@ end
 
 
 function Bot:aimAt(tHRP:BasePart?)
-    if self.destroyed then return end
-    if not tHRP or not self.rp then return end
-    if self.inDash then return end
-    if self.hum and self.hum:GetState()==Enum.HumanoidStateType.FallingDown then
-        if self.hum then self.hum.AutoRotate=true end
+    if self.destroyed or self.inDash then return end
+    if not (tHRP and self.rp and self.hum) then return end
+    if self.hum:GetState()==Enum.HumanoidStateType.FallingDown then
+        self.hum.AutoRotate = true
         return
     end
-    local aimed = self.bridge:tryAim(self.rp,tHRP)
-    if not aimed then
-        aimCFrame(self.rp,tHRP)
-    else
-        local to = tHRP.Position - self.rp.Position
-        if to.Magnitude > 1e-3 then
-            local look = self.rp.CFrame.LookVector
-            if look:Dot(to.Unit) < 0.995 then
-                aimCFrame(self.rp,tHRP)
-            end
-        end
+    local cf = yawLook(self.rp.Position, tHRP.Position)
+    if not cf then return end
+    self.hum.AutoRotate = false
+    self.rp.CFrame = cf
+    local cam = workspace.CurrentCamera
+    if cam then
+        local cp = cam.CFrame.Position
+        local lv = cf.LookVector
+        cam.CFrame = CFrame.new(cp, Vector3.new(cp.X + lv.X, cp.Y, cp.Z + lv.Z))
     end
-
-    if self.hum then self.hum.AutoRotate=false end
 end
 
 
@@ -1756,31 +1751,36 @@ function Bot:_requestSideDash(tHRP:BasePart?, style:string?, r:Enemy?)
     if wasS then self:setKey(Enum.KeyCode.S, true) end
 
     self.lastDashTime = os.clock() -- NEW: for “no Upper right after dash”
+    self.lastDashKind = "S"  
     self.lastMoveTime = os.clock()
 end
 
 
 
-
+-- REPLACE your _requestForwardDash with this
 function Bot:_requestForwardDash(r:Enemy)
     if not (self.rp and r and r.hrp) then return end
-    -- NEW: user-intended global limiter (in addition to the real in-game CD)
-    if (os.clock() - (self.lastFDUser or -1e9)) < 45.0 then return end
-
+    if self:_cdLeft("F")>0 then return end
     local d = r.dist
     local g = CFG.Gates.F
     if not distOK(d, g.lo, g.hi) then return end
-    if self:_cdLeft("F")>0 then return end
 
-    self.lastFD=now()
-    self.lastFDUser = os.clock()   -- NEW: record user limiter
+    self.lastFD = os.clock()
+    self.lastFDUser = os.clock()
 
-    self.dashPending = {kind="fdash", style="off", tHRP=r.hrp}
-    pressKey(Enum.KeyCode.W,true); task.wait(0.02); holdQ(CFG.Dash.HoldQ); pressKey(Enum.KeyCode.W,false)
+    self.dashPending = {kind="fdash", style="off", tHRP=r.hrp, enemy=r}
+    pressKey(Enum.KeyCode.W, true); task.wait(0.02)
+    holdQ(CFG.Dash.HoldQ)
+    pressKey(Enum.KeyCode.W, false)
+
+    -- NEW: stamp dash timing/kind for Upper gating
+    self.lastDashTime = os.clock()
+    self.lastDashKind = "F"
+
     self.lastMoveTime = os.clock()
 end
 
-
+-- REPLACE your _requestBackDash with this
 function Bot:_requestBackDash(tHRP:BasePart?, style:string?, r:Enemy?)
     if not (self.rp and tHRP) then return end
     local g = CFG.Gates.B
@@ -1788,7 +1788,6 @@ function Bot:_requestBackDash(tHRP:BasePart?, style:string?, r:Enemy?)
     if not dist and self.rp then dist = (tHRP.Position - self.rp.Position).Magnitude end
     if not dist or not distOK(dist, g.lo, g.hi) then return end
 
-    -- release conflicting keys so S wins (no diagonal)
     local wasW = self.moveKeys[Enum.KeyCode.W]
     local wasA = self.moveKeys[Enum.KeyCode.A]
     local wasD = self.moveKeys[Enum.KeyCode.D]
@@ -1803,13 +1802,16 @@ function Bot:_requestBackDash(tHRP:BasePart?, style:string?, r:Enemy?)
     holdQ(CFG.Dash.HoldQ)
     pressKey(Enum.KeyCode.S, false)
 
+    -- NEW
+    self.lastDashTime = os.clock()
+    self.lastDashKind = "B"
+
     if wasW then self:setKey(Enum.KeyCode.W, true) end
     if wasA then self:setKey(Enum.KeyCode.A, true) end
     if wasD then self:setKey(Enum.KeyCode.D, true) end
 
     self.lastMoveTime = os.clock()
 end
-
 
 function Bot:dashReady(kind:string):boolean
     local cd = CFG.Cooldown[kind]
@@ -1818,6 +1820,7 @@ function Bot:dashReady(kind:string):boolean
     return (os.clock() - last) >= cd
 end
 
+-- REPLACE your tryDash’s executed branch with this tiny addition
 function Bot:tryDash(kind:string, tHRP:BasePart?, style:string?, r:Enemy?)
     if not tHRP or self.inDash then return false end
     if self.blocking then return false end
@@ -1831,6 +1834,10 @@ function Bot:tryDash(kind:string, tHRP:BasePart?, style:string?, r:Enemy?)
         if self:dashReady("B") then self:_requestBackDash(tHRP, style, r); executed=true end
     end
     if executed then
+        -- NEW: always stamp dash time/kind (covers all call paths)
+        self.lastDashTime = os.clock()
+        self.lastDashKind = kind
+
         local ctx=self:_ctxKey(r)
         self:_noteAction(kind, ctx, r)
         self.ls:log("dash",{kind=kind, enemy=r and r.model and r.model.Name or "none", dist=r and r.dist or nil, style=style})
@@ -2741,7 +2748,8 @@ function Bot:neutral(tgt:Enemy?)
     local ragdolled = self:_targetRagdolled(tgt)
     local skillCandidates = {}
 
-    if d<=CFG.M1Range and nowT-self.lastM1>CFG.M1Min*0.75 and not ragdolled and not self.isAttacking and not self.blocking then
+    if d<=CFG.M1Range and (nowT - (self.lastM1 or 0)) >= (CFG.M1Min * 0.55) and not ragdolled and not self.blocking then
+
         table.insert(skillCandidates, {
             name = "M1",
             bias = 0.65, -- was ~0.4; higher = more jab priority
@@ -2813,12 +2821,15 @@ function Bot:neutral(tgt:Enemy?)
             })
         end
 
+        local dashAge = nowT - (self.lastDashTime or 0)
+        local recentB = (self.lastDashKind == "B") and (dashAge < 0.80)  -- block B→Upper for ~0.8s
         if slotReady(SLOT.Upper)
            and self:_upperUseOK(tgt)
-           and (nowT - (self.lastDashTime or 0) >= 0.45)    -- NEW: no dash->upper
-           and (self.m1ChainCount >= 1 or ragdolled)        -- NEW: prefer after at least one M1
+           and dashAge >= ((self.lastDashKind == "S" or self.lastDashKind == "F") and 0.25 or 0.60)  -- faster after S/F, slower otherwise
+           and not recentB
+           and (self.m1ChainCount >= 1 or ragdolled)
         then
-            local upBias = ragdolled and 0.50 or 0.08       -- lower default bias
+            local upBias = ragdolled and 0.50 or 0.08
             table.insert(skillCandidates, {
                 name = "UPPER",
                 bias = upBias,
@@ -2830,7 +2841,6 @@ function Bot:neutral(tgt:Enemy?)
                 end,
             })
         end
-    end
 
     if #skillCandidates > 0 then
         local pick = self:choose_action(ctx, skillCandidates, self.bandit.epsilon)
