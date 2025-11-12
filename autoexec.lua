@@ -6195,7 +6195,7 @@ InterfaceManager:SetLibrary(Library)
 
 Window = Library:CreateWindow{
     Title="TSBnocutsceneandFOV",SubTitle="Created by Azacks",
-    TabWidth=120,Size=UDim2.fromOffset(420,490),
+    TabWidth=120,Size=UDim2.fromOffset(670,710),
     Resize=true,MinSize=Vector2.new(170,150),Acrylic=false,
     Theme="GitHub Dark Default",
 }
