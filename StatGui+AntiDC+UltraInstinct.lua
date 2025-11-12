@@ -27,12 +27,12 @@ local Window = Library:CreateWindow{
     Title = "StatGui+AntiDC+UltraInstinct",
     SubTitle = "by Azacks",
     TabWidth = 80,
-    Size = UDim2.fromOffset(400, 455),
+    Size = UDim2.fromOffset(600, 755),
     Resize = true,
     MinSize = Vector2.new(310, 200),
     Acrylic = false,
     Theme = "Vynixu",
-    MinimizeKey = Enum.KeyCode.RightControl
+    MinimizeKey = Enum.KeyCode.Down
 }
 
 local Tabs = {
