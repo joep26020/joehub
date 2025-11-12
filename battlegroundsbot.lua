@@ -115,7 +115,7 @@ local CFG = {
 
 
     Data  = "bgbot",
-    Flush = 0.25,
+    Flush = 0.0166,
 
     BlockAnimId = "rbxassetid://10470389827",
 }
@@ -137,6 +137,88 @@ CFG.Config = {
     Cooldown = CFG.Cooldown,
     Gates = CFG.Gates,
 }
+
+-- ========= LOCK NON-EDITABLES =========
+local function LOCK(tbl)
+    return setmetatable({}, {
+        __index = tbl,
+        __newindex = function() error("Locked: not editable at runtime") end,
+        __metatable = "locked"
+    })
+end
+DashAnim = LOCK(DashAnim)
+CFG.Attack.AnimIds = LOCK(CFG.Attack.AnimIds) -- prevent AI from touching anim IDs
+
+-- ========= TUNING BASELINES =========
+local BASE_SPACES = {
+    SpaceMin = CFG.SpaceMin,
+    SpaceMax = CFG.SpaceMax,
+    M1Range  = CFG.M1Range,
+}
+
+-- What the AI is allowed to change (and bounds)
+local TUNE_SCHEMA = {
+    ["Cooldown.F"] = {min=6,  max=30, round=0.1},
+    ["Cooldown.B"] = {min=6,  max=30, round=0.1},
+    ["Cooldown.S"] = {min=2,  max=20, round=0.1},
+
+    ["Gates.F.lo"] = {min=5,  max=60, round=0.1},
+    ["Gates.F.hi"] = {min=10, max=90, round=0.1},
+    ["Gates.S.lo"] = {min=2,  max=20, round=0.1},
+    ["Gates.S.hi"] = {min=4,  max=30, round=0.1},
+    ["Gates.B.lo"] = {min=6,  max=30, round=0.1},
+    ["Gates.B.hi"] = {min=10, max=60, round=0.1},
+
+    ["SpaceMin"]   = {min=2,  max=10, round=0.05},
+    ["SpaceMax"]   = {min=3,  max=14, round=0.05},
+    ["M1Range"]    = {min=3,  max=8,  round=0.05},
+}
+
+local function _roundTo(v, step)
+    if not step or step <= 0 then return v end
+    return math.round(v/step)*step
+end
+
+local function _setByPath(root, parts, value)
+    local last = table.remove(parts)
+    local cur  = root
+    for _,k in ipairs(parts) do cur = cur[k] end
+    cur[last] = value
+end
+
+local function _getByPath(root, parts)
+    local cur = root
+    for _,k in ipairs(parts) do cur = cur[k] end
+    return cur
+end
+
+local function _applyTunable(path, val)
+    local sch = TUNE_SCHEMA[path]; if not sch then return false, "not tunable" end
+    if typeof(val) ~= "number" then return false, "bad type" end
+    local v = math.clamp(val, sch.min, sch.max)
+    v = _roundTo(v, sch.round)
+
+    local parts = {}
+    for token in string.gmatch(path, "[^%.]+") do table.insert(parts, token) end
+    if parts[1] == "Cooldown" or parts[1] == "Gates" then
+        _setByPath(CFG, parts, v)
+    else
+        CFG[parts[1]] = v
+    end
+    return true
+end
+
+local function _snapshotTunables()
+    local snap = {}
+    for k,_ in pairs(TUNE_SCHEMA) do
+        local parts = {}; for token in string.gmatch(k,"[^%.]+") do table.insert(parts, token) end
+        snap[k] = (parts[1]=="Cooldown" or parts[1]=="Gates")
+            and _getByPath(CFG, parts)
+            or CFG[parts[1]]
+    end
+    return snap
+end
+
 
 
 local function mkfolder(p) if makefolder and isfolder and not isfolder(p) then pcall(makefolder,p) end end
@@ -1288,24 +1370,62 @@ function Bot:update_ravg(ctx:string?, action:string?, reward:number, weight:numb
     entry.n += w
 end
 
-function Bot:choose_action(ctx:string, candidates:{[number]:{name:string, bias:number?, exec:(()->boolean?)?, meta:any}}?, epsilon:number?)
-    local list = candidates or {}
-    local len = #list
-    if len == 0 then return nil end
-    local eps = epsilon or self.bandit.epsilon or 0.15
-    if math.random() < eps then
-        return list[math.random(1, len)]
+-- Extend Bridge to pick up an external decider 
+function Bridge.new()
+    local env=rawget(getgenv(),"joehub") or rawget(getgenv(),"JoeHub")
+    local self=setmetatable({},Bridge)
+    if typeof(env)=="table" then self.env=env end
+    if self.env then
+        self.aim    = self.env.AimAt or self.env.AimTarget or self.env.AimStabilizer
+        self.decide = (self.env.AI and self.env.AI.Decide) or self.env.Decide
+        self.log    = (self.env.AI and self.env.AI.Log) or self.env.Log
     end
-    local best, bestScore = list[1], -math.huge
-    for _,cand in ipairs(list) do
-        local entry = self:_getOrInit(ctx, cand.name)
-        local score = entry.ravg + (cand.bias or 0)
-        if score > bestScore then
-            bestScore = score
-            best = cand
+    return self
+end
+
+-- Toggle to allow external AI to drive choices
+CFG.AI = CFG.AI or { external = false }
+-- Base epsilon-greedy chooser (fallback if none exists yet)
+if not Bot.choose_action then
+    function Bot:choose_action(ctx, candidates, epsilon)
+        epsilon = math.clamp(tonumber(epsilon or self.bandit and self.bandit.epsilon or 0.15) or 0.15, 0, 1)
+        -- score = bias + learned ravg (if any)
+        local scored = {}
+        local sumBias = 0
+        for i,c in ipairs(candidates or {}) do
+            local aName = c.name
+            local entry = self:_getOrInit(ctx or "default", aName)
+            local bias  = tonumber(c.bias or 0) or 0
+            local val   = (entry.ravg or 0)
+            local s     = bias + val
+            scored[i]   = {i=i, c=c, s=s}
+            sumBias = sumBias + math.max(0, s)
+        end
+        if #scored == 0 then return nil end
+
+        -- ε pick: random
+        if math.random() < epsilon then
+            return scored[math.random(1, #scored)].c
+        end
+        -- 1-ε pick: best score
+        table.sort(scored, function(a,b) return a.s > b.s end)
+        return scored[1].c
+    end
+end
+
+-- Keep original, then wrap with external bridge
+Bot._choose_action_raw = Bot.choose_action
+function Bot:choose_action(ctx, candidates, epsilon)
+    if CFG.AI.external and self.bridge and self.bridge.decide then
+        local options = {}
+        for i,c in ipairs(candidates or {}) do options[i] = c.name end
+        local payload = {ctx=ctx, options=options, tuning=AI.GetTuning(), eps=self.bandit.epsilon, gen=self.bandit.generation}
+        local ok, pickName = pcall(self.bridge.decide, payload)
+        if ok and pickName then
+            for _,c in ipairs(candidates) do if c.name==pickName then return c end end
         end
     end
-    return best
+    return self:_choose_action_raw(ctx, candidates, epsilon)
 end
 
 function Bot:_noteAction(actionName:string, ctx:string, tgt:Enemy?)
@@ -1420,19 +1540,57 @@ function Bot:_averageReward(actionName:string, filters:{string}?)
 end
 
 function Bot:_applyTune(tune:any)
-    CFG.Cooldown.F = BASE_COOLDOWN.F
-    CFG.Cooldown.S = BASE_COOLDOWN.S
-    CFG.Cooldown.B = BASE_COOLDOWN.B
-    CFG.Gates.F.lo = BASE_GATES.F.lo; CFG.Gates.F.hi = BASE_GATES.F.hi
-    CFG.Gates.S.lo = BASE_GATES.S.lo; CFG.Gates.S.hi = BASE_GATES.S.hi
-    CFG.Gates.B.lo = BASE_GATES.B.lo; CFG.Gates.B.hi = BASE_GATES.B.hi
+    -- reset to baselines first
+    CFG.Cooldown.F, CFG.Cooldown.S, CFG.Cooldown.B = BASE_COOLDOWN.F, BASE_COOLDOWN.S, BASE_COOLDOWN.B
+    CFG.Gates.F.lo, CFG.Gates.F.hi = BASE_GATES.F.lo, BASE_GATES.F.hi
+    CFG.Gates.S.lo, CFG.Gates.S.hi = BASE_GATES.S.lo, BASE_GATES.S.hi
+    CFG.Gates.B.lo, CFG.Gates.B.hi = BASE_GATES.B.lo, BASE_GATES.B.hi
+    CFG.SpaceMin,   CFG.SpaceMax    = BASE_SPACES.SpaceMin, BASE_SPACES.SpaceMax
+    CFG.M1Range                      = BASE_SPACES.M1Range
 
-    local tuneB = tune and tune.B
-    if tuneB then
-        CFG.Cooldown.B = math.clamp(BASE_COOLDOWN.B + (tuneB.cooldown or 0), 6.5, 12.0)
-        CFG.Gates.B.lo = math.clamp(BASE_GATES.B.lo + (tuneB.gateLo or 0), 2.5, 6.5)
-        CFG.Gates.B.hi = math.clamp(BASE_GATES.B.hi + (tuneB.gateHi or 0), 30.0, 40.0)
+    if not tune then return end
+
+    -- helper to apply schema-guarded values
+    local function set(path, val) if val~=nil then _applyTunable(path, val) end end
+
+    if tune.F then
+        set("Cooldown.F", tune.F.cooldown)
+        set("Gates.F.lo", tune.F.gateLo and (BASE_GATES.F.lo + tune.F.gateLo))
+        set("Gates.F.hi", tune.F.gateHi and (BASE_GATES.F.hi + tune.F.gateHi))
     end
+    if tune.S then
+        set("Cooldown.S", tune.S.cooldown)
+        set("Gates.S.lo", tune.S.gateLo and (BASE_GATES.S.lo + tune.S.gateLo))
+        set("Gates.S.hi", tune.S.gateHi and (BASE_GATES.S.hi + tune.S.gateHi))
+    end
+    if tune.B then
+        set("Cooldown.B", tune.B.cooldown)
+        set("Gates.B.lo", tune.B.gateLo and (BASE_GATES.B.lo + tune.B.gateLo))
+        set("Gates.B.hi", tune.B.gateHi and (BASE_GATES.B.hi + tune.B.gateHi))
+    end
+    if tune.space then
+        -- relative nudges around your baseline
+        set("SpaceMin", tune.space.min and (BASE_SPACES.SpaceMin + tune.space.min))
+        set("SpaceMax", tune.space.max and (BASE_SPACES.SpaceMax + tune.space.max))
+        set("M1Range",  tune.space.m1  and (BASE_SPACES.M1Range  + tune.space.m1))
+    end
+end
+
+-- Safe runtime API (returns true only if something changed)
+function AI.SetTuning(tbl)
+    if typeof(tbl)~="table" then return false end
+    local any=false
+    for k,v in pairs(tbl) do
+        local ok = _applyTunable(k, v)
+        any = any or ok
+    end
+    local b = AI._bot
+    if any and b and b.ls then b.ls:log("tuning_apply", {tuning = tbl}) end
+    return any
+end
+
+function AI.GetTuning()
+    return _snapshotTunables()
 end
 
 function Bot:_applyGenerationKnobs(meta:any?)
@@ -3247,6 +3405,181 @@ function AI.Learn(input, output, reward)
     bot.ls:moveAdd(output, reward, dist)
     bot:savePolicy()
 end
+
+do
+    -- expose a stable handle for trainers
+    getgenv().AI = getgenv().AI or {}
+    local GAI = getgenv().AI
+
+    local function bot() return getgenv().BattlegroundsBot end
+
+    -- Toggle external decider (uses Bridge.decide if present)
+    function GAI.ToggleExternal(on)
+        CFG.AI = CFG.AI or {}
+        CFG.AI.external = (on ~= false)
+        local b = bot()
+        if b and b.gui and b.gui.rules then
+            b.gui.rules.Text = string.format(
+                "FDash[%g..%g] • ε=%.2f • AI=%s",
+                CFG.Gates.F.lo, CFG.Gates.F.hi,
+                b.bandit.epsilon or 0.15,
+                (CFG.AI.external and "external" or "internal")
+            )
+        end
+        return CFG.AI.external
+    end
+
+    -- Adjust exploration
+    function GAI.SetEpsilon(eps)
+        local b = bot(); if not b then return false end
+        b.bandit.epsilon = math.clamp(tonumber(eps) or b.bandit.epsilon or 0.15, 0.01, 0.60)
+        if b.gui and b.gui.rules then
+            b.gui.rules.Text = b.gui.rules.Text:gsub("ε=[%d%.]+", ("ε=%.2f"):format(b.bandit.epsilon))
+        end
+        return b.bandit.epsilon
+    end
+
+    -- Export/Import/Reset policy (so your trainer can persist across sessions)
+    function GAI.ExportPolicy(path)
+        path = path or (CFG.Data.."/policy.export.json")
+        local b = bot(); if not b then return false end
+        local ok, blob = pcall(function()
+            return HttpService:JSONEncode({policy=b.policy or {}, meta=b.bandit.meta or {}})
+        end)
+        if not ok then return false end
+        wfile(path, blob)
+        return path
+    end
+
+    function GAI.ImportPolicy(path)
+        path = path or (CFG.Data.."/policy.export.json")
+        local raw = rfile(path); if not raw then return false end
+        local ok, data = pcall(function() return HttpService:JSONDecode(raw) end)
+        if not ok or typeof(data) ~= "table" then return false end
+        local b = bot(); if not b then return false end
+        b.policy = data.policy or {}
+        b.bandit.meta = data.meta or b.bandit.meta
+        b:savePolicy()
+        return true
+    end
+
+    function GAI.ResetPolicy()
+        local b = bot(); if not b then return false end
+        b.policy = {}
+        b.bandit.meta = {epsilon=b.bandit.epsilon, generation=0, tune=b.bandit.tune or {}}
+        b:savePolicy()
+        return true
+    end
+
+    -- Slash-console for fast tuning (local; doesn’t touch server)
+    -- Examples:
+    --   /ai ext on
+    --   /ai eps 0.12
+    --   /ai tune Gates.S.hi 14.0
+    --   /ai get
+    --   /ai export | /ai import | /ai reset
+    local function installConsole()
+        if GAI._consoleInstalled then return end
+        GAI._consoleInstalled = true
+        LP.Chatted:Connect(function(msg)
+            if type(msg) ~= "string" or not msg:lower():match("^/ai") then return end
+            local cmd = msg:sub(4):gsub("^%s+","")
+            local out = ""
+            if cmd:match("^ext%s+on") then
+                GAI.ToggleExternal(true);  out = "external AI: on"
+            elseif cmd:match("^ext%s+off") then
+                GAI.ToggleExternal(false); out = "external AI: off"
+            elseif cmd:match("^eps") then
+                local v = tonumber(cmd:match("eps%s+([%d%.]+)"))
+                local r = GAI.SetEpsilon(v); out = ("epsilon -> %.2f"):format(r)
+            elseif cmd:match("^tune") then
+                local key,val = cmd:match('tune%s+([^%s]+)%s+([%-%d%.]+)')
+                if key and val then
+                    local ok = AI.SetTuning({[key]=tonumber(val)})
+                    out = ok and ("tuned "..key.." = "..val) or ("not tunable: "..tostring(key))
+                else
+                    out = "usage: /ai tune Gates.S.hi 14.0"
+                end
+            elseif cmd:match("^get") then
+                local snap = AI.GetTuning(); out = "tuning: "..HttpService:JSONEncode(snap)
+            elseif cmd:match("^export") then
+                local path = GAI.ExportPolicy(); out = "exported policy -> "..tostring(path)
+            elseif cmd:match("^import") then
+                local ok = GAI.ImportPolicy(); out = ok and "imported policy" or "import failed"
+            elseif cmd:match("^reset") then
+                GAI.ResetPolicy(); out = "policy reset"
+            else
+                out = "commands: /ai ext on|off • /ai eps <0.01-0.60> • /ai tune <Path> <num> • /ai get • /ai export • /ai import • /ai reset"
+            end
+            print("[AI]", out)
+        end)
+    end
+    installConsole()
+
+    -- Monkey-patch a few spots to stream MORE data to your external trainer (if present).
+    if Bot and not Bot._logPatched then
+        Bot._logPatched = true
+
+        -- 1) when we record an action choice
+        local _noteAction = Bot._noteAction
+        function Bot:_noteAction(actionName, ctx, tgt)
+            _noteAction(self, actionName, ctx, tgt)
+            if self.bridge and self.bridge.log then
+                pcall(self.bridge.log, {
+                    type   = "action",
+                    action = actionName,
+                    ctx    = ctx,
+                    target = tgt and tgt.model and tgt.model.Name or nil
+                })
+            end
+        end
+
+        -- 2) when we update rewards
+        local _upd = Bot.update_ravg
+        function Bot:update_ravg(ctx, action, reward, weight)
+            _upd(self, ctx, action, reward, weight)
+            if self.bridge and self.bridge.log then
+                pcall(self.bridge.log, {
+                    type   = "reward",
+                    ctx    = ctx,
+                    action = action,
+                    reward = reward,
+                    w      = weight
+                })
+            end
+        end
+
+        -- 3) after saving policy (so dashboards can watch KPIs)
+        local _save = Bot.savePolicy
+        function Bot:savePolicy()
+            _save(self)
+            if self.kpiPath and self.bridge and self.bridge.log then
+                pcall(self.bridge.log, {type="kpi", path=self.kpiPath})
+            end
+        end
+    end
+
+    -- reflect state in the GUI line
+    task.defer(function()
+        local b = bot()
+        if b and b.gui and b.gui.rules then
+            b.gui.rules.Text = string.format(
+                "FDash[%g..%g] • ε=%.2f • AI=%s",
+                CFG.Gates.F.lo, CFG.Gates.F.hi,
+                b.bandit.epsilon or 0.15,
+                (CFG.AI.external and "external" or "internal")
+            )
+        end
+    end)
+end
+
+-- If a trainer (JoeHub) is around, default to external AI
+if getgenv and rawget(getgenv(),"JoeHub") then
+    CFG.AI = CFG.AI or {}; CFG.AI.external = true
+end
+
+-- expose AI table to trainers explicitly
+getgenv().AI = getgenv().AI or AI
 
 
 function AI.OnEvent(eventType, data)
