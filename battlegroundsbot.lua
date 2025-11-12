@@ -118,6 +118,25 @@ local CFG = {
     Flush = 0.0166,
 
     BlockAnimId = "rbxassetid://10470389827",
+
+    -- === Reward Weights (you can tune these live via /reward set) ===
+    Reward = {
+        dmgDealt       = 1.00,
+        dmgTaken       = -0.70,
+        finisherBonus  = 6.00,
+        forcedUnblock  = 3.00,
+        keptAdvantage  = 2.00,
+        earlyPunish    = -5.00,
+        blockNoDamage  = -3.00,
+        lostSpacing    = -2.00,
+
+        applyAlpha     = 0.70,
+        prevAlpha      = 0.30,
+        prevWeight     = 0.50,
+    },
+
+    -- === Autosave cadence (seconds) ===
+    AutoSave = 30,
 }
 
 
@@ -463,13 +482,50 @@ function GUI.new()
     panel.BackgroundColor3=Color3.fromRGB(20,22,30); panel.BorderSizePixel=0; panel.Parent=f
     local pst=Instance.new("UIStroke"); pst.Color=Color3.fromRGB(76,110,255); pst.Thickness=1; pst.Transparency=0.2; pst.Parent=panel
 
-    self.ctitle = text(panel,"CT","Combo Tracker",UDim2.new(1,-10,0,22),UDim2.new(0,6,0,4),16,true); self.ctitle.BackgroundTransparency=1
-    local list=Instance.new("ScrollingFrame"); list.Name="List"; list.Size=UDim2.new(1,-10,1,-30); list.Position=UDim2.new(0,5,0,26)
+    self.ctitle = text(panel,"CT","Combo Tracker",UDim2.new(0.60,-12,0,22),UDim2.new(0,6,0,4),16,true); self.ctitle.BackgroundTransparency=1
+    local list=Instance.new("ScrollingFrame"); list.Name="List"; list.Size=UDim2.new(0.60,-12,0,148); list.Position=UDim2.new(0,6,0,32)
     list.CanvasSize=UDim2.new(0,0,0,0); list.BackgroundTransparency=1; list.BorderSizePixel=0; list.ScrollBarThickness=4; list.Parent=panel
     local ul=Instance.new("UIListLayout"); ul.Padding=UDim.new(0,4); ul.SortOrder=Enum.SortOrder.LayoutOrder; ul.Parent=list
     self.comboList=list; self.comboLayout=ul
 
     self.gui=g; self.frame=f; self.startB=startB; self.stopB=stopB; self.exitB=exitB
+
+    self:addConsole(panel)
+    if self.helpText then
+        self.helpText.Text = [[
+COMMANDS (type in the box, press Run or Enter):
+
+/start                      — start the bot
+/stop                       — stop (keeps UI)
+/exit                       — destroy bot + UI
+
+/epsilon <0..1>             — set ε for exploration
+/external on|off            — toggle external AI decide() bridge
+/autosave <sec>             — set autosave interval (default 30)
+
+/set <Path> <num>           — change a tunable (see below)
+   Paths: Cooldown.F|S|B, Gates.F.lo|hi, Gates.S.lo|hi, Gates.B.lo|hi,
+          SpaceMin, SpaceMax, M1Range
+   Ex: /set Cooldown.S 3.5
+
+/tune show                  — print all current tunables
+
+/reward show                — list reward weights
+/reward set <key> <num>     — edit a weight (e.g., dmgTaken -0.9)
+/reward reset               — restore defaults
+
+/policy save|load|reset     — manual save/load/clear learned policy
+/stats                      — print generation, epsilon, last-life KPIs
+/help                       — show this
+
+WHAT THINGS MEAN (short):
+• ε (epsilon): exploration % when choosing actions (higher = more variety).
+• Context Key: range + recent block/attack/evade + dash CDs + HP diff. We learn a value per (ctx, action).
+• Reward: computed per action window (≈1.6s). Weights in CFG.Reward.
+• Tunables: safe knobs the AI can move within bounds (TUNE_SCHEMA).
+• Autosave: policy + KPIs persist to /bgbot/policy.json periodically.
+]]
+    end
     return self
 end
 function GUI:setS(t) self.status.Text=t end
@@ -494,6 +550,132 @@ function GUI:updateCombos(data)
     self.comboList.CanvasSize=UDim2.new(0,0,0,self.comboLayout.AbsoluteContentSize.Y+8)
 end
 function GUI:destroy() if self.gui then self.gui:Destroy() end end
+
+function GUI:addConsole(panel)
+    local console = Instance.new("ScrollingFrame")
+    console.Name = "Console"
+    local topOffset = 188
+    console.Size = UDim2.new(0.60, -8, 1, -(topOffset + 34))
+    console.Position = UDim2.new(0, 4, 0, topOffset)
+    console.BackgroundColor3 = Color3.fromRGB(14,16,22)
+    console.BorderSizePixel = 0
+    console.ScrollBarThickness = 4
+    console.CanvasSize = UDim2.new(0,0,0,0)
+    console.Parent = panel
+
+    local cl = Instance.new("UIListLayout")
+    cl.Padding = UDim.new(0, 2)
+    cl.SortOrder = Enum.SortOrder.LayoutOrder
+    cl.Parent = console
+
+    local input = Instance.new("TextBox")
+    input.Name = "Cmd"
+    input.Size = UDim2.new(0.60, -8, 0, 28)
+    input.Position = UDim2.new(0, 4, 1, -32)
+    input.PlaceholderText = "Type a command (e.g., /help)"
+    input.Text = ""
+    input.BackgroundColor3 = Color3.fromRGB(26,28,38)
+    input.TextColor3 = Color3.fromRGB(230,230,240)
+    input.ClearTextOnFocus = false
+    input.TextEditable = true
+    input.Font = Enum.Font.Gotham
+    input.TextSize = 16
+    input.TextXAlignment = Enum.TextXAlignment.Left
+    input.Parent = panel
+
+    local run = Instance.new("TextButton")
+    run.Name = "Run"
+    run.Size = UDim2.new(0, 72, 0, 28)
+    run.Position = UDim2.new(0.60, 0, 1, -32)
+    run.BackgroundColor3 = Color3.fromRGB(48,60,96)
+    run.TextColor3 = Color3.fromRGB(240,240,240)
+    run.Font = Enum.Font.GothamBold
+    run.TextSize = 16
+    run.Text = "Run"
+    run.Parent = panel
+
+    local help = Instance.new("ScrollingFrame")
+    help.Name = "Help"
+    help.Size = UDim2.new(0.40, -8, 1, -8)
+    help.Position = UDim2.new(0.60, 4, 0, 4)
+    help.BackgroundColor3 = Color3.fromRGB(18,20,28)
+    help.BorderSizePixel = 0
+    help.ScrollBarThickness = 4
+    help.CanvasSize = UDim2.new(0,0,0,0)
+    help.Parent = panel
+
+    local pad = Instance.new("UIPadding")
+    pad.PaddingLeft  = UDim.new(0,8)
+    pad.PaddingRight = UDim.new(0,8)
+    pad.PaddingTop   = UDim.new(0,6)
+    pad.Parent = help
+
+    local ht = Instance.new("TextLabel")
+    ht.BackgroundTransparency = 1
+    ht.Size = UDim2.new(1, -4, 0, 9999)
+    ht.TextXAlignment = Enum.TextXAlignment.Left
+    ht.TextYAlignment = Enum.TextYAlignment.Top
+    ht.TextWrapped = true
+    ht.Font = Enum.Font.Gotham
+    ht.TextSize = 14
+    ht.TextColor3 = Color3.fromRGB(210,220,255)
+    ht.Text = ""
+    ht.Parent = help
+
+    local function refreshHelpCanvas()
+        help.CanvasSize = UDim2.new(0,0,0,(ht.TextBounds and ht.TextBounds.Y or 0) + 12)
+    end
+    ht:GetPropertyChangedSignal("TextBounds"):Connect(refreshHelpCanvas)
+    refreshHelpCanvas()
+
+    self.console = console
+    self.consoleLayout = cl
+    self.cmd = input
+    self.cmdRun = run
+    self.helpText = ht
+end
+
+function GUI:log(line)
+    if not self.console then return end
+    local l = Instance.new("TextLabel")
+    l.BackgroundTransparency = 1
+    l.Size = UDim2.new(1, -6, 0, 18)
+    l.TextXAlignment = Enum.TextXAlignment.Left
+    l.Font = Enum.Font.Gotham
+    l.TextSize = 14
+    l.TextColor3 = Color3.fromRGB(220,225,240)
+    l.Text = line
+    l.Parent = self.console
+    local layout = self.consoleLayout
+    local h = layout and layout.AbsoluteContentSize.Y or 0
+    self.console.CanvasSize = UDim2.new(0,0,0,h + 8)
+    local windowY = (self.console.AbsoluteWindowSize and self.console.AbsoluteWindowSize.Y) or 0
+    self.console.CanvasPosition = Vector2.new(0, math.max(0, h + 8 - windowY))
+end
+
+function GUI:setKPI(gen, eps, life)
+    local kd = 0
+    if life and life.kd then
+        kd = life.kd
+    elseif life and life.deaths ~= nil then
+        local deaths = life.deaths
+        local kills = life.kills or 0
+        if deaths > 0 then
+            kd = kills / math.max(1, deaths)
+        else
+            kd = kills
+        end
+    end
+    self.rules.Text = string.format(
+        "Gen=%d • ε=%.2f • LastLife: R=%.1f, KD=%.2f, Dmg %d/%d",
+        gen or 0,
+        eps or 0.15,
+        life and life.reward or 0,
+        kd,
+        life and life.damage and life.damage.dealt or 0,
+        life and life.damage and life.damage.taken or 0
+    )
+end
 
 
 type Step = {kind:string, action:string?, hold:number?, wait:number?, dir:string?}
@@ -700,6 +882,7 @@ function Bot.new()
     self.arcUntil=0; self.closeT=os.clock(); self.closeD=math.huge
     self.pendingResume=false
     self.pendingLifeStart=false
+    self._nextAutoSaveAt = os.clock() + (CFG.AutoSave or 30)
 
 
     self.inDash=false
@@ -732,8 +915,29 @@ function Bot.new()
         if getgenv().BattlegroundsBot then getgenv().BattlegroundsBot:exit() end
     end))
 
+    if self.gui and self.gui.cmdRun and self.gui.cmd then
+        self:_trackConnection(self.gui.cmdRun.MouseButton1Click:Connect(function()
+            local line = self.gui.cmd.Text
+            if line and line ~= "" then self.gui:log("> "..line) end
+            local out = AI.RunCommand(line)
+            if out and out ~= "" then self.gui:log(out) end
+        end))
+        self:_trackConnection(self.gui.cmd.FocusLost:Connect(function(enterPressed)
+            if enterPressed then
+                local line = self.gui.cmd.Text
+                if line and line ~= "" then self.gui:log("> "..line) end
+                local out = AI.RunCommand(line)
+                if out and out ~= "" then self.gui:log(out) end
+            end
+        end))
+    end
+
     self.gui:setS("Status: idle"); self.gui:setT("Target: none"); self.gui:setC("Combo: none"); self.gui:setE("Evasive: unknown")
     self.gui:updateCombos(self.ls.data); self.gui:updateCDs(0,0,0)
+    if self.gui and self.gui.setKPI then
+        local meta = self.bandit.meta or {}
+        self.gui:setKPI(meta.generation or 0, self.bandit.epsilon or 0.15, meta.lastLife)
+    end
 
     self:connectChar(LP.Character or LP.CharacterAdded:Wait())
     self:_trackConnection(LP.CharacterAdded:Connect(function(c) self:connectChar(c) end))
@@ -1482,22 +1686,32 @@ function Bot:_recordDamageEvent(targetName:string?, amount:number, isDealt:boole
 end
 
 function Bot:_applyActionReward(act)
-    local reward = (act.damageDealt or 0) - 0.7 * (act.damageTaken or 0)
-    local nowT = os.clock()
-    if act.isFinisher and act.damageDealt > 0 then reward += 6 end
-    if act.forcedUnblock then reward += 3 end
-    local kept = act.keptAdvantage or (act.behindStart and act.damageTaken <= 0)
-    if kept then reward += 2 end
-    if act.firstDamageTaken and (act.damageDealt or 0) <= 0 and (act.firstDamageTaken - act.time) <= 0.8 then
-        reward -= 5
-    end
-    if act.targetBlocking and (act.damageDealt or 0) <= 0 then reward -= 3 end
-    if act.lostSpacing then reward -= 2 end
+    local R = CFG.Reward
+    local dealt  = act.damageDealt or 0
+    local taken  = act.damageTaken or 0
 
-    self:update_ravg(act.ctx, act.action, reward * 0.7, 1.0)
-    if act.prevCtx and act.prevAction then
-        self:update_ravg(act.prevCtx, act.prevAction, reward * 0.3, 0.5)
+    local reward = 0
+    reward += R.dmgDealt * dealt
+    reward += R.dmgTaken * taken
+
+    if act.isFinisher and dealt > 0 then reward += R.finisherBonus end
+    if act.forcedUnblock then reward += R.forcedUnblock end
+
+    local kept = act.keptAdvantage or (act.behindStart and taken <= 0)
+    if kept then reward += R.keptAdvantage end
+
+    if act.firstDamageTaken and dealt <= 0 and (act.firstDamageTaken - act.time) <= 0.8 then
+        reward += R.earlyPunish
     end
+    if act.targetBlocking and dealt <= 0 then reward += R.blockNoDamage end
+    if act.lostSpacing then reward += R.lostSpacing end
+
+    -- propagate
+    self:update_ravg(act.ctx, act.action, reward * R.applyAlpha, 1.0)
+    if act.prevCtx and act.prevAction then
+        self:update_ravg(act.prevCtx, act.prevAction, reward * R.prevAlpha, R.prevWeight)
+    end
+
     self.lifeStats.reward = (self.lifeStats.reward or 0) + reward
 end
 
@@ -3085,6 +3299,18 @@ function Bot:update(dt:number)
 
     self:_finalizeActionRecords(false)
 
+    if os.clock() >= (self._nextAutoSaveAt or 0) then
+        self:savePolicy()
+        self._nextAutoSaveAt = os.clock() + (CFG.AutoSave or 30)
+        if self.gui then
+            local meta = self.bandit.meta or {}
+            if self.gui.setKPI then
+                self.gui:setKPI(meta.generation or 0, meta.epsilon or self.bandit.epsilon or 0.15, meta.lastLife or {})
+            end
+            self.gui:log("[autosave] policy saved")
+        end
+    end
+
 
     if self.evTimer>0 then self.evTimer -= dt; if self.evTimer<=0 then self.evTimer=0; self.evReady=true end end
     self.gui:setE(self.evReady and "Evasive: ready" or ("Evasive: "..string.format("%.1fs",math.max(0,self.evTimer))))
@@ -3340,6 +3566,115 @@ function AI.Init(opts)
     AI._bot = bot
     if opts and opts.autorun then bot:start() end
     return true
+end
+
+
+local HELP_TEXT = "/help  — list commands (see Help panel right side)."
+
+local function _num(v) return tonumber(v) end
+
+function AI.RunCommand(line)
+    local bot = AI._bot
+    if not bot or not bot.gui then return "No bot." end
+    line = tostring(line or ""):gsub("^%s+",""):gsub("%s+$","")
+    if line == "" then return "" end
+
+    local function say(s) bot.gui:log(s) end
+    local args = {}
+    for w in string.gmatch(line, "%S+") do table.insert(args, w) end
+    local cmd = (args[1] or ""):lower()
+
+    local function afterSet()
+        if bot and bot.ls then bot.ls:log("cmd_set",{line=line}) end
+    end
+
+    if cmd == "/start" then bot:start(); return "Started." end
+    if cmd == "/stop"  then bot:stop();  return "Stopped." end
+    if cmd == "/exit"  then bot:exit();  return "Exited."  end
+
+    if cmd == "/epsilon" and _num(args[2]) then
+        bot.bandit.epsilon = math.clamp(_num(args[2]), 0, 1)
+        if bot.gui and bot.gui.setKPI then
+            local meta = bot.bandit.meta or {}
+            bot.gui:setKPI(meta.generation or 0, bot.bandit.epsilon, meta.lastLife or {})
+        end
+        return string.format("epsilon = %.2f", bot.bandit.epsilon)
+    end
+
+    if cmd == "/external" and args[2] then
+        local on = (args[2]:lower()=="on")
+        CFG.AI = CFG.AI or {}; CFG.AI.external = on
+        return "external decide() = "..tostring(on)
+    end
+
+    if cmd == "/autosave" and _num(args[2]) then
+        CFG.AutoSave = math.max(5, math.floor(_num(args[2])))
+        if bot._nextAutoSaveAt then
+            bot._nextAutoSaveAt = os.clock() + (CFG.AutoSave or 30)
+        end
+        return "autosave = "..tostring(CFG.AutoSave).."s"
+    end
+
+    if cmd == "/set" and args[2] and _num(args[3]) then
+        local ok, why = _applyTunable(args[2], _num(args[3]))
+        afterSet()
+        return ok and ("set ok: "..args[2]) or ("set failed: "..tostring(why))
+    end
+
+    if cmd == "/tune" and args[2] and args[2]:lower()=="show" then
+        local snap = _snapshotTunables()
+        for k,v in pairs(snap) do say(string.format("%-12s = %s", k, tostring(v))) end
+        return "tune printed."
+    end
+
+    if cmd == "/reward" and args[2] then
+        local sub = args[2]:lower()
+        if sub == "show" then
+            for k,v in pairs(CFG.Reward) do
+                say(string.format("%-14s = %s", k, tostring(v)))
+            end
+            return "reward printed."
+        elseif sub == "reset" then
+            local D = {
+                dmgDealt=1.00, dmgTaken=-0.70, finisherBonus=6.00, forcedUnblock=3.00,
+                keptAdvantage=2.00, earlyPunish=-5.00, blockNoDamage=-3.00, lostSpacing=-2.00,
+                applyAlpha=0.70, prevAlpha=0.30, prevWeight=0.50
+            }
+            for k,v in pairs(D) do CFG.Reward[k]=v end
+            return "reward reset."
+        elseif sub == "set" and args[3] and _num(args[4]) then
+            local key = args[3]
+            if CFG.Reward[key] == nil then return "unknown reward key." end
+            CFG.Reward[key] = _num(args[4])
+            return "reward "..key.." = "..tostring(CFG.Reward[key])
+        end
+    end
+
+    if cmd == "/policy" and args[2] then
+        local sub = args[2]:lower()
+        if sub == "save" then bot:savePolicy(); return "policy saved." end
+        if sub == "load" then bot:loadPolicy(); return "policy loaded." end
+        if sub == "reset" then
+            bot.policy = {}
+            bot.bandit.meta = {epsilon = bot.bandit.epsilon, generation = 0, tune = bot.bandit.tune or {}}
+            bot:savePolicy()
+            return "policy cleared."
+        end
+    end
+
+    if cmd == "/stats" then
+        local meta = bot.bandit.meta or {}
+        if bot.gui and bot.gui.setKPI then
+            bot.gui:setKPI(meta.generation or 0, meta.epsilon or bot.bandit.epsilon or 0.15, meta.lastLife or {})
+        end
+        return "stats updated."
+    end
+
+    if cmd == "/help" then
+        return HELP_TEXT
+    end
+
+    return "Unknown command. Try /help (also see the Help panel)."
 end
 
 
