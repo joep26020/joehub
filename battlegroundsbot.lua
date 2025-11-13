@@ -1790,6 +1790,11 @@ function Bot:_applyTune(tune:any)
     end
 end
 
+local AI = {
+    version = "1.0",
+    _bot = nil,
+}
+
 
 function AI.SetTuning(tbl)
     if typeof(tbl)~="table" then return false end
@@ -3548,13 +3553,6 @@ function Bot:update(dt:number)
     self:neutral(tgt)
     self.gui:updateCDs(self:_cdLeft("F"), self:_cdLeft("B"), self:_cdLeft("S"))
 end
-
-
-
-local AI = {
-    version = "1.0",
-    _bot = nil,
-}
 
 
 function AI.Init(opts)
