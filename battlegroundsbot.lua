@@ -3202,7 +3202,7 @@ function Bot:neutral(tgt:Enemy?)
         local recentB = (self.lastDashKind == "B") and (dashAge < 0.80)  
         if slotReady(SLOT.Upper)
            and self:_upperUseOK(tgt)
-           and dashAge >= ((self.lastDashKind == "S" or self.lastDashKind == "F") and 0.25 or 0.60)  
+           and dashAge >= ((self.lastDashKind == "S" or self.lastDashKind == "F") and 0.25 or 0.60)
            and not recentB
            and (self.m1ChainCount >= 1 or ragdolled)
         then
@@ -3218,6 +3218,8 @@ function Bot:neutral(tgt:Enemy?)
                 end,
             })
         end
+
+    end
 
     if #skillCandidates > 0 then
         local pick = self:choose_action(ctx, skillCandidates, self.bandit.epsilon)
