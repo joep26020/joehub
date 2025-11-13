@@ -356,7 +356,7 @@ function LS.new()
 end
 function LS:_flag() self._dirty=true end
 function LS:flush() local now=os.clock(); if self._dirty and now-(self._lastFlush or 0)>=CFG.Flush then self.data.last=os.time(); wfile(self.file,HttpService:JSONEncode(self.data)); self._dirty=false; self._lastFlush=now end end
-function LS:startSession() self.data.sessions+=1; self:_flag(); local id=os.date("%Y%m%d-%H%M%S"); local p=self.sdir.."/"..id..".jsonl"; wfile(p,""); self.cur=p; return p end
+function LS:startSession() self.data.sessions = self.data.sessions + 1; self:_flag(); local id=os.date("%Y%m%d-%H%M%S"); local p=self.sdir.."/"..id..".jsonl"; wfile(p,""); self.cur=p; return p end
 function LS:log(ev,p) if self.cur then afile(self.cur, HttpService:JSONEncode({t=os.clock(),event=ev,data=p}).."\n") end end
 
 function LS:combo(id)
@@ -375,7 +375,7 @@ function LS:combo(id)
 end
 function LS:att(id, dist:number?)
     local c=self:combo(id)
-    c.att+=1
+    c.att = c.att + 1
     c.last=os.time()
     if dist then
         c.distAttemptSum=(c.distAttemptSum or 0)+dist
@@ -389,7 +389,7 @@ end
 function LS:res(id, ok:boolean, dm:number, dist:number?)
     local c=self:combo(id)
     if ok then
-        c.succ+=1
+        c.succ = c.succ + 1
         c.last=os.time()
         if dist then
             c.distSuccessSum=(c.distSuccessSum or 0)+dist
@@ -398,13 +398,13 @@ function LS:res(id, ok:boolean, dm:number, dist:number?)
             c.distLastSuccess=dist
         end
     end
-    c.dmgt+=(dm>0 and dm or 0)
+    c.dmgt = c.dmgt + (dm>0 and dm or 0)
     if dist then c.distLast=dist end
     self:_flag()
 end
 
 local function getA(self,id) id=sid(id); local a=self.data.A[id]; if not a then a={seen=0,open=0,block=0,prevent=0,dealt=0}; self.data.A[id]=a end; return id,a end
-function LS:seen(id,dur) local _,a=getA(self,id); a.seen+=1; self:_flag() end
+function LS:seen(id,dur) local _,a=getA(self,id); a.seen = a.seen + 1; self:_flag() end
 function LS:dmgFrom(id,blocked,amt) local _,a=getA(self,id); local al=0.2; if blocked then a.block=ema(a.block,math.max(0,amt),al) else a.open=ema(a.open,math.max(0,amt),al) end; self:_flag() end
 function LS:prevent(id) local _,a=getA(self,id); a.prevent=ema(a.prevent,1.0,0.1); self:_flag() end
 function LS:deal(id,amt) local _,a=getA(self,id); a.dealt=ema(a.dealt,math.max(0,amt),0.2); self:_flag() end
@@ -424,8 +424,8 @@ function LS:moveStats(name:string)
 end
 function LS:moveAdd(name:string, reward:number, dist:number?)
     local m=self:moveStats(name)
-    m.n+=1
-    m.rsum+=reward
+    m.n = m.n + 1
+    m.rsum = m.rsum + reward
     m.ravg=m.rsum/math.max(1,m.n)
     m.last=os.time()
     if dist then
@@ -437,7 +437,7 @@ function LS:moveAdd(name:string, reward:number, dist:number?)
     self:_flag()
     self:log("move_result",{name=name,reward=reward,n=m.n,ravg=m.ravg,dist=dist,distAvg=m.distAvg})
 end
-function LS:markEv(opt:boolean) self.data.ev.total+=1; if opt then self.data.ev.optimal+=1 else self.data.ev.subopt+=1 end; self:_flag() end
+function LS:markEv(opt:boolean) self.data.ev.total = self.data.ev.total + 1; if opt then self.data.ev.optimal = self.data.ev.optimal + 1 else self.data.ev.subopt = self.data.ev.subopt + 1 end; self:_flag() end
 
 
 local GUI={}; GUI.__index=GUI
@@ -1571,7 +1571,7 @@ function Bot:update_ravg(ctx:string?, action:string?, reward:number, weight:numb
     local w = math.max(0.0, weight or 1.0)
     local alpha = math.clamp(0.1 * w, 0.02, 0.5)
     entry.ravg = entry.ravg * (1 - alpha) + reward * alpha
-    entry.n += w
+    entry.n = entry.n + w
 end
 
 
@@ -1669,12 +1669,12 @@ function Bot:_recordDamageEvent(targetName:string?, amount:number, isDealt:boole
             local targetMatch = (not targetName) or (act.enemy == targetName) or (act.enemy == nil)
             if targetMatch then
                 if isDealt then
-                    act.damageDealt += amount
+                    act.damageDealt = act.damageDealt + amount
                     if act.isFinisher then act.keptAdvantage = true end
                     if act.targetBlocking then act.forcedUnblock = true end
                     if act.ragdolled then act.keptAdvantage = true end
                 else
-                    act.damageTaken += amount
+                    act.damageTaken = act.damageTaken + amount
                     act.firstDamageTaken = act.firstDamageTaken or nowT
                     if info and info.dist and info.dist < CFG.SpaceMin then
                         act.lostSpacing = true
@@ -1691,20 +1691,20 @@ function Bot:_applyActionReward(act)
     local taken  = act.damageTaken or 0
 
     local reward = 0
-    reward += R.dmgDealt * dealt
-    reward += R.dmgTaken * taken
+    reward = reward + R.dmgDealt * dealt
+    reward = reward + R.dmgTaken * taken
 
-    if act.isFinisher and dealt > 0 then reward += R.finisherBonus end
-    if act.forcedUnblock then reward += R.forcedUnblock end
+    if act.isFinisher and dealt > 0 then reward = reward + R.finisherBonus end
+    if act.forcedUnblock then reward = reward + R.forcedUnblock end
 
     local kept = act.keptAdvantage or (act.behindStart and taken <= 0)
-    if kept then reward += R.keptAdvantage end
+    if kept then reward = reward + R.keptAdvantage end
 
     if act.firstDamageTaken and dealt <= 0 and (act.firstDamageTaken - act.time) <= 0.8 then
-        reward += R.earlyPunish
+        reward = reward + R.earlyPunish
     end
-    if act.targetBlocking and dealt <= 0 then reward += R.blockNoDamage end
-    if act.lostSpacing then reward += R.lostSpacing end
+    if act.targetBlocking and dealt <= 0 then reward = reward + R.blockNoDamage end
+    if act.lostSpacing then reward = reward + R.lostSpacing end
 
     
     self:update_ravg(act.ctx, act.action, reward * R.applyAlpha, 1.0)
@@ -1726,7 +1726,7 @@ function Bot:_finalizeActionRecords(force:boolean?)
             self:_applyActionReward(act)
             table.remove(self.bandit.actions, i)
         else
-            i += 1
+            i = i + 1
         end
     end
 end
@@ -1744,8 +1744,8 @@ function Bot:_averageReward(actionName:string, filters:{string}?)
         if ok then
             local entry = actions[actionName]
             if entry and entry.n and entry.n > 0 then
-                sum += entry.ravg or 0
-                count += 1
+                sum = sum + (entry.ravg or 0)
+                count = count + 1
             end
         end
     end
@@ -1813,9 +1813,9 @@ function Bot:_applyGenerationKnobs(meta:any?)
     local newEps = baseEps
     local last = meta.lastLife
     if last then
-        if last.reward and last.reward > 12 then newEps -= 0.02 end
-        if last.reward and last.reward < -12 then newEps += 0.02 end
-        if last.kd and last.kd > 1.2 then newEps -= 0.01 elseif last.kd and last.kd < 0.8 then newEps += 0.01 end
+        if last.reward and last.reward > 12 then newEps = newEps - 0.02 end
+        if last.reward and last.reward < -12 then newEps = newEps + 0.02 end
+        if last.kd and last.kd > 1.2 then newEps = newEps - 0.01 elseif last.kd and last.kd < 0.8 then newEps = newEps + 0.01 end
     end
     newEps = math.clamp(newEps, 0.05, 0.30)
     meta.epsilon = newEps
@@ -2433,7 +2433,7 @@ function Bot:updateEnemies(dt:number)
                 r.aggro = (r.recent*1.2 + r.aRecent*0.8) + (ath*2)
                 local stunBias = (r.stunScore or 0)*45
                 r.score = hpF + distF + evF + agF - defP + dmgF + math.clamp(ath*4, -8, 16) + math.min(40, r.aggro*0.5) + stunBias
-                if self.lastAttacker and r.model.Name==self.lastAttacker then r.score+=120 end
+                if self.lastAttacker and r.model.Name==self.lastAttacker then r.score = r.score + 120 end
                 if hasFreezeOnLive(r.model.Name) then r.score = r.score + 60 end
             end
         end
@@ -2662,9 +2662,9 @@ function Bot:maybeDash(r:Enemy)
     end
     if canB then
         local bBias = 0.35
-        if not canS then bBias += 0.35 end
+        if not canS then bBias = bBias + 0.35 end
         if r.style and r.style.aggr>6 and (nowT - (r.style.lastAtk or 0)) < 0.35 and d>=5 and d<=14 and not canS then
-            bBias += 0.8
+            bBias = bBias + 0.8
         end
         table.insert(candidates, {name = "B", bias = bBias, exec = function()
             self:_requestBackDash(r.hrp, "off", r); return true
@@ -2672,7 +2672,7 @@ function Bot:maybeDash(r:Enemy)
     end
     if canF then
         local fBias = -0.60
-        if d > 50 then fBias += 0.35 end
+        if d > 50 then fBias = fBias + 0.35 end
         table.insert(candidates, {name = "F", bias = fBias, exec = function()
             self:_requestForwardDash(r); return true
         end})
@@ -2987,10 +2987,10 @@ function Bot:_chooseCombo(tgt:Enemy):Combo?
             local st=self.ls:combo(c.id); local sr=(st.succ+1)/(st.att+2)
             local mid=((c.min or 0)+(c.max or 20))/2; local dBias=math.max(0.1, 1-math.abs((tgt.dist-mid)/20))
             local sBias=1; local s=tgt.style
-            if s.def>4 and hasTrait(c,"guardbreak") then sBias+=0.45 end
-            if s.aggr>5 and hasTrait(c,"burst") then sBias+=0.25 end
-            if s.aggr<3 and hasTrait(c,"pressure") then sBias+=0.20 end
-            if s.ev>5 and not c.reqNoEv then sBias-=0.2 end
+            if s.def>4 and hasTrait(c,"guardbreak") then sBias = sBias + 0.45 end
+            if s.aggr>5 and hasTrait(c,"burst") then sBias = sBias + 0.25 end
+            if s.aggr<3 and hasTrait(c,"pressure") then sBias = sBias + 0.20 end
+            if s.ev>5 and not c.reqNoEv then sBias = sBias - 0.2 end
 
             local risk = c.risk or 0.5
             local w=sr*dBias*sBias*(1.0 - risk*0.25)
@@ -3143,7 +3143,7 @@ function Bot:neutral(tgt:Enemy?)
     if skillWindow then
         if slotReady(SLOT.Shove) then
             local bias = 0.20
-            if tgt.style and (nowT - (tgt.style.lastBlk or 0)) < 0.3 then bias += 0.5 end
+            if tgt.style and (nowT - (tgt.style.lastBlk or 0)) < 0.3 then bias = bias + 0.5 end
             table.insert(skillCandidates, {
                 name = "SHOVE",
                 bias = bias,
@@ -3180,7 +3180,7 @@ function Bot:neutral(tgt:Enemy?)
 
         if slotReady(SLOT.NP) then
             local npBias = 0.0
-            if tgt.hp <= CFG.SnipeHP then npBias += 0.4 end
+            if tgt.hp <= CFG.SnipeHP then npBias = npBias + 0.4 end
             table.insert(skillCandidates, {
                 name = "NP",
                 bias = npBias,
@@ -3312,7 +3312,7 @@ function Bot:update(dt:number)
     end
 
 
-    if self.evTimer>0 then self.evTimer -= dt; if self.evTimer<=0 then self.evTimer=0; self.evReady=true end end
+    if self.evTimer>0 then self.evTimer = self.evTimer - dt; if self.evTimer<=0 then self.evTimer=0; self.evReady=true end end
     self.gui:setE(self.evReady and "Evasive: ready" or ("Evasive: "..string.format("%.1fs",math.max(0,self.evTimer))))
 
     self:updateEnemies(dt); self:updateAttacker()
