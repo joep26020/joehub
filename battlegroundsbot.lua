@@ -3984,6 +3984,6 @@ function AI.ExportMemory()
     return HttpService:JSONEncode(pkt)
 end
 
-AI.Init({autorun = false})
+AI.Init({autorun = true})
 return AI
 
