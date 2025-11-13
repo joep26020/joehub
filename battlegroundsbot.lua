@@ -1042,13 +1042,13 @@ function Bot:destroy()
     self.inDash = false
     self:_stopBlocking()
     self:_restoreCamera()
-
     if self.hb then self.hb:Disconnect() end
-    if self.alwaysAimHB then self.alwaysAimHB:Disconnect() end
+    if self.hardAimHB then self.hardAimHB:Disconnect() end
     if self.liveConn then self.liveConn:Disconnect() end
     self.hb = nil
-    self.alwaysAimHB = nil
+    self.hardAimHB = nil
     self.liveConn = nil
+
 
     if self.reconcileTask then
         pcall(task.cancel, self.reconcileTask)
@@ -3949,19 +3949,40 @@ function AI.OnEvent(eventType, data)
     end
 end
 
-function AI.Save() local b=AI._bot if b then b:savePolicy(); b.ls:flush() end end
-function AI.Load() local b=AI._bot if b then b:loadPolicy() end end
-function AI.Start() local b=AI._bot if b then b:start() end end
-function AI.Stop()  local b=AI._bot if b then b:stop()  end end
+function AI.Save()
+    local b = AI._bot
+    if b then
+        b:savePolicy()
+        if b.ls then b.ls:flush() end
+    end
+end
+
+function AI.Load()
+    local b = AI._bot
+    if b then b:loadPolicy() end
+end
+
+function AI.Start()
+    local b = AI._bot
+    if b then b:start() end
+end
+
+function AI.Stop()
+    local b = AI._bot
+    if b then b:stop() end
+end
 
 -- For exporting the learned state (policy + meta + combo stats) as JSON
 function AI.ExportMemory()
     local b = AI._bot
     if not b then return "{}" end
-    local pkt = { policy=b.policy, meta=b.bandit.meta, combos=b.ls and b.ls.data and b.ls.data.combos or {} }
+    local pkt = {
+        policy = b.policy,
+        meta   = b.bandit.meta,
+        combos = b.ls and b.ls.data and b.ls.data.combos or {}
+    }
     return HttpService:JSONEncode(pkt)
 end
-
 
 AI.Init({autorun = false})
 return AI
