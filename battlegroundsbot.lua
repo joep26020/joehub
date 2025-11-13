@@ -119,7 +119,7 @@ local CFG = {
 
     BlockAnimId = "rbxassetid://10470389827",
 
-    -- === Reward Weights (you can tune these live via /reward set) ===
+    
     Reward = {
         dmgDealt       = 1.00,
         dmgTaken       = -0.70,
@@ -135,7 +135,7 @@ local CFG = {
         prevWeight     = 0.50,
     },
 
-    -- === Autosave cadence (seconds) ===
+    
     AutoSave = 30,
 }
 
@@ -157,7 +157,7 @@ CFG.Config = {
     Gates = CFG.Gates,
 }
 
--- ========= LOCK NON-EDITABLES =========
+
 local function LOCK(tbl)
     return setmetatable({}, {
         __index = tbl,
@@ -166,16 +166,16 @@ local function LOCK(tbl)
     })
 end
 DashAnim = LOCK(DashAnim)
-CFG.Attack.AnimIds = LOCK(CFG.Attack.AnimIds) -- prevent AI from touching anim IDs
+CFG.Attack.AnimIds = LOCK(CFG.Attack.AnimIds) 
 
--- ========= TUNING BASELINES =========
+
 local BASE_SPACES = {
     SpaceMin = CFG.SpaceMin,
     SpaceMax = CFG.SpaceMax,
     M1Range  = CFG.M1Range,
 }
 
--- What the AI is allowed to change (and bounds)
+
 local TUNE_SCHEMA = {
     ["Cooldown.F"] = {min=6,  max=30, round=0.1},
     ["Cooldown.B"] = {min=6,  max=30, round=0.1},
@@ -297,7 +297,7 @@ local function attrOn(v:any):boolean
 end
 
 local function m1Gap()
-    -- random spacing, but never exceed hard cap
+    
     local w = CFG.M1Min + math.random() * CFG.M1Rand
     return math.min(w, CFG.M1MaxGap)
 end
@@ -952,7 +952,7 @@ function Bot.new()
         if m==self.liveChar then self:attachLive(nil) end
     end))
 
-    -- Also watch Players so we prep enemy records fast
+    
     self:_trackConnection(Players.PlayerAdded:Connect(function(p)
         self:_trackConnection(p.CharacterAdded:Connect(function(ch)
             task.defer(function()
@@ -973,20 +973,20 @@ function Bot.new()
         end
     end))
 
-    -- Lightweight reconciler in case Live hiccups
+    
     self.reconcileTask = task.spawn(function()
         while not self.destroyed do
             task.wait(2.0)
             if self.destroyed then break end
             local live = workspace:FindFirstChild("Live")
             if live then
-                -- add any missing
+                
                 for _,m in ipairs(live:GetChildren()) do
                     if m.Name ~= LP.Name and not self.enemies[m] then
                         self:addEnemy(m)
                     end
                 end
-                -- prune dead references
+                
                 for m,_ in pairs(self.enemies) do
                     if not m.Parent then self.enemies[m] = nil end
                 end
@@ -996,7 +996,7 @@ function Bot.new()
     end)
 
     self.hb=RunService.Heartbeat:Connect(function(dt) self:update(dt) end)
-        -- Always-on aim lock when not in a dash sequence
+        
     self.hardAimHB = RunService.RenderStepped:Connect(function()
         if not (self.rp and (self.run or self.blocking)) then return end
         if self.inDash then return end
@@ -1023,7 +1023,7 @@ function Bot.new()
     return self
 end
 function Bot:_autoResumeTick()
-    -- If we’re spawned and healthy but not "running", auto-start
+    
     if self.autoStart and (not self.run) and self.hum and self.hum.Health > 0 then
         self:start()
     end
@@ -1191,7 +1191,7 @@ function Bot:_beginDashOrientation(kind:string, tr:AnimationTrack, style:("off"|
                         else
                             faceToward(tgt.Position)
                         end
-                    else -- side
+                    else 
                         if style=="off" then
                             if to.Magnitude <= CFG.Dash.SideOffLock then faceToward(tgt.Position)
                             else facePerp(toU, orbitCW) end
@@ -1204,7 +1204,7 @@ function Bot:_beginDashOrientation(kind:string, tr:AnimationTrack, style:("off"|
             RunService.Heartbeat:Wait()
         end
 
-        -- Hard re-lock after dash
+        
         local pick = self:selectTarget()
         local t2   = (tHRP and tHRP.Parent) and tHRP or (pick and pick.hrp)
         if t2 and self.hum and self.hum.Health>0 and self.hum:GetState()~=Enum.HumanoidStateType.FallingDown then
@@ -1228,7 +1228,7 @@ function Bot:_beginDashOrientation(kind:string, tr:AnimationTrack, style:("off"|
             end
         end
 
-        -- log dash "reward"
+        
         local scoreKind = (kind=="fdash" and "F") or (kind=="bdash" and "B") or "S"
         if scoreKind then
             local scoreTarget = enemy or pick
@@ -1238,7 +1238,7 @@ function Bot:_beginDashOrientation(kind:string, tr:AnimationTrack, style:("off"|
             self:_postDashScore(scoreKind, scoreTarget)
         end
 
-        -- gate dash -> combo: only after Upper HIT or Shove→M1(HOLD) flag
+        
         if pick and self:_hasRecentStun(pick) and (pick.dist or 99) <= CFG.CloseUseRange then
             if self.allowDashExtend and os.clock() < self.allowDashExtend then
                 self:execBestCloseCombo(pick)
@@ -1574,7 +1574,7 @@ function Bot:update_ravg(ctx:string?, action:string?, reward:number, weight:numb
     entry.n += w
 end
 
--- Extend Bridge to pick up an external decider 
+
 function Bridge.new()
     local env=rawget(getgenv(),"joehub") or rawget(getgenv(),"JoeHub")
     local self=setmetatable({},Bridge)
@@ -1587,13 +1587,13 @@ function Bridge.new()
     return self
 end
 
--- Toggle to allow external AI to drive choices
+
 CFG.AI = CFG.AI or { external = false }
--- Base epsilon-greedy chooser (fallback if none exists yet)
+
 if not Bot.choose_action then
     function Bot:choose_action(ctx, candidates, epsilon)
         epsilon = math.clamp(tonumber(epsilon or self.bandit and self.bandit.epsilon or 0.15) or 0.15, 0, 1)
-        -- score = bias + learned ravg (if any)
+        
         local scored = {}
         local sumBias = 0
         for i,c in ipairs(candidates or {}) do
@@ -1607,17 +1607,17 @@ if not Bot.choose_action then
         end
         if #scored == 0 then return nil end
 
-        -- ε pick: random
+        
         if math.random() < epsilon then
             return scored[math.random(1, #scored)].c
         end
-        -- 1-ε pick: best score
+        
         table.sort(scored, function(a,b) return a.s > b.s end)
         return scored[1].c
     end
 end
 
--- Keep original, then wrap with external bridge
+
 Bot._choose_action_raw = Bot.choose_action
 function Bot:choose_action(ctx, candidates, epsilon)
     if CFG.AI.external and self.bridge and self.bridge.decide then
@@ -1706,7 +1706,7 @@ function Bot:_applyActionReward(act)
     if act.targetBlocking and dealt <= 0 then reward += R.blockNoDamage end
     if act.lostSpacing then reward += R.lostSpacing end
 
-    -- propagate
+    
     self:update_ravg(act.ctx, act.action, reward * R.applyAlpha, 1.0)
     if act.prevCtx and act.prevAction then
         self:update_ravg(act.prevCtx, act.prevAction, reward * R.prevAlpha, R.prevWeight)
@@ -1754,7 +1754,7 @@ function Bot:_averageReward(actionName:string, filters:{string}?)
 end
 
 function Bot:_applyTune(tune:any)
-    -- reset to baselines first
+    
     CFG.Cooldown.F, CFG.Cooldown.S, CFG.Cooldown.B = BASE_COOLDOWN.F, BASE_COOLDOWN.S, BASE_COOLDOWN.B
     CFG.Gates.F.lo, CFG.Gates.F.hi = BASE_GATES.F.lo, BASE_GATES.F.hi
     CFG.Gates.S.lo, CFG.Gates.S.hi = BASE_GATES.S.lo, BASE_GATES.S.hi
@@ -1764,7 +1764,7 @@ function Bot:_applyTune(tune:any)
 
     if not tune then return end
 
-    -- helper to apply schema-guarded values
+    
     local function set(path, val) if val~=nil then _applyTunable(path, val) end end
 
     if tune.F then
@@ -1783,14 +1783,14 @@ function Bot:_applyTune(tune:any)
         set("Gates.B.hi", tune.B.gateHi and (BASE_GATES.B.hi + tune.B.gateHi))
     end
     if tune.space then
-        -- relative nudges around your baseline
+        
         set("SpaceMin", tune.space.min and (BASE_SPACES.SpaceMin + tune.space.min))
         set("SpaceMax", tune.space.max and (BASE_SPACES.SpaceMax + tune.space.max))
         set("M1Range",  tune.space.m1  and (BASE_SPACES.M1Range  + tune.space.m1))
     end
 end
 
--- Safe runtime API (returns true only if something changed)
+
 function AI.SetTuning(tbl)
     if typeof(tbl)~="table" then return false end
     local any=false
@@ -1960,7 +1960,7 @@ function Bot:onM1Hit(r:Enemy)
         dist = (r.hrp.Position - self.rp.Position).Magnitude
         r.dist = dist
     end
-    -- Only dash-extend if a prior step armed the window (Shove->M1(HOLD) or Upper hit)
+    
     if self.allowDashExtend and os.clock() < self.allowDashExtend then
         if self:dashReady("S") and distOK(dist or 99, CFG.Gates.S.lo, CFG.Gates.S.hi) then
             self:tryDash("S", r.hrp, "off", r)
@@ -2080,7 +2080,7 @@ function Bot:_requestSideDash(tHRP:BasePart?, style:string?, r:Enemy?)
     if not dist and self.rp then dist = (tHRP.Position - self.rp.Position).Magnitude end
     if not dist or not distOK(dist, g.lo, g.hi) then return end
 
-    -- Ensure we're actually facing the target before picking a side
+    
     self:aimAt(tHRP)
 
     local myPos   = self.rp.Position
@@ -2090,8 +2090,8 @@ function Bot:_requestSideDash(tHRP:BasePart?, style:string?, r:Enemy?)
     right = right.Unit
 
     local sideLen = CFG.Dash.SideLen or 10.0
-    local aPos    = myPos - right * sideLen -- A = left
-    local dPos    = myPos + right * sideLen -- D = right
+    local aPos    = myPos - right * sideLen 
+    local dPos    = myPos + right * sideLen 
 
     local dA = (tPos - aPos).Magnitude
     local dD = (tPos - dPos).Magnitude
@@ -2099,14 +2099,14 @@ function Bot:_requestSideDash(tHRP:BasePart?, style:string?, r:Enemy?)
     local offensive = (style or "off") == "off"
     local sideKey
     if offensive then
-        -- pick the side that REDUCES distance more
+        
         sideKey = (dA < dD) and Enum.KeyCode.A or Enum.KeyCode.D
     else
-        -- defensive: pick the side that INCREASES distance
+        
         sideKey = (dA > dD) and Enum.KeyCode.A or Enum.KeyCode.D
     end
 
-    -- Avoid diagonal turning this into F/B dash
+    
     local wasW = self.moveKeys[Enum.KeyCode.W]
     local wasS = self.moveKeys[Enum.KeyCode.S]
     if wasW then self:setKey(Enum.KeyCode.W, false) end
@@ -2122,14 +2122,14 @@ function Bot:_requestSideDash(tHRP:BasePart?, style:string?, r:Enemy?)
     if wasW then self:setKey(Enum.KeyCode.W, true) end
     if wasS then self:setKey(Enum.KeyCode.S, true) end
 
-    self.lastDashTime = os.clock() -- NEW: for “no Upper right after dash”
+    self.lastDashTime = os.clock() 
     self.lastDashKind = "S"  
     self.lastMoveTime = os.clock()
 end
 
 
 
--- REPLACE your _requestForwardDash with this
+
 function Bot:_requestForwardDash(r:Enemy)
     if not (self.rp and r and r.hrp) then return end
     if self:_cdLeft("F")>0 then return end
@@ -2145,14 +2145,14 @@ function Bot:_requestForwardDash(r:Enemy)
     holdQ(CFG.Dash.HoldQ)
     pressKey(Enum.KeyCode.W, false)
 
-    -- NEW: stamp dash timing/kind for Upper gating
+    
     self.lastDashTime = os.clock()
     self.lastDashKind = "F"
 
     self.lastMoveTime = os.clock()
 end
 
--- REPLACE your _requestBackDash with this
+
 function Bot:_requestBackDash(tHRP:BasePart?, style:string?, r:Enemy?)
     if not (self.rp and tHRP) then return end
     local g = CFG.Gates.B
@@ -2174,7 +2174,7 @@ function Bot:_requestBackDash(tHRP:BasePart?, style:string?, r:Enemy?)
     holdQ(CFG.Dash.HoldQ)
     pressKey(Enum.KeyCode.S, false)
 
-    -- NEW
+    
     self.lastDashTime = os.clock()
     self.lastDashKind = "B"
 
@@ -2192,7 +2192,7 @@ function Bot:dashReady(kind:string):boolean
     return (os.clock() - last) >= cd
 end
 
--- REPLACE your tryDash’s executed branch with this tiny addition
+
 function Bot:tryDash(kind:string, tHRP:BasePart?, style:string?, r:Enemy?)
     if not tHRP or self.inDash then return false end
     if self.blocking then return false end
@@ -2206,7 +2206,7 @@ function Bot:tryDash(kind:string, tHRP:BasePart?, style:string?, r:Enemy?)
         if self:dashReady("B") then self:_requestBackDash(tHRP, style, r); executed=true end
     end
     if executed then
-        -- NEW: always stamp dash time/kind (covers all call paths)
+        
         self.lastDashTime = os.clock()
         self.lastDashKind = kind
 
@@ -2285,7 +2285,7 @@ end
 local function sidTail(id:string?):string if not id then return "unk" end local n=id:match("(%d+)$"); return n or id end
 
 function Bot:addEnemy(m:Model)
-    if m.Name==LP.Name then return end  -- allow NPCs/others; only skip self
+    if m.Name==LP.Name then return end  
 
     local r:Enemy = {
         model=m, hum=m:FindFirstChildOfClass("Humanoid"), hrp=m:FindFirstChild("HumanoidRootPart"),
@@ -2301,7 +2301,7 @@ function Bot:addEnemy(m:Model)
     local nh = r.hum.Health
     local delta = math.max(0, (r.hp or nh) - nh)
     if delta > 0 then
-        -- Determine if *I* caused this damage
+        
         local wasMe = false
         local last = r.model:GetAttribute("LastHit") or r.model:GetAttribute("lastHit")
         if last == LP.Name then
@@ -2324,7 +2324,7 @@ function Bot:addEnemy(m:Model)
             self:_recordDamageEvent(r.model.Name, delta, true, {dist = r.dist})
             r.aRecent = (r.aRecent or 0)*0.5 + delta
     
-            -- If that hit was from a close M1, allow a short dash-extend window
+            
             if self.lastM1Target == r and os.clock() - (self.lastM1AttemptTime or 0) < 0.6 then
                 self:onM1Hit(r)
             end
@@ -2442,9 +2442,9 @@ end
 
 function Bot:selectTarget():Enemy?
     local nowT = os.clock()
-    local reach = 50.0  -- until inside this, just go nearest
+    local reach = 50.0  
 
-    -- 1) Pick nearest alive enemy first (for approach phase)
+    
     local nearest, nd = nil, 1/0
     for _,r in pairs(self.enemies) do
         if r.model.Parent and r.hum and r.hum.Health>0 and r.dist and r.dist<nd then
@@ -2453,7 +2453,7 @@ function Bot:selectTarget():Enemy?
     end
     if not nearest then return nil end
 
-    -- If we don't have a sticky or we are still far, lock to nearest
+    
     if (not self.sticky) or (not self.sticky.model.Parent) or ((self.sticky.dist or 999) > reach) then
         self.sticky, self.stickyT = nearest, nowT
         self.stickyHold = 3.0
@@ -2461,7 +2461,7 @@ function Bot:selectTarget():Enemy?
         return self.sticky
     end
 
-    -- 2) Once within reach, consider switching only if someone very close + much higher aggro
+    
     local cur = self.sticky
     local best, bs, bestAgg = cur, (cur.score or -1e9), (cur.aggro or 0)
     for _,r in pairs(self.enemies) do
@@ -2641,7 +2641,7 @@ function Bot:maybeDash(r:Enemy)
     if not r or not r.hrp then return end
     if self.inDash or self.blocking or self.isM1ing then return end
 
-    -- NEW: if in jab range and free to swing, DON'T dash—jab instead
+    
     if r.dist and r.dist <= (CFG.M1Range + 0.4) and (os.clock() - (self.lastM1 or 0)) >= (CFG.M1Min * 0.7) and not self.isAttacking then
         return
     end
@@ -2693,7 +2693,7 @@ function Bot:maybeDash(r:Enemy)
     local pick = self:choose_action(ctx, candidates, self.bandit.epsilon)
     if pick and pick.exec then
         if pick.exec() ~= false then
-            self.lastDashTime = os.clock() -- NEW
+            self.lastDashTime = os.clock() 
             self:_noteAction(pick.name, ctx, r)
             self.ls:log("dash_auto", {kind = pick.name, enemy = r and r.model and r.model.Name or "none", dist = d, ctx = ctx})
         end
@@ -2753,7 +2753,7 @@ function Bot:execCombo(c:Combo, r:Enemy)
                     self:_pressAction("M1", st.hold)
                     self.lastM1 = os.clock()
                     local w = st.wait or m1Gap()
-                    w = math.min(w, CFG.M1MaxGap or 0.60) -- clamp gap
+                    w = math.min(w, CFG.M1MaxGap or 0.60) 
                     task.wait(w)
                     waitForStun = true
 
@@ -2766,7 +2766,7 @@ function Bot:execCombo(c:Combo, r:Enemy)
                     self:_pressAction("M1HOLD", st.hold)
                     self.lastM1 = os.clock()
 
-                    -- if close after SHOVE, arm dash-extend window (~0.60s)
+                    
                     if self.lastShoveAt and (os.clock() - self.lastShoveAt) <= 0.40 then
                         self.allowDashExtend = os.clock() + 0.60
                     end
@@ -2791,9 +2791,9 @@ function Bot:execCombo(c:Combo, r:Enemy)
                     task.wait(st.wait or 0.26)
                 
                     if ok and self:_upperSucceeded(r, y0) then
-                        -- arm longer dash-extend after a real Upper hit (combo confirm)
+                        
                         self.allowDashExtend = os.clock() + 0.90
-                        -- prefer F/S only if gates make sense (unchanged)
+                        
                         local fired=false
                         if distOK(r.dist, CFG.Gates.F.lo, CFG.Gates.F.hi) and math.random()<0.60 then
                             fired = self:tryDash("F", r.hrp, "off", r)
@@ -2805,7 +2805,7 @@ function Bot:execCombo(c:Combo, r:Enemy)
                             self:tryDash("B", r.hrp, "off", r)
                         end
                     else
-                        -- whiffed Upper: do NOT chain into immediate Upper again; reposition lightly
+                        
                         if distOK(r.dist, CFG.Gates.S.lo, CFG.Gates.S.hi) then
                             self:tryDash("S", r.hrp, "off", r)
                         elseif distOK(r.dist, CFG.Gates.B.lo, CFG.Gates.B.hi) then
@@ -2826,7 +2826,7 @@ function Bot:execCombo(c:Combo, r:Enemy)
                 elseif st.action=="bdash" then
                     self:tryDash("B", r.hrp, st.dir or "off", r)
                 elseif st.action=="auto_after_upper" then
-                    -- handled by allowDashExtend gate at dash tail
+                    
                 end
                 task.wait(st.wait or CFG.InputTap)
 
@@ -2839,7 +2839,7 @@ function Bot:execCombo(c:Combo, r:Enemy)
             self.gui:setC("Combo: none"); self.curCombo=nil; self.actThread=nil; return
         end
 
-        -- opportunistic finisher on freeze (unchanged)
+        
         if hasFreezeOnLive(r.model.Name) then
             if slotReady(SLOT.CP) then self:_pressAction("CP") end
             task.wait(0.12)
@@ -2897,7 +2897,7 @@ function Bot:_upperUseOK(r:Enemy):boolean
     local noEv    = not r.hasEv
     local behindT = isBehind(self, r)
 
-    -- Favor: ragdoll (≤8), or very close (≤ ~SpaceMin+1.5) with no evasive or behind
+    
     local closeOK = dist <= math.min((CFG.SpaceMin or 4.6) + 1.5, 5.2)
     if ragdoll and dist <= 8.0 then return true end
     if closeOK and (noEv or behindT) then return true end
@@ -2932,13 +2932,13 @@ function Bot:approachFarTarget(r:Enemy)
     local d = r.dist or math.huge
     if d < 60 then return end
 
-    -- Run straight with slight weave and keep hard aim while far
+    
     self:aimAt(r.hrp)
     local t = os.clock()
     local weave = ((math.floor(t*3)%2)==0) and 0.55 or -0.55
     self:setInput(1, weave)
 
-    -- Prefer Side(off) spam to close safely; F only on 30s limiter
+    
     if self:dashReady("S") then
         self:tryDash("S", r.hrp, "off", r)
     elseif self:dashReady("F") and (t - (self.lastFDUser or -1e9) >= 45.0) then
@@ -2965,8 +2965,8 @@ function Bot:_shouldStartCombo(tgt:Enemy):boolean
     local chainReady = (self.m1ChainCount or 0) >= 2 and (nowT - (self.lastM1 or 0)) <= 0.75
     local idlePush  = (nowT - (self.lastOffenseTime or 0)) > 0.90 and tgt.dist <= (CFG.M1Range + 0.5)
 
-    -- Allow combos if we just stunned them, or we recently tapped M1,
-    -- or we’ve been idle a bit but are in range.
+    
+    
     return hasBridge or m1Recent or idlePush or chainReady
 end
 
@@ -3124,7 +3124,7 @@ function Bot:neutral(tgt:Enemy?)
 
         table.insert(skillCandidates, {
             name = "M1",
-            bias = 0.65, -- was ~0.4; higher = more jab priority
+            bias = 0.65, 
             exec = function()
                 self:_registerM1Attempt(tgt)
                 local fired = self:_pressAction("M1", CFG.TapS)
@@ -3194,10 +3194,10 @@ function Bot:neutral(tgt:Enemy?)
         end
 
         local dashAge = nowT - (self.lastDashTime or 0)
-        local recentB = (self.lastDashKind == "B") and (dashAge < 0.80)  -- block B→Upper for ~0.8s
+        local recentB = (self.lastDashKind == "B") and (dashAge < 0.80)  
         if slotReady(SLOT.Upper)
            and self:_upperUseOK(tgt)
-           and dashAge >= ((self.lastDashKind == "S" or self.lastDashKind == "F") and 0.25 or 0.60)  -- faster after S/F, slower otherwise
+           and dashAge >= ((self.lastDashKind == "S" or self.lastDashKind == "F") and 0.25 or 0.60)  
            and not recentB
            and (self.m1ChainCount >= 1 or ragdolled)
         then
@@ -3478,18 +3478,18 @@ function Bot:update(dt:number)
             end
         end
     end
-    -- If we've tried 2 quick M1s and didn't secure a stun, bail out smartly.
+    
     do
         local sinceM1 = nowT - (self.lastM1 or 0)
         if tgt and not self.inDash and not self.blocking
            and self.m1ChainCount >= 2
            and sinceM1 <= (CFG.M1MaxGap * 1.3)
            and not self:_hasRecentStun(tgt) then
-            -- Prefer a backward disengage if very close; otherwise defensive side or block.
+            
             if self:dashReady("B") and tgt.dist <= (CFG.SpaceMin + 2.0) then
                 self:tryDash("B", tgt.hrp, "off", tgt)
             elseif self:dashReady("S") then
-                self:tryDash("S", tgt.hrp, "def", tgt) -- defensive (perpendicular) side step
+                self:tryDash("S", tgt.hrp, "def", tgt) 
             else
                 self:block(self:blockDur(tgt), tgt, "m1_fail_fallback")
             end
@@ -3690,7 +3690,7 @@ function AI.Decide(input)
     local candidates = {}
     local function add(c) table.insert(candidates, c) end
 
-    -- Dashes (gated by your CFG + CDs)
+    
     if tgt and bot:dashReady("S") and d>=CFG.Gates.S.lo and d<=CFG.Gates.S.hi then
         add({name="S", bias=0.40, exec=function() return bot:tryDash("S", tgt.hrp, "off", tgt) end})
     end
@@ -3703,7 +3703,7 @@ function AI.Decide(input)
         add({name="F", bias=-0.20, exec=function() return bot:tryDash("F", tgt.hrp, "off", tgt) end})
     end
 
-    -- Skills/M1 (same gates you already use)
+    
     if tgt and d<=CFG.M1Range and (nowT - (bot.lastM1 or 0)) > CFG.M1Min and not bot:_targetRagdolled(tgt) then
         add({name="M1", bias=0.50, exec=function()
             bot:_registerM1Attempt(tgt)
@@ -3742,13 +3742,13 @@ function AI.Learn(input, output, reward)
 end
 
 do
-    -- expose a stable handle for trainers
+    
     getgenv().AI = getgenv().AI or {}
     local GAI = getgenv().AI
 
     local function bot() return getgenv().BattlegroundsBot end
 
-    -- Toggle external decider (uses Bridge.decide if present)
+    
     function GAI.ToggleExternal(on)
         CFG.AI = CFG.AI or {}
         CFG.AI.external = (on ~= false)
@@ -3764,7 +3764,7 @@ do
         return CFG.AI.external
     end
 
-    -- Adjust exploration
+    
     function GAI.SetEpsilon(eps)
         local b = bot(); if not b then return false end
         b.bandit.epsilon = math.clamp(tonumber(eps) or b.bandit.epsilon or 0.15, 0.01, 0.60)
@@ -3774,7 +3774,7 @@ do
         return b.bandit.epsilon
     end
 
-    -- Export/Import/Reset policy (so your trainer can persist across sessions)
+    
     function GAI.ExportPolicy(path)
         path = path or (CFG.Data.."/policy.export.json")
         local b = bot(); if not b then return false end
@@ -3806,13 +3806,13 @@ do
         return true
     end
 
-    -- Slash-console for fast tuning (local; doesn’t touch server)
-    -- Examples:
-    --   /ai ext on
-    --   /ai eps 0.12
-    --   /ai tune Gates.S.hi 14.0
-    --   /ai get
-    --   /ai export | /ai import | /ai reset
+    
+    
+    
+    
+    
+    
+    
     local function installConsole()
         if GAI._consoleInstalled then return end
         GAI._consoleInstalled = true
@@ -3851,11 +3851,11 @@ do
     end
     installConsole()
 
-    -- Monkey-patch a few spots to stream MORE data to your external trainer (if present).
+    
     if Bot and not Bot._logPatched then
         Bot._logPatched = true
 
-        -- 1) when we record an action choice
+        
         local _noteAction = Bot._noteAction
         function Bot:_noteAction(actionName, ctx, tgt)
             _noteAction(self, actionName, ctx, tgt)
@@ -3869,7 +3869,7 @@ do
             end
         end
 
-        -- 2) when we update rewards
+        
         local _upd = Bot.update_ravg
         function Bot:update_ravg(ctx, action, reward, weight)
             _upd(self, ctx, action, reward, weight)
@@ -3884,7 +3884,7 @@ do
             end
         end
 
-        -- 3) after saving policy (so dashboards can watch KPIs)
+        
         local _save = Bot.savePolicy
         function Bot:savePolicy()
             _save(self)
@@ -3894,7 +3894,7 @@ do
         end
     end
 
-    -- reflect state in the GUI line
+    
     task.defer(function()
         local b = bot()
         if b and b.gui and b.gui.rules then
@@ -3908,12 +3908,12 @@ do
     end)
 end
 
--- If a trainer (JoeHub) is around, default to external AI
+
 if getgenv and rawget(getgenv(),"JoeHub") then
     CFG.AI = CFG.AI or {}; CFG.AI.external = true
 end
 
--- expose AI table to trainers explicitly
+
 getgenv().AI = getgenv().AI or AI
 
 
@@ -3972,7 +3972,7 @@ function AI.Stop()
     if b then b:stop() end
 end
 
--- For exporting the learned state (policy + meta + combo stats) as JSON
+
 function AI.ExportMemory()
     local b = AI._bot
     if not b then return "{}" end
