@@ -440,6 +440,73 @@ local function text(p,n,t,sz,pos,ts,bold)
     l.TextSize=ts; l.Text=t; l.BorderSizePixel=0; l.TextXAlignment=Enum.TextXAlignment.Left; l.TextYAlignment=Enum.TextYAlignment.Center; l.Parent=p
     local pad=Instance.new("UIPadding"); pad.PaddingLeft=UDim.new(0,10); pad.Parent=l; return l
 end
+
+local function createPanelSection(parent:Instance, title:string)
+    local section = Instance.new("Frame")
+    section.Name = title:gsub("%s+","").."Section"
+    section.BackgroundColor3 = Color3.fromRGB(22,24,33)
+    section.BorderSizePixel = 0
+    section.AutomaticSize = Enum.AutomaticSize.Y
+    section.Size = UDim2.new(1,0,0,80)
+    section.Parent = parent
+
+    local stroke = Instance.new("UIStroke")
+    stroke.Color = Color3.fromRGB(76,110,255)
+    stroke.Thickness = 1
+    stroke.Transparency = 0.35
+    stroke.Parent = section
+
+    local header = Instance.new("TextLabel")
+    header.Name = "Header"
+    header.BackgroundTransparency = 1
+    header.Position = UDim2.new(0,10,0,6)
+    header.Size = UDim2.new(1,-20,0,26)
+    header.Font = Enum.Font.GothamBold
+    header.TextSize = 16
+    header.TextColor3 = Color3.fromRGB(220,230,255)
+    header.TextXAlignment = Enum.TextXAlignment.Left
+    header.Text = title
+    header.Parent = section
+
+    local body = Instance.new("Frame")
+    body.Name = "Body"
+    body.BackgroundTransparency = 1
+    body.Position = UDim2.new(0,10,0,36)
+    body.Size = UDim2.new(1,-20,1,-46)
+    body.AutomaticSize = Enum.AutomaticSize.Y
+    body.Parent = section
+
+    local bodyLayout = Instance.new("UIListLayout")
+    bodyLayout.Padding = UDim.new(0,6)
+    bodyLayout.SortOrder = Enum.SortOrder.LayoutOrder
+    bodyLayout.Parent = body
+
+    return section, body
+end
+
+local PANEL_HELP_TEXT = [[
+COMMANDS:
+/start — run the bot • /stop — pause • /exit — close UI
+/epsilon <0..1> — set exploration rate
+/external on|off — allow an external AI decide()
+/autosave <sec> — change autosave cadence
+/set <Path> <num> — edit a tunable (Cooldown.F|S|B, Gates.{F|S|B}.{lo|hi}, SpaceMin, SpaceMax, M1Range)
+/tune show — print every tunable and current value
+/reward show|set|reset — same table as the Reward Editor below
+/policy save|load|reset — manage learned policy storage
+/stats — refresh KPI line • /help — show this guide
+
+PANELS:
+• Command Console — execute the slash commands above.
+• Errors — rolling feed of runtime issues and warnings.
+• Help & Tips — this quick reference.
+• Reward Editor — tweak CFG.Reward weights without typing commands.
+• Value Limiters — adjust the min/max bounds the AI can tune.
+
+TIPS:
+• Update rewards/limits visually, then /policy save to persist.
+• If something breaks, check the Errors section first.
+]]
 local function btn(p,n,t,sz,pos,clr)
     local b=Instance.new("TextButton"); b.Name=n; b.Size=sz; b.Position=pos
     b.BackgroundColor3=clr or Color3.fromRGB(48,60,96)
@@ -454,70 +521,74 @@ end
 function GUI.new()
     local self=setmetatable({},GUI)
     local g=Instance.new("ScreenGui"); g.Name="BGBotUI"; g.ResetOnSpawn=false; g.ZIndexBehavior=Enum.ZIndexBehavior.Sibling; g.Parent=gethui and gethui() or game:GetService("CoreGui")
-    local f=Instance.new("Frame"); f.Name="Main"; f.Size=UDim2.new(0,520,0,336); f.Position=UDim2.new(0,60,0,100); f.BackgroundColor3=Color3.fromRGB(17,18,26); f.BorderSizePixel=0; f.Parent=g; drag(f)
+    local f=Instance.new("Frame"); f.Name="Main"; f.Size=UDim2.new(0,720,0,460); f.Position=UDim2.new(0,60,0,80); f.BackgroundColor3=Color3.fromRGB(17,18,26); f.BorderSizePixel=0; f.Parent=g; drag(f)
     local s=Instance.new("UIStroke"); s.Color=Color3.fromRGB(76,110,255); s.Thickness=1.5; s.Transparency=0.15; s.Parent=f
 
-    local title=text(f,"T","Aggro Bot v6.0", UDim2.new(1,0,0,32),UDim2.new(0,0,0,0),20,true); title.BackgroundTransparency=1; title.TextColor3=Color3.fromRGB(205,214,255)
-    self.status =text(f,"S","Status: idle", UDim2.new(1,-20,0,24),UDim2.new(0,10,0,34),18,false)
-    self.target =text(f,"A","Target: none", UDim2.new(1,-20,0,24),UDim2.new(0,10,0,60),18,false)
-    self.combo  =text(f,"C","Combo: none", UDim2.new(1,-20,0,24),UDim2.new(0,10,0,86),18,false)
-    self.ev     =text(f,"E","Evasive: ready",UDim2.new(1,-20,0,24),UDim2.new(0,10,0,112),18,false)
+    local title=text(f,"T","Aggro Bot v6.0", UDim2.new(1,0,0,38),UDim2.new(0,0,0,0),22,true); title.BackgroundTransparency=1; title.TextColor3=Color3.fromRGB(205,214,255)
+    self.status =text(f,"S","Status: idle", UDim2.new(1,-20,0,26),UDim2.new(0,12,0,44),20,false)
+    self.target =text(f,"A","Target: none", UDim2.new(1,-20,0,26),UDim2.new(0,12,0,74),20,false)
+    self.combo  =text(f,"C","Combo: none", UDim2.new(1,-20,0,24),UDim2.new(0,12,0,104),18,false)
+    self.ev     =text(f,"E","Evasive: ready",UDim2.new(1,-20,0,24),UDim2.new(0,12,0,132),18,false)
 
-    local startB=btn(f,"Start","Start", UDim2.new(0.33,-10,0,30), UDim2.new(0,10,0,148))
-    local stopB =btn(f,"Stop","Stop",  UDim2.new(0.33,-10,0,30), UDim2.new(0.33,0,0,148), Color3.fromRGB(120,50,50))
-    local exitB =btn(f,"Exit","Exit",  UDim2.new(0.33,-10,0,30), UDim2.new(0.66,10,0,148), Color3.fromRGB(80,30,30))
+    local btnY = 168
+    local startB=btn(f,"Start","Start", UDim2.new(0.33,-12,0,34), UDim2.new(0,12,0,btnY))
+    local stopB =btn(f,"Stop","Stop",  UDim2.new(0.33,-12,0,34), UDim2.new(0.33,0,0,btnY), Color3.fromRGB(120,50,50))
+    local exitB =btn(f,"Exit","Exit",  UDim2.new(0.33,-12,0,34), UDim2.new(0.66,12,0,btnY), Color3.fromRGB(80,30,30))
 
-    self.moves = text(f,"M","Dash CDs: F=0.00 | B=0.00 | S=0.00", UDim2.new(1,-20,0,20), UDim2.new(0,10,0,182), 14, false)
-    self.rules = text(f,"R","FDash[14..30] • SideOff relock≤3.5 • Still>5s→dash • Idle atk≤15s • M1 openers", UDim2.new(1,-20,0,20), UDim2.new(0,10,0,204), 12, false)
+    self.moves = text(f,"M","Dash CDs: F=0.00 | B=0.00 | S=0.00", UDim2.new(1,-20,0,22), UDim2.new(0,12,0,btnY+40), 16, false)
+    self.rules = text(f,"R","FDash[14..30] • SideOff relock≤3.5 • Still>5s→dash • Idle atk≤15s • M1 openers", UDim2.new(1,-20,0,22), UDim2.new(0,12,0,btnY+66), 14, false)
 
-    local panel=Instance.new("Frame"); panel.Name="Combos"; panel.Size=UDim2.new(1,-20,1,-238); panel.Position=UDim2.new(0,10,0,238)
+    local panel=Instance.new("Frame"); panel.Name="DataPanel"; panel.Size=UDim2.new(1,-24,1,-260); panel.Position=UDim2.new(0,12,0,260)
     panel.BackgroundColor3=Color3.fromRGB(20,22,30); panel.BorderSizePixel=0; panel.Parent=f
     local pst=Instance.new("UIStroke"); pst.Color=Color3.fromRGB(76,110,255); pst.Thickness=1; pst.Transparency=0.2; pst.Parent=panel
 
-    self.ctitle = text(panel,"CT","Combo Tracker",UDim2.new(0.60,-12,0,22),UDim2.new(0,6,0,4),16,true); self.ctitle.BackgroundTransparency=1
-    local list=Instance.new("ScrollingFrame"); list.Name="List"; list.Size=UDim2.new(0.60,-12,0,148); list.Position=UDim2.new(0,6,0,32)
-    list.CanvasSize=UDim2.new(0,0,0,0); list.BackgroundTransparency=1; list.BorderSizePixel=0; list.ScrollBarThickness=4; list.Parent=panel
+    local columns = Instance.new("Frame")
+    columns.BackgroundTransparency = 1
+    columns.Size = UDim2.new(1,-24,1,-24)
+    columns.Position = UDim2.new(0,12,0,12)
+    columns.Parent = panel
+
+    local leftCol = Instance.new("Frame")
+    leftCol.Name = "LeftColumn"
+    leftCol.BackgroundTransparency = 1
+    leftCol.Size = UDim2.new(0.48,-6,1,0)
+    leftCol.Position = UDim2.new(0,0,0,0)
+    leftCol.Parent = columns
+
+    local rightCol = Instance.new("Frame")
+    rightCol.Name = "RightColumn"
+    rightCol.BackgroundTransparency = 1
+    rightCol.Size = UDim2.new(0.52,-6,1,0)
+    rightCol.Position = UDim2.new(0.48,12,0,0)
+    rightCol.Parent = columns
+
+    local comboFrame = Instance.new("Frame")
+    comboFrame.Name = "Combos"
+    comboFrame.Size = UDim2.new(1,0,1,0)
+    comboFrame.BackgroundColor3=Color3.fromRGB(16,18,26)
+    comboFrame.BorderSizePixel=0
+    comboFrame.Parent = leftCol
+    local comboStroke = Instance.new("UIStroke")
+    comboStroke.Color=Color3.fromRGB(76,110,255)
+    comboStroke.Thickness=1
+    comboStroke.Transparency=0.25
+    comboStroke.Parent=comboFrame
+
+    local comboPad = Instance.new("UIPadding")
+    comboPad.PaddingLeft = UDim.new(0,8)
+    comboPad.PaddingRight = UDim.new(0,8)
+    comboPad.PaddingTop = UDim.new(0,8)
+    comboPad.Parent = comboFrame
+
+    self.ctitle = text(comboFrame,"CT","Combo Tracker",UDim2.new(1,-16,0,26),UDim2.new(0,0,0,0),18,true); self.ctitle.BackgroundTransparency=1
+    local list=Instance.new("ScrollingFrame"); list.Name="List"; list.Size=UDim2.new(1,-4,1,-46); list.Position=UDim2.new(0,0,0,36)
+    list.CanvasSize=UDim2.new(0,0,0,0); list.BackgroundColor3=Color3.fromRGB(11,13,18); list.BorderSizePixel=0; list.ScrollBarThickness=4; list.Parent=comboFrame
     local ul=Instance.new("UIListLayout"); ul.Padding=UDim.new(0,4); ul.SortOrder=Enum.SortOrder.LayoutOrder; ul.Parent=list
     self.comboList=list; self.comboLayout=ul
 
     self.gui=g; self.frame=f; self.startB=startB; self.stopB=stopB; self.exitB=exitB
 
-    self:addConsole(panel)
-    if self.helpText then
-        self.helpText.Text = [[
-COMMANDS (type in the box, press Run or Enter):
-
-/start                      — start the bot
-/stop                       — stop (keeps UI)
-/exit                       — destroy bot + UI
-
-/epsilon <0..1>             — set ε for exploration
-/external on|off            — toggle external AI decide() bridge
-/autosave <sec>             — set autosave interval (default 30)
-
-/set <Path> <num>           — change a tunable (see below)
-   Paths: Cooldown.F|S|B, Gates.F.lo|hi, Gates.S.lo|hi, Gates.B.lo|hi,
-          SpaceMin, SpaceMax, M1Range
-   Ex: /set Cooldown.S 3.5
-
-/tune show                  — print all current tunables
-
-/reward show                — list reward weights
-/reward set <key> <num>     — edit a weight (e.g., dmgTaken -0.9)
-/reward reset               — restore defaults
-
-/policy save|load|reset     — manual save/load/clear learned policy
-/stats                      — print generation, epsilon, last-life KPIs
-/help                       — show this
-
-WHAT THINGS MEAN (short):
-• ε (epsilon): exploration % when choosing actions (higher = more variety).
-• Context Key: range + recent block/attack/evade + dash CDs + HP diff. We learn a value per (ctx, action).
-• Reward: computed per action window (≈1.6s). Weights in CFG.Reward.
-• Tunables: safe knobs the AI can move within bounds (TUNE_SCHEMA).
-• Autosave: policy + KPIs persist to /bgbot/policy.json periodically.
-]]
-    end
+    self:addConsole(rightCol)
     return self
 end
 function GUI:setS(t) self.status.Text=t end
@@ -543,28 +614,44 @@ function GUI:updateCombos(data)
 end
 function GUI:destroy() if self.gui then self.gui:Destroy() end end
 
-function GUI:addConsole(panel)
+function GUI:addConsole(container)
+    local layout = Instance.new("UIListLayout")
+    layout.Name = "SectionLayout"
+    layout.Padding = UDim.new(0,10)
+    layout.SortOrder = Enum.SortOrder.LayoutOrder
+    layout.Parent = container
+
+    local consoleSection, consoleBody = createPanelSection(container, "Command Console")
+    consoleSection.LayoutOrder = 1
+    local consoleBodyLayout = Instance.new("UIListLayout")
+    consoleBodyLayout.SortOrder = Enum.SortOrder.LayoutOrder
+    consoleBodyLayout.Padding = UDim.new(0,6)
+    consoleBodyLayout.Parent = consoleBody
+
     local console = Instance.new("ScrollingFrame")
     console.Name = "Console"
-    local topOffset = 188
-    console.Size = UDim2.new(0.60, -8, 1, -(topOffset + 34))
-    console.Position = UDim2.new(0, 4, 0, topOffset)
+    console.Size = UDim2.new(1,0,0,150)
     console.BackgroundColor3 = Color3.fromRGB(14,16,22)
     console.BorderSizePixel = 0
     console.ScrollBarThickness = 4
     console.CanvasSize = UDim2.new(0,0,0,0)
-    console.Parent = panel
+    console.Parent = consoleBody
 
     local cl = Instance.new("UIListLayout")
     cl.Padding = UDim.new(0, 2)
     cl.SortOrder = Enum.SortOrder.LayoutOrder
     cl.Parent = console
 
+    local inputRow = Instance.new("Frame")
+    inputRow.BackgroundTransparency = 1
+    inputRow.Size = UDim2.new(1,0,0,32)
+    inputRow.Parent = consoleBody
+
     local input = Instance.new("TextBox")
     input.Name = "Cmd"
-    input.Size = UDim2.new(0.60, -8, 0, 28)
-    input.Position = UDim2.new(0, 4, 1, -32)
-    input.PlaceholderText = "Type a command (e.g., /help)"
+    input.Size = UDim2.new(1,-80,1,0)
+    input.Position = UDim2.new(0,0,0,0)
+    input.PlaceholderText = "Type /help for available commands"
     input.Text = ""
     input.BackgroundColor3 = Color3.fromRGB(26,28,38)
     input.TextColor3 = Color3.fromRGB(230,230,240)
@@ -573,28 +660,44 @@ function GUI:addConsole(panel)
     input.Font = Enum.Font.Gotham
     input.TextSize = 16
     input.TextXAlignment = Enum.TextXAlignment.Left
-    input.Parent = panel
+    input.Parent = inputRow
 
     local run = Instance.new("TextButton")
     run.Name = "Run"
-    run.Size = UDim2.new(0, 72, 0, 28)
-    run.Position = UDim2.new(0.60, 0, 1, -32)
+    run.Size = UDim2.new(0, 72, 1, 0)
+    run.Position = UDim2.new(1,-72,0,0)
     run.BackgroundColor3 = Color3.fromRGB(48,60,96)
     run.TextColor3 = Color3.fromRGB(240,240,240)
     run.Font = Enum.Font.GothamBold
     run.TextSize = 16
     run.Text = "Run"
-    run.Parent = panel
+    run.Parent = inputRow
 
+    local errorSection, errorBody = createPanelSection(container, "Errors")
+    errorSection.LayoutOrder = 2
+    local err = Instance.new("ScrollingFrame")
+    err.Name = "Errors"
+    err.Size = UDim2.new(1,0,0,90)
+    err.BackgroundColor3 = Color3.fromRGB(24,10,14)
+    err.ScrollBarThickness = 4
+    err.BorderSizePixel = 0
+    err.CanvasSize = UDim2.new(0,0,0,0)
+    err.Parent = errorBody
+    local errLayout = Instance.new("UIListLayout")
+    errLayout.Padding = UDim.new(0,2)
+    errLayout.SortOrder = Enum.SortOrder.LayoutOrder
+    errLayout.Parent = err
+
+    local helpSection, helpBody = createPanelSection(container, "Help & Tips")
+    helpSection.LayoutOrder = 3
     local help = Instance.new("ScrollingFrame")
     help.Name = "Help"
-    help.Size = UDim2.new(0.40, -8, 1, -8)
-    help.Position = UDim2.new(0.60, 4, 0, 4)
+    help.Size = UDim2.new(1,0,0,150)
     help.BackgroundColor3 = Color3.fromRGB(18,20,28)
     help.BorderSizePixel = 0
     help.ScrollBarThickness = 4
     help.CanvasSize = UDim2.new(0,0,0,0)
-    help.Parent = panel
+    help.Parent = helpBody
 
     local pad = Instance.new("UIPadding")
     pad.PaddingLeft  = UDim.new(0,8)
@@ -604,18 +707,20 @@ function GUI:addConsole(panel)
 
     local ht = Instance.new("TextLabel")
     ht.BackgroundTransparency = 1
-    ht.Size = UDim2.new(1, -4, 0, 9999)
+    ht.Size = UDim2.new(1,-4,0,0)
+    ht.AutomaticSize = Enum.AutomaticSize.Y
     ht.TextXAlignment = Enum.TextXAlignment.Left
     ht.TextYAlignment = Enum.TextYAlignment.Top
     ht.TextWrapped = true
     ht.Font = Enum.Font.Gotham
     ht.TextSize = 14
     ht.TextColor3 = Color3.fromRGB(210,220,255)
-    ht.Text = ""
+    ht.Text = PANEL_HELP_TEXT
     ht.Parent = help
 
     local function refreshHelpCanvas()
-        help.CanvasSize = UDim2.new(0,0,0,(ht.TextBounds and ht.TextBounds.Y or 0) + 12)
+        local boundsY = (ht.TextBounds and ht.TextBounds.Y or 0)
+        help.CanvasSize = UDim2.new(0,0,0,boundsY + 12)
     end
     ht:GetPropertyChangedSignal("TextBounds"):Connect(refreshHelpCanvas)
     refreshHelpCanvas()
@@ -625,6 +730,12 @@ function GUI:addConsole(panel)
     self.cmd = input
     self.cmdRun = run
     self.helpText = ht
+    self.helpFrame = help
+    self.errorConsole = err
+    self.errorLayout = errLayout
+
+    self:addRewardEditor(container, 4)
+    self:addLimiterEditor(container, 5)
 end
 
 function GUI:log(line)
@@ -643,6 +754,213 @@ function GUI:log(line)
     self.console.CanvasSize = UDim2.new(0,0,0,h + 8)
     local windowY = (self.console.AbsoluteWindowSize and self.console.AbsoluteWindowSize.Y) or 0
     self.console.CanvasPosition = Vector2.new(0, math.max(0, h + 8 - windowY))
+end
+
+function GUI:logError(line)
+    self:log("[error] " .. tostring(line))
+    if not self.errorConsole then return end
+    local l = Instance.new("TextLabel")
+    l.BackgroundTransparency = 1
+    l.Size = UDim2.new(1, -6, 0, 18)
+    l.TextXAlignment = Enum.TextXAlignment.Left
+    l.Font = Enum.Font.Gotham
+    l.TextSize = 14
+    l.TextColor3 = Color3.fromRGB(255,160,160)
+    l.Text = tostring(line)
+    l.Parent = self.errorConsole
+    local layout = self.errorLayout
+    local h = layout and layout.AbsoluteContentSize.Y or 0
+    self.errorConsole.CanvasSize = UDim2.new(0,0,0,h + 8)
+    local windowY = (self.errorConsole.AbsoluteWindowSize and self.errorConsole.AbsoluteWindowSize.Y) or 0
+    self.errorConsole.CanvasPosition = Vector2.new(0, math.max(0, h + 8 - windowY))
+end
+
+function GUI:addRewardEditor(container, order)
+    local section, body = createPanelSection(container, "Reward Editor")
+    section.LayoutOrder = order or (section.LayoutOrder or 4)
+    local desc = Instance.new("TextLabel")
+    desc.BackgroundTransparency = 1
+    desc.TextWrapped = true
+    desc.Font = Enum.Font.Gotham
+    desc.TextSize = 13
+    desc.TextColor3 = Color3.fromRGB(200,210,255)
+    desc.TextXAlignment = Enum.TextXAlignment.Left
+    desc.Size = UDim2.new(1,0,0,32)
+    desc.Text = "Adjust action rewards without retyping commands. Values feed directly into CFG.Reward."
+    desc.Parent = body
+
+    local rows = Instance.new("Frame")
+    rows.BackgroundTransparency = 1
+    rows.Size = UDim2.new(1,0,0,0)
+    rows.AutomaticSize = Enum.AutomaticSize.Y
+    rows.Parent = body
+    local rowLayout = Instance.new("UIListLayout")
+    rowLayout.Padding = UDim.new(0,4)
+    rowLayout.SortOrder = Enum.SortOrder.LayoutOrder
+    rowLayout.Parent = rows
+
+    local keys = {}
+    for k,_ in pairs(CFG.Reward or {}) do table.insert(keys, k) end
+    table.sort(keys)
+
+    for _,key in ipairs(keys) do
+        local row = Instance.new("Frame")
+        row.BackgroundColor3 = Color3.fromRGB(14,16,24)
+        row.BorderSizePixel = 0
+        row.Size = UDim2.new(1,0,0,28)
+        row.Parent = rows
+
+        local lbl = Instance.new("TextLabel")
+        lbl.BackgroundTransparency = 1
+        lbl.Position = UDim2.new(0,8,0,4)
+        lbl.Size = UDim2.new(0.45, -8, 1, -8)
+        lbl.Font = Enum.Font.Gotham
+        lbl.TextSize = 14
+        lbl.TextXAlignment = Enum.TextXAlignment.Left
+        lbl.TextColor3 = Color3.fromRGB(220,230,255)
+        lbl.Text = key
+        lbl.Parent = row
+
+        local box = Instance.new("TextBox")
+        box.BackgroundColor3 = Color3.fromRGB(28,30,40)
+        box.TextColor3 = Color3.fromRGB(240,240,240)
+        box.Font = Enum.Font.Gotham
+        box.TextSize = 14
+        box.TextXAlignment = Enum.TextXAlignment.Left
+        box.Size = UDim2.new(0.30, -6, 0, 24)
+        box.Position = UDim2.new(0.48,0,0,2)
+        box.Text = tostring(CFG.Reward[key])
+        box.ClearTextOnFocus = false
+        box.Parent = row
+
+        local apply = Instance.new("TextButton")
+        apply.Size = UDim2.new(0,60,0,24)
+        apply.Position = UDim2.new(1,-66,0,2)
+        apply.BackgroundColor3 = Color3.fromRGB(52,64,104)
+        apply.TextColor3 = Color3.fromRGB(240,240,240)
+        apply.Font = Enum.Font.GothamBold
+        apply.TextSize = 14
+        apply.Text = "Set"
+        apply.Parent = row
+
+        local function applyValue()
+            local value = tonumber(box.Text)
+            if not value then
+                self:logError(string.format("Reward %s requires a number", key))
+                return
+            end
+            CFG.Reward[key] = value
+            self:log(string.format("[reward] %s = %.3f", key, value))
+        end
+
+        apply.MouseButton1Click:Connect(applyValue)
+        box.FocusLost:Connect(function(enter)
+            if enter then applyValue() end
+        end)
+    end
+end
+
+function GUI:addLimiterEditor(container, order)
+    local section, body = createPanelSection(container, "Value Limiters")
+    section.LayoutOrder = order or (section.LayoutOrder or 5)
+    local desc = Instance.new("TextLabel")
+    desc.BackgroundTransparency = 1
+    desc.TextWrapped = true
+    desc.Font = Enum.Font.Gotham
+    desc.TextSize = 13
+    desc.TextXAlignment = Enum.TextXAlignment.Left
+    desc.TextColor3 = Color3.fromRGB(200,210,255)
+    desc.Size = UDim2.new(1,0,0,34)
+    desc.Text = "Change the min/max bounds for tunables (used by /set and the AI auto-tuner)."
+    desc.Parent = body
+
+    local rows = Instance.new("Frame")
+    rows.BackgroundTransparency = 1
+    rows.Size = UDim2.new(1,0,0,0)
+    rows.AutomaticSize = Enum.AutomaticSize.Y
+    rows.Parent = body
+    local rowLayout = Instance.new("UIListLayout")
+    rowLayout.Padding = UDim.new(0,4)
+    rowLayout.SortOrder = Enum.SortOrder.LayoutOrder
+    rowLayout.Parent = rows
+
+    local keys = {}
+    for k,_ in pairs(TUNE_SCHEMA or {}) do table.insert(keys, k) end
+    table.sort(keys)
+
+    for _,key in ipairs(keys) do
+        local schema = TUNE_SCHEMA[key]
+        local row = Instance.new("Frame")
+        row.BackgroundColor3 = Color3.fromRGB(14,16,24)
+        row.BorderSizePixel = 0
+        row.Size = UDim2.new(1,0,0,32)
+        row.Parent = rows
+
+        local lbl = Instance.new("TextLabel")
+        lbl.BackgroundTransparency = 1
+        lbl.Position = UDim2.new(0,8,0,6)
+        lbl.Size = UDim2.new(0.40,-8,0,20)
+        lbl.Font = Enum.Font.Gotham
+        lbl.TextSize = 13
+        lbl.TextXAlignment = Enum.TextXAlignment.Left
+        lbl.TextColor3 = Color3.fromRGB(220,230,255)
+        lbl.Text = key
+        lbl.Parent = row
+
+        local minBox = Instance.new("TextBox")
+        minBox.BackgroundColor3 = Color3.fromRGB(28,30,40)
+        minBox.TextColor3 = Color3.fromRGB(240,240,240)
+        minBox.Font = Enum.Font.Gotham
+        minBox.TextSize = 13
+        minBox.Size = UDim2.new(0,64,0,24)
+        minBox.Position = UDim2.new(0.45,0,0,4)
+        minBox.Text = tostring(schema.min)
+        minBox.Parent = row
+
+        local maxBox = Instance.new("TextBox")
+        maxBox.BackgroundColor3 = Color3.fromRGB(28,30,40)
+        maxBox.TextColor3 = Color3.fromRGB(240,240,240)
+        maxBox.Font = Enum.Font.Gotham
+        maxBox.TextSize = 13
+        maxBox.Size = UDim2.new(0,64,0,24)
+        maxBox.Position = UDim2.new(0.60,0,0,4)
+        maxBox.Text = tostring(schema.max)
+        maxBox.Parent = row
+
+        local apply = Instance.new("TextButton")
+        apply.Size = UDim2.new(0,60,0,24)
+        apply.Position = UDim2.new(1,-66,0,4)
+        apply.BackgroundColor3 = Color3.fromRGB(52,64,104)
+        apply.TextColor3 = Color3.fromRGB(240,240,240)
+        apply.Font = Enum.Font.GothamBold
+        apply.TextSize = 14
+        apply.Text = "Limit"
+        apply.Parent = row
+
+        local function applyLimit()
+            local minVal = tonumber(minBox.Text)
+            local maxVal = tonumber(maxBox.Text)
+            if not (minVal and maxVal) then
+                self:logError(string.format("Limiter %s needs numeric min/max", key))
+                return
+            end
+            if minVal > maxVal then
+                self:logError(string.format("Limiter %s min cannot exceed max", key))
+                return
+            end
+            schema.min = minVal
+            schema.max = maxVal
+            self:log(string.format("[limits] %s = %.3f..%.3f", key, minVal, maxVal))
+        end
+
+        apply.MouseButton1Click:Connect(applyLimit)
+        minBox.FocusLost:Connect(function(enter)
+            if enter then applyLimit() end
+        end)
+        maxBox.FocusLost:Connect(function(enter)
+            if enter then applyLimit() end
+        end)
+    end
 end
 
 function GUI:setKPI(gen, eps, life)
@@ -937,10 +1255,13 @@ function Bot.new()
     self:attachLive(self.liveChar)
     for _,m in ipairs(self.live:GetChildren()) do self:addEnemy(m) end
     self:_trackConnection(self.live.ChildAdded:Connect(function(m)
+        if not m:IsA("Model") then return end
         if m.Name==LP.Name then self:attachLive(m) else self:addEnemy(m) end
     end))
     self:_trackConnection(self.live.ChildRemoved:Connect(function(m)
-        local r=self.enemies[m]; if r then for _,c in ipairs(r.cons) do pcall(function() c:Disconnect() end) end self.enemies[m]=nil end
+        if m:IsA("Model") then
+            self:_cleanupEnemy(m)
+        end
         if m==self.liveChar then self:attachLive(nil) end
     end))
 
@@ -951,18 +1272,13 @@ function Bot.new()
                 if self.destroyed then return end
                 local live = workspace:FindFirstChild("Live")
                 local mdl = live and live:FindFirstChild(p.Name)
-                if mdl then self:addEnemy(mdl) end
+                if mdl and mdl:IsA("Model") then self:addEnemy(mdl) end
             end)
         end))
     end))
 
     self:_trackConnection(Players.PlayerRemoving:Connect(function(p)
-        for m,rec in pairs(self.enemies) do
-            if rec.ply == p then
-                for _,c in ipairs(rec.cons) do pcall(function() c:Disconnect() end) end
-                self.enemies[m] = nil
-            end
-        end
+        self:_cleanupEnemyByName(p.Name)
     end))
 
     
@@ -980,7 +1296,7 @@ function Bot.new()
                 end
                 
                 for m,_ in pairs(self.enemies) do
-                    if not m.Parent then self.enemies[m] = nil end
+                    if not m.Parent then self:_cleanupEnemy(m) end
                 end
             end
         end
@@ -995,7 +1311,7 @@ function Bot.new()
         if not ok then
             warn("[BGBot] update error: " .. tostring(err))
             if self.gui then
-                self.gui:log("[error] " .. tostring(err))
+                self.gui:logError(tostring(err))
                 self.gui:setS("Status: error – check console")
             end
         end
@@ -1030,7 +1346,7 @@ function Bot.new()
         if not ok then
             warn("[BGBot] hardAim error: " .. tostring(err))
             if self.gui then
-                self.gui:log("[error] hardAim: " .. tostring(err))
+                self.gui:logError("hardAim: " .. tostring(err))
             end
         end
     end)
@@ -2320,56 +2636,147 @@ function Bot:block(dur:number?, target:Enemy?, reason:string?)
 end
 
 
+function Bot:_cleanupEnemy(target:any)
+    if not self.enemies then return end
+    local model, rec
+    if typeof(target) == "Instance" then
+        model = target
+        rec = self.enemies[target]
+    else
+        rec = target
+        model = rec and rec.model or nil
+    end
+    if rec then
+        for _,c in ipairs(rec.cons or {}) do pcall(function() c:Disconnect() end) end
+        rec.cons = {}
+        if rec.humConn then pcall(function() rec.humConn:Disconnect() end) end
+        if rec.hrpConn then pcall(function() rec.hrpConn:Disconnect() end) end
+        if rec.animWatchConn then pcall(function() rec.animWatchConn:Disconnect() end) end
+        rec.animWatchConn = nil
+    end
+    if model then
+        self.enemies[model] = nil
+    end
+    if self.currentTarget == rec then
+        self.currentTarget = nil
+    end
+end
+
+function Bot:_cleanupEnemyByName(name:string)
+    if not name then return end
+    for m,r in pairs(self.enemies or {}) do
+        if (m and m.Name == name) or (r and r.playerName == name) then
+            self:_cleanupEnemy(m)
+        end
+    end
+end
+
+function Bot:_attachEnemyHumanoid(r:Enemy, hum:Humanoid?)
+    if r.humConn then pcall(function() r.humConn:Disconnect() end) end
+    r.humConn = nil
+    r.hum = hum
+    if hum then
+        r.hp = hum.Health
+        local conn = hum:GetPropertyChangedSignal("Health"):Connect(function()
+            local nh = hum.Health
+            local prev = r.hp or nh
+            local delta = math.max(0, prev - nh)
+            if delta > 0 then
+                local wasMe = false
+                local last = r.model:GetAttribute("LastHit") or r.model:GetAttribute("lastHit")
+                if last == LP.Name then
+                    wasMe = true
+                end
+                if not wasMe then
+                    local creator = hum:FindFirstChild("creator")
+                    if creator and creator.Value == LP then wasMe = true end
+                end
+                if not wasMe then
+                    local dam = r.model:GetAttribute("LastDamager") or r.model:GetAttribute("lastDamager") or r.model:GetAttribute("LastDamagerName")
+                    if typeof(dam) == "Instance" and dam == LP then wasMe = true
+                    elseif typeof(dam) == "string" and dam == LP.Name then wasMe = true end
+                end
+
+                if wasMe then
+                    local myA = self:_myAnimId()
+                    if myA then self.ls:deal(myA, delta) end
+                    self.lifeStats.damageDealt = (self.lifeStats.damageDealt or 0) + delta
+                    self:_recordDamageEvent(r.model.Name, delta, true, {dist = r.dist})
+                    r.aRecent = (r.aRecent or 0)*0.5 + delta
+
+                    if self.lastM1Target == r and os.clock() - (self.lastM1AttemptTime or 0) < 0.6 then
+                        self:onM1Hit(r)
+                    end
+                else
+                    self.lastAttacker = r.model.Name
+                end
+            end
+            r.hp = nh
+        end)
+        r.humConn = conn
+        table.insert(r.cons, conn)
+    end
+end
+
+function Bot:_attachEnemyHRP(r:Enemy, hrp:BasePart?)
+    if r.hrpConn then pcall(function() r.hrpConn:Disconnect() end) end
+    r.hrpConn = nil
+    r.hrp = hrp
+    if hrp then
+        local conn = hrp.AncestryChanged:Connect(function(_, parent)
+            if parent == nil then
+                r.hrp = nil
+            end
+        end)
+        r.hrpConn = conn
+        table.insert(r.cons, conn)
+    end
+end
+
+function Bot:_ensureEnemyParts(r:Enemy):boolean
+    if not r or not r.model or not r.model.Parent then return false end
+    if (not r.hum) or (not r.hum.Parent) then
+        local hum = r.model:FindFirstChildOfClass("Humanoid")
+        self:_attachEnemyHumanoid(r, hum)
+    end
+    if (not r.hrp) or (not r.hrp.Parent) then
+        local hrp = r.model:FindFirstChild("HumanoidRootPart")
+        self:_attachEnemyHRP(r, hrp)
+    end
+    return (r.hum ~= nil) and (r.hrp ~= nil)
+end
+
+function Bot:_enemyIsValidTarget(r:Enemy):boolean
+    if not r or not r.model or not r.model.Parent then return false end
+    if r.playerName then
+        local ply = Players:FindFirstChild(r.playerName)
+        r.ply = ply
+        if not ply then return false end
+    end
+    if not self:_ensureEnemyParts(r) then return false end
+    if not r.hum or r.hum.Health <= 0 then return false end
+    if not r.hrp or not r.hrp.Parent then return false end
+    if not r.dist or r.dist == math.huge then return false end
+    return true
+end
+
+
 local function sidTail(id:string?):string if not id then return "unk" end local n=id:match("(%d+)$"); return n or id end
 
 function Bot:addEnemy(m:Model)
-    if m.Name==LP.Name then return end  
+    if not (m and m:IsA("Model")) then return end
+    if m.Name==LP.Name then return end
 
+    local ply = Players:FindFirstChild(m.Name)
     local r:Enemy = {
-        model=m, hum=m:FindFirstChildOfClass("Humanoid"), hrp=m:FindFirstChild("HumanoidRootPart"),
-        dist=math.huge, hasEv=true, lastEv=0, score=0, ply=Players:FindFirstChild(m.Name), hp=100,
+        model=m, hum=nil, hrp=nil,
+        dist=math.huge, hasEv=true, lastEv=0, score=0, ply=ply, playerName = ply and ply.Name or nil, hp=100,
         style={aggr=0,def=0,ev=0,lastAtk=0,lastBlk=0,lastDash=0}, recent=0, aRecent=0, active={}, cons={}, aggro=0,
         lastStunByMe=0,
     }
 
-    if not (r.hum and r.hrp) then return end
-    r.hp=r.hum.Health
-
-    table.insert(r.cons, r.hum:GetPropertyChangedSignal("Health"):Connect(function()
-    local nh = r.hum.Health
-    local delta = math.max(0, (r.hp or nh) - nh)
-    if delta > 0 then
-        
-        local wasMe = false
-        local last = r.model:GetAttribute("LastHit") or r.model:GetAttribute("lastHit")
-        if last == LP.Name then
-            wasMe = true
-        end
-        if not wasMe then
-            local creator = r.hum:FindFirstChild("creator")
-            if creator and creator.Value == LP then wasMe = true end
-        end
-        if not wasMe then
-            local dam = r.model:GetAttribute("LastDamager") or r.model:GetAttribute("lastDamager") or r.model:GetAttribute("LastDamagerName")
-            if typeof(dam) == "Instance" and dam == LP then wasMe = true
-            elseif typeof(dam) == "string" and dam == LP.Name then wasMe = true end
-        end
-    
-        if wasMe then
-            local myA = self:_myAnimId()
-            if myA then self.ls:deal(myA, delta) end
-            self.lifeStats.damageDealt = (self.lifeStats.damageDealt or 0) + delta
-            self:_recordDamageEvent(r.model.Name, delta, true, {dist = r.dist})
-            r.aRecent = (r.aRecent or 0)*0.5 + delta
-    
-            
-            if self.lastM1Target == r and os.clock() - (self.lastM1AttemptTime or 0) < 0.6 then
-                self:onM1Hit(r)
-            end
-        end
-    end
-    r.hp = nh
-    end))
+    self:_attachEnemyHumanoid(r, m:FindFirstChildOfClass("Humanoid"))
+    self:_attachEnemyHRP(r, m:FindFirstChild("HumanoidRootPart"))
 
     if r.hum then
         table.insert(r.cons, r.hum.Died:Connect(function()
@@ -2405,17 +2812,46 @@ function Bot:addEnemy(m:Model)
             end)
         end))
     end
-    local an=r.hum:FindFirstChildOfClass("Animator")
-    if an then hookAnimator(an)
-    else table.insert(r.cons, r.hum.ChildAdded:Connect(function(ch) if ch:IsA("Animator") then hookAnimator(ch) end end)) end
+
+    local function watchAnimator(humanoid:Humanoid?)
+        if r.animWatchConn then pcall(function() r.animWatchConn:Disconnect() end) end
+        r.animWatchConn = nil
+        if not humanoid then return end
+        local an = humanoid:FindFirstChildOfClass("Animator")
+        if an then hookAnimator(an) end
+        local conn = humanoid.ChildAdded:Connect(function(ch)
+            if ch:IsA("Animator") then hookAnimator(ch) end
+        end)
+        r.animWatchConn = conn
+        table.insert(r.cons, conn)
+    end
+
+    watchAnimator(r.hum)
+
+    table.insert(r.cons, m.ChildAdded:Connect(function(child)
+        if child:IsA("Humanoid") then
+            self:_attachEnemyHumanoid(r, child)
+            watchAnimator(child)
+        elseif child:IsA("BasePart") and child.Name == "HumanoidRootPart" then
+            self:_attachEnemyHRP(r, child)
+        end
+    end))
+
+    table.insert(r.cons, m.ChildRemoved:Connect(function(child)
+        if child == r.hum then
+            watchAnimator(nil)
+            self:_attachEnemyHumanoid(r, nil)
+        elseif child == r.hrp then
+            self:_attachEnemyHRP(r, nil)
+        end
+    end))
 
     table.insert(r.cons, m.AncestryChanged:Connect(function(_,p)
         if p==nil then
-            for _,c in ipairs(r.cons) do pcall(function() c:Disconnect() end) end
             if self.stunFollow and self.stunFollow.target == r then
                 self.stunFollow = nil
             end
-            self.enemies[m]=nil
+            self:_cleanupEnemy(m)
         end
     end))
 
@@ -2438,84 +2874,65 @@ function Bot:updateEnemies(dt:number)
     if not self.rp then return end
     local my=self.rp.Position; local nowT=os.clock()
     for m,r in pairs(self.enemies) do
-        if not m.Parent then self.enemies[m]=nil
+        if not (m and m.Parent) then
+            self:_cleanupEnemy(m)
         else
-            r.hrp = r.hrp or m:FindFirstChild("HumanoidRootPart")
-            r.hum = r.hum or m:FindFirstChildOfClass("Humanoid")
-            if r.stunScore then
-                r.stunScore = math.max(0, r.stunScore - dt*0.7)
-                if r.stunScore < 0.05 then r.stunScore = 0 end
-            end
-            r.dist = r.hrp and (r.hrp.Position - my).Magnitude or math.huge
-            local st=r.style
-            r.recent = (r.recent or 0)*math.clamp(1-dt*0.6,0,1)
-            r.aRecent= (r.aRecent or 0)*math.clamp(1-dt*0.6,0,1)
-            st.aggr=math.max(0, st.aggr - dt*0.35); st.def=math.max(0, st.def - dt*0.25); st.ev=math.max(0, st.ev - dt*0.25)
-            if r.lastStunByMe and (nowT - r.lastStunByMe) > 1.2 then r.lastStunByMe = nil end
-            if r.lastEv>0 then r.hasEv = (nowT - r.lastEv) >= CFG.EvasiveCD end
-            if attrOn(m:GetAttribute("Attacking") or m:GetAttribute("Attack") or m:GetAttribute("isAttacking")) then st.aggr=math.clamp(st.aggr+dt*3.5,0,10); st.lastAtk=nowT end
-            if attrOn(m:GetAttribute("Blocking") or m:GetAttribute("IsBlocking") or m:GetAttribute("Block")) then st.def=math.clamp(st.def+dt*3,0,10); st.lastBlk=nowT end
-            if attrOn(m:GetAttribute("Dashing") or m:GetAttribute("IsDashing") or m:GetAttribute("Dash")) then st.ev=math.clamp(st.ev+dt*2.5,0,8); st.lastDash=nowT end
-            if r.hum and r.hum.Health<=0 then
-                r.score = -1e9
+            if r.playerName and not Players:FindFirstChild(r.playerName) then
+                self:_cleanupEnemy(m)
             else
-                r.hp = (r.hum and r.hum.Health) or r.hp
-                local hpF   = (100 - r.hp)
-                local distF = math.clamp(40 - r.dist, -40, 40)
-                local evF   = r.hasEv and -25 or 15
-                local agF   = st.aggr*4
-                local defP  = st.def*1.5
-                local dmgF  = (r.recent or 0)*1.2
-                local aid=self:_animId(r); local ath= aid and self.ls:threat(aid) or 0
+                self:_ensureEnemyParts(r)
+                if r.stunScore then
+                    r.stunScore = math.max(0, r.stunScore - dt*0.7)
+                    if r.stunScore < 0.05 then r.stunScore = 0 end
+                end
+                r.dist = r.hrp and (r.hrp.Position - my).Magnitude or math.huge
+                local st=r.style
+                r.recent = (r.recent or 0)*math.clamp(1-dt*0.6,0,1)
+                r.aRecent= (r.aRecent or 0)*math.clamp(1-dt*0.6,0,1)
+                st.aggr=math.max(0, st.aggr - dt*0.35); st.def=math.max(0, st.def - dt*0.25); st.ev=math.max(0, st.ev - dt*0.25)
+                if r.lastStunByMe and (nowT - r.lastStunByMe) > 1.2 then r.lastStunByMe = nil end
+                if r.lastEv>0 then r.hasEv = (nowT - r.lastEv) >= CFG.EvasiveCD end
+                if attrOn(m:GetAttribute("Attacking") or m:GetAttribute("Attack") or m:GetAttribute("isAttacking")) then st.aggr=math.clamp(st.aggr+dt*3.5,0,10); st.lastAtk=nowT end
+                if attrOn(m:GetAttribute("Blocking") or m:GetAttribute("IsBlocking") or m:GetAttribute("Block")) then st.def=math.clamp(st.def+dt*3,0,10); st.lastBlk=nowT end
+                if attrOn(m:GetAttribute("Dashing") or m:GetAttribute("IsDashing") or m:GetAttribute("Dash")) then st.ev=math.clamp(st.ev+dt*2.5,0,8); st.lastDash=nowT end
+                if r.hum and r.hum.Health<=0 then
+                    r.score = -1e9
+                else
+                    r.hp = (r.hum and r.hum.Health) or r.hp
+                    local hpF   = (100 - r.hp)
+                    local distF = math.clamp(40 - r.dist, -40, 40)
+                    local evF   = r.hasEv and -25 or 15
+                    local agF   = st.aggr*4
+                    local defP  = st.def*1.5
+                    local dmgF  = (r.recent or 0)*1.2
+                    local aid=self:_animId(r); local ath= aid and self.ls:threat(aid) or 0
 
-                r.aggro = (r.recent*1.2 + r.aRecent*0.8) + (ath*2)
-                local stunBias = (r.stunScore or 0)*45
-                r.score = hpF + distF + evF + agF - defP + dmgF + math.clamp(ath*4, -8, 16) + math.min(40, r.aggro*0.5) + stunBias
-                if self.lastAttacker and r.model.Name==self.lastAttacker then r.score = r.score + 120 end
-                if hasFreezeOnLive(r.model.Name) then r.score = r.score + 60 end
+                    r.aggro = (r.recent*1.2 + r.aRecent*0.8) + (ath*2)
+                    local stunBias = (r.stunScore or 0)*45
+                    r.score = hpF + distF + evF + agF - defP + dmgF + math.clamp(ath*4, -8, 16) + math.min(40, r.aggro*0.5) + stunBias
+                    if self.lastAttacker and r.model.Name==self.lastAttacker then r.score = r.score + 120 end
+                    if hasFreezeOnLive(r.model.Name) then r.score = r.score + 60 end
+                end
             end
         end
     end
 end
 
 function Bot:selectTarget():Enemy?
-    local nowT = os.clock()
-    local reach = math.huge
-
-
-    local nearest, nd = nil, 1/0
-    for _,r in pairs(self.enemies) do
-        if r.model.Parent and r.hum and r.hum.Health>0 and r.dist and r.dist<nd then
-            nearest, nd = r, r.dist
-        end
-    end
-    if not nearest then return nil end
-
-
-    if (not self.sticky) or (not self.sticky.model.Parent) or ((self.sticky.dist or math.huge) > reach) then
-        self.sticky, self.stickyT = nearest, nowT
-        self.stickyHold = 3.0
-        self.switchMargin = math.huge
-        return self.sticky
-    end
-
-
-    local cur = self.sticky
-    local best, bs, bestAgg = cur, (cur.score or -1e9), (cur.aggro or 0)
-    for _,r in pairs(self.enemies) do
-        if r.model.Parent and r.hum and r.hum.Health>0 then
-            local w = (r.score or -1e9) + (r.aggro or 0) * 0.9
-            if w > bs then
-                best, bs, bestAgg = r, w, (r.aggro or 0)
+    local nearest, nd = nil, math.huge
+    for m,r in pairs(self.enemies) do
+        if not (m and m.Parent) then
+            self:_cleanupEnemy(m)
+        else
+            if self:_ensureEnemyParts(r) and self.rp and r.hrp and ((r.dist or math.huge) == math.huge) then
+                r.dist = (r.hrp.Position - self.rp.Position).Magnitude
+            end
+            if self:_enemyIsValidTarget(r) and (r.dist or math.huge) < nd then
+                nearest, nd = r, r.dist or math.huge
             end
         end
     end
-    if best ~= cur then
-        if (bestAgg > (cur.aggro or 0) + 30) or (bs > ((cur.score or -1e9) + 80)) then
-            self.sticky, self.stickyT = best, nowT
-        end
-    end
-    return self.sticky
+    return nearest
 end
 
 
@@ -3605,7 +4022,7 @@ function AI.Init(opts)
 end
 
 
-local HELP_TEXT = "/help  — list commands (see Help panel right side)."
+local HELP_TEXT = PANEL_HELP_TEXT
 
 local function _num(v) return tonumber(v) end
 
