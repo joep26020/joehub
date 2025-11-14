@@ -326,14 +326,6 @@ end
 
 
 local Bridge={}; Bridge.__index=Bridge
-function Bridge.new()
-    local env=rawget(getgenv(),"joehub") or rawget(getgenv(),"JoeHub")
-    local self=setmetatable({},Bridge)
-    if typeof(env)=="table" then self.env=env end
-    if self.env then self.aim = self.env.AimAt or self.env.AimTarget or self.env.AimStabilizer end
-    return self
-end
-function Bridge:tryAim(rp,tp) if self.aim then local ok=pcall(self.aim,rp,tp); if ok then return true end end return false end
 
 
 local LS={}; LS.__index=LS
