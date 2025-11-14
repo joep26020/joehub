@@ -987,29 +987,54 @@ function Bot.new()
         self.reconcileTask = nil
     end)
 
-    self.hb=RunService.Heartbeat:Connect(function(dt) self:update(dt) end)
-        
-    self.hardAimHB = RunService.RenderStepped:Connect(function()
-        if not (self.rp and (self.run or self.blocking)) then return end
-        if self.inDash then return end
-        if self.hum and self.hum:GetState()==Enum.HumanoidStateType.FallingDown then return end
-    
-        local tgt = (self.currentTarget and self.currentTarget.hrp) or nil
-        if not tgt then return end
-    
-        local cf = yawLook(self.rp.Position, tgt.Position)
-        if not cf then return end
-    
-        self.hum.AutoRotate = false
-        self.rp.CFrame = cf
-    
-        local cam = workspace.CurrentCamera
-        if cam then
-            local cp = cam.CFrame.Position
-            local lv = cf.LookVector
-            cam.CFrame = CFrame.new(cp, Vector3.new(cp.X + lv.X, cp.Y, cp.Z + lv.Z))
+    self.hb = RunService.Heartbeat:Connect(function(dt)
+        local ok, err = pcall(function()
+            self:update(dt)
+        end)
+
+        if not ok then
+            warn("[BGBot] update error: " .. tostring(err))
+            if self.gui then
+                self.gui:log("[error] " .. tostring(err))
+                self.gui:setS("Status: error – check console")
+            end
         end
     end)
+
+    self.hardAimHB = RunService.RenderStepped:Connect(function()
+        local ok, err = pcall(function()
+            if not (self.rp and (self.run or self.blocking)) then return end
+            if self.inDash then return end
+            if self.hum and self.hum:GetState()==Enum.HumanoidStateType.FallingDown then return end
+
+            local tgt = (self.currentTarget and self.currentTarget.hrp) or nil
+            if not tgt then return end
+
+            local cf = yawLook(self.rp.Position, tgt.Position)
+            if not cf then return end
+
+            self.hum.AutoRotate = false
+            self.rp.CFrame = cf
+
+            local cam = workspace.CurrentCamera
+            if cam then
+                local cp = cam.CFrame.Position
+                local lv = cf.LookVector
+                cam.CFrame = CFrame.new(
+                    cp,
+                    Vector3.new(cp.X + lv.X, cp.Y, cp.Z + lv.Z)
+                )
+            end
+        end)
+
+        if not ok then
+            warn("[BGBot] hardAim error: " .. tostring(err))
+            if self.gui then
+                self.gui:log("[error] hardAim: " .. tostring(err))
+            end
+        end
+    end)
+
 
 
     return self
