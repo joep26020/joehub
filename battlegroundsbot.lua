@@ -1472,22 +1472,27 @@ end
 
 function Bot:aimAt(tHRP:BasePart?)
     if self.destroyed or self.inDash then return end
-    if not self.hum then return end
-    if not (tHRP and self.rp) then
-        self.hum.AutoRotate = true
+    if not (self.hum and self.rp) then return end
+
+    -- Own rotation fully while the bot is active
+    self.hum.AutoRotate = false
+
+    if not tHRP then
         return
     end
+
     local ok, state = pcall(function()
         return self.hum:GetState()
     end)
     if not ok then return end
+
     if state == Enum.HumanoidStateType.FallingDown then
-        self.hum.AutoRotate = true
         return
     end
+
     local cf = yawLook(self.rp.Position, tHRP.Position)
     if not cf then return end
-    self.hum.AutoRotate = false
+
     self.rp.CFrame = cf
     self:alignCam()
 end
@@ -1735,23 +1740,31 @@ function Bot:_finalizeActionRecords(force:boolean?)
 end
 
 function Bot:_averageReward(actionName:string, filters:{string}?)
-    if not self.policy then return nil end
+    if not self.policy or typeof(self.policy) ~= "table" then return nil end
+
     local sum, count = 0.0, 0
     for ctx, actions in pairs(self.policy) do
-        local ok = true
-        if filters then
-            for _,f in ipairs(filters) do
-                if not string.find(ctx, f, 1, true) then ok=false break end
+        if typeof(actions) == "table" then
+            local ok = true
+            if filters then
+                for _, f in ipairs(filters) do
+                    if not string.find(ctx, f, 1, true) then
+                        ok = false
+                        break
+                    end
+                end
             end
-        end
-        if ok then
-            local entry = actions[actionName]
-            if entry and entry.n and entry.n > 0 then
-                sum = sum + (entry.ravg or 0)
-                count = count + 1
+
+            if ok then
+                local entry = actions[actionName]
+                if entry and entry.n and entry.n > 0 then
+                    sum = sum + (entry.ravg or 0)
+                    count = count + 1
+                end
             end
         end
     end
+
     if count == 0 then return nil end
     return sum / count
 end
@@ -3332,12 +3345,8 @@ function Bot:update(dt:number)
     local tgt=self:selectTarget()
     self.currentTarget = tgt
     self.lastTargetDist = tgt and tgt.dist or nil
-    if (not self.inDash) then
-        if tgt and tgt.hrp then
-            self:aimAt(tgt.hrp)
-        elseif self.hum then
-            self.hum.AutoRotate = true
-        end
+    if (not self.inDash) and tgt and tgt.hrp then
+        self:aimAt(tgt.hrp)
     end
     if tgt then
         self:approachFarTarget(tgt)
