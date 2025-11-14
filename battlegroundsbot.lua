@@ -893,7 +893,7 @@ function Bot.new()
     self.sticky=nil
     self.stickyT=0
     self.stickyHold=1.6
-    self.switchMargin=25.0
+    self.switchMargin=math.huge
     self.lastStunTarget=nil
 
 
@@ -1472,8 +1472,16 @@ end
 
 function Bot:aimAt(tHRP:BasePart?)
     if self.destroyed or self.inDash then return end
-    if not (tHRP and self.rp and self.hum) then return end
-    if self.hum:GetState()==Enum.HumanoidStateType.FallingDown then
+    if not self.hum then return end
+    if not (tHRP and self.rp) then
+        self.hum.AutoRotate = true
+        return
+    end
+    local ok, state = pcall(function()
+        return self.hum:GetState()
+    end)
+    if not ok then return end
+    if state == Enum.HumanoidStateType.FallingDown then
         self.hum.AutoRotate = true
         return
     end
@@ -1481,12 +1489,7 @@ function Bot:aimAt(tHRP:BasePart?)
     if not cf then return end
     self.hum.AutoRotate = false
     self.rp.CFrame = cf
-    local cam = workspace.CurrentCamera
-    if cam then
-        local cp = cam.CFrame.Position
-        local lv = cf.LookVector
-        cam.CFrame = CFrame.new(cp, Vector3.new(cp.X + lv.X, cp.Y, cp.Z + lv.Z))
-    end
+    self:alignCam()
 end
 
 
@@ -2447,9 +2450,9 @@ end
 
 function Bot:selectTarget():Enemy?
     local nowT = os.clock()
-    local reach = 50.0  
+    local reach = math.huge
 
-    
+
     local nearest, nd = nil, 1/0
     for _,r in pairs(self.enemies) do
         if r.model.Parent and r.hum and r.hum.Health>0 and r.dist and r.dist<nd then
@@ -2458,21 +2461,21 @@ function Bot:selectTarget():Enemy?
     end
     if not nearest then return nil end
 
-    
-    if (not self.sticky) or (not self.sticky.model.Parent) or ((self.sticky.dist or 999) > reach) then
+
+    if (not self.sticky) or (not self.sticky.model.Parent) or ((self.sticky.dist or math.huge) > reach) then
         self.sticky, self.stickyT = nearest, nowT
         self.stickyHold = 3.0
-        self.switchMargin = 40.0
+        self.switchMargin = math.huge
         return self.sticky
     end
 
-    
+
     local cur = self.sticky
     local best, bs, bestAgg = cur, (cur.score or -1e9), (cur.aggro or 0)
     for _,r in pairs(self.enemies) do
         if r.model.Parent and r.hum and r.hum.Health>0 then
             local w = (r.score or -1e9) + (r.aggro or 0) * 0.9
-            if w > bs and (r.dist or 999) <= 20.0 then
+            if w > bs then
                 best, bs, bestAgg = r, w, (r.aggro or 0)
             end
         end
@@ -3329,6 +3332,13 @@ function Bot:update(dt:number)
     local tgt=self:selectTarget()
     self.currentTarget = tgt
     self.lastTargetDist = tgt and tgt.dist or nil
+    if (not self.inDash) then
+        if tgt and tgt.hrp then
+            self:aimAt(tgt.hrp)
+        elseif self.hum then
+            self.hum.AutoRotate = true
+        end
+    end
     if tgt then
         self:approachFarTarget(tgt)
     end
