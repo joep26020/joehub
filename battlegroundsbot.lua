@@ -305,6 +305,13 @@ end
 
 
 local function flat(v:Vector3) return Vector3.new(v.X,0,v.Z) end
+
+local function safePos(part:BasePart?):Vector3?
+    if not part then return nil end
+    local ok, pos = pcall(function() return part.Position end)
+    if ok then return pos end
+    return nil
+end
 local STUN_TAILS = {
     ["10473655082"] = true,
     ["10473654583"] = true,
@@ -511,34 +518,111 @@ local function btn(p,n,t,sz,pos,clr)
     local b=Instance.new("TextButton"); b.Name=n; b.Size=sz; b.Position=pos
     b.BackgroundColor3=clr or Color3.fromRGB(48,60,96)
     b.TextColor3=Color3.fromRGB(240,240,240); b.Font=Enum.Font.GothamBold; b.TextSize=18; b.Text=t; b.BorderSizePixel=0; b.AutoButtonColor=true
-    local s=Instance.new("UIStroke"); s.Color=Color3.fromRGB(94,123,255); s.Thickness=1.4; s.Transparency=0.35; s.Parent=b; b.Parent=p; return b
+    local s=Instance.new("UIStroke"); s.Color=Color3.fromRGB(94,123,255); s.Thickness=1.4; s.Transparency=0.35; s.Parent=b
+    local corner=Instance.new("UICorner"); corner.CornerRadius=UDim.new(0,6); corner.Parent=b
+    b.Parent=p; return b
 end
 local function drag(f:Frame)
     local g=false; local st,sp
     f.InputBegan:Connect(function(i) if i.UserInputType==Enum.UserInputType.MouseButton1 then g=true; st=i.Position; sp=f.Position; i.Changed:Connect(function() if i.UserInputState==Enum.UserInputState.End then g=false end end) end end)
     f.InputChanged:Connect(function(i) if g and i.UserInputType==Enum.UserInputType.MouseMovement then local d=i.Position-st; f.Position=UDim2.new(sp.X.Scale,sp.X.Offset+d.X,sp.Y.Scale,sp.Y.Offset+d.Y) end end)
 end
+
+local function createInfoCard(parent:Instance, title:string, initialText:string?, opts)
+    local card = Instance.new("Frame")
+    card.Name = title:gsub("%s+","").."Card"
+    card.BackgroundColor3 = Color3.fromRGB(20,22,32)
+    card.BorderSizePixel = 0
+    card.Parent = parent
+
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0,8)
+    corner.Parent = card
+
+    local stroke = Instance.new("UIStroke")
+    stroke.Color = Color3.fromRGB(70,98,180)
+    stroke.Thickness = 1
+    stroke.Transparency = 0.3
+    stroke.Parent = card
+
+    local header = Instance.new("TextLabel")
+    header.Name = title.."Header"
+    header.BackgroundTransparency = 1
+    header.Size = UDim2.new(1,-20,0,16)
+    header.Position = UDim2.new(0,10,0,10)
+    header.Font = Enum.Font.GothamSemibold
+    header.TextSize = 12
+    header.TextColor3 = Color3.fromRGB(150,160,210)
+    header.TextXAlignment = Enum.TextXAlignment.Left
+    header.Text = string.upper(title)
+    header.Parent = card
+
+    local value = Instance.new("TextLabel")
+    value.Name = title.."Value"
+    value.BackgroundTransparency = 1
+    value.Size = UDim2.new(1,-20,1,-36)
+    value.Position = UDim2.new(0,10,0,30)
+    value.Font = (opts and opts.font) or Enum.Font.GothamBold
+    value.TextSize = (opts and opts.textSize) or 18
+    value.TextColor3 = (opts and opts.textColor) or Color3.fromRGB(230,235,255)
+    value.TextXAlignment = (opts and opts.textXAlignment) or Enum.TextXAlignment.Left
+    value.TextYAlignment = Enum.TextYAlignment.Top
+    value.TextWrapped = true
+    value.Text = initialText or ""
+    value.Parent = card
+
+    return value, header, card
+end
 function GUI.new()
     local self=setmetatable({},GUI)
     local g=Instance.new("ScreenGui"); g.Name="BGBotUI"; g.ResetOnSpawn=false; g.ZIndexBehavior=Enum.ZIndexBehavior.Sibling; g.Parent=gethui and gethui() or game:GetService("CoreGui")
-    local f=Instance.new("Frame"); f.Name="Main"; f.Size=UDim2.new(0,720,0,460); f.Position=UDim2.new(0,60,0,80); f.BackgroundColor3=Color3.fromRGB(17,18,26); f.BorderSizePixel=0; f.Parent=g; drag(f)
+    local f=Instance.new("Frame"); f.Name="Main"; f.Size=UDim2.new(0,720,0,720); f.Position=UDim2.new(0.5,-360,0.5,-360); f.BackgroundColor3=Color3.fromRGB(17,18,26); f.BorderSizePixel=0; f.Parent=g; drag(f)
     local s=Instance.new("UIStroke"); s.Color=Color3.fromRGB(76,110,255); s.Thickness=1.5; s.Transparency=0.15; s.Parent=f
+    local corner=Instance.new("UICorner"); corner.CornerRadius=UDim.new(0,10); corner.Parent=f
 
-    local title=text(f,"T","Aggro Bot v6.0", UDim2.new(1,0,0,38),UDim2.new(0,0,0,0),22,true); title.BackgroundTransparency=1; title.TextColor3=Color3.fromRGB(205,214,255)
-    self.status =text(f,"S","Status: idle", UDim2.new(1,-20,0,26),UDim2.new(0,12,0,44),20,false)
-    self.target =text(f,"A","Target: none", UDim2.new(1,-20,0,26),UDim2.new(0,12,0,74),20,false)
-    self.combo  =text(f,"C","Combo: none", UDim2.new(1,-20,0,24),UDim2.new(0,12,0,104),18,false)
-    self.ev     =text(f,"E","Evasive: ready",UDim2.new(1,-20,0,24),UDim2.new(0,12,0,132),18,false)
+    local title=Instance.new("TextLabel"); title.Name="Header"; title.Size=UDim2.new(1,-40,0,48); title.Position=UDim2.new(0,20,0,12)
+    title.BackgroundTransparency=1; title.Font=Enum.Font.GothamBold; title.TextSize=28; title.TextXAlignment=Enum.TextXAlignment.Left
+    title.TextColor3=Color3.fromRGB(205,214,255); title.Text="Aggro Bot v6.0"; title.Parent=f
 
-    local btnY = 168
-    local startB=btn(f,"Start","Start", UDim2.new(0.33,-12,0,34), UDim2.new(0,12,0,btnY))
-    local stopB =btn(f,"Stop","Stop",  UDim2.new(0.33,-12,0,34), UDim2.new(0.33,0,0,btnY), Color3.fromRGB(120,50,50))
-    local exitB =btn(f,"Exit","Exit",  UDim2.new(0.33,-12,0,34), UDim2.new(0.66,12,0,btnY), Color3.fromRGB(80,30,30))
+    local controlRow=Instance.new("Frame"); controlRow.Name="ControlRow"; controlRow.Size=UDim2.new(1,-40,0,48); controlRow.Position=UDim2.new(0,20,0,72)
+    controlRow.BackgroundTransparency=1; controlRow.Parent=f
+    local controlLayout=Instance.new("UIGridLayout"); controlLayout.CellPadding=UDim2.new(0,12,0,0); controlLayout.CellSize=UDim2.new(1/3,-8,1,0)
+    controlLayout.FillDirectionMaxCells=3; controlLayout.HorizontalAlignment=Enum.HorizontalAlignment.Left; controlLayout.Parent=controlRow
 
-    self.moves = text(f,"M","Dash CDs: F=0.00 | B=0.00 | S=0.00", UDim2.new(1,-20,0,22), UDim2.new(0,12,0,btnY+40), 16, false)
-    self.rules = text(f,"R","FDash[14..30] • SideOff relock≤3.5 • Still>5s→dash • Idle atk≤15s • M1 openers", UDim2.new(1,-20,0,22), UDim2.new(0,12,0,btnY+66), 14, false)
+    local startB=btn(controlRow,"Start","Start",UDim2.new(1,0,1,0),UDim2.new(0,0,0,0))
+    startB.LayoutOrder=1
+    local stopB =btn(controlRow,"Stop","Stop", UDim2.new(1,0,1,0), UDim2.new(0,0,0,0), Color3.fromRGB(120,50,50))
+    stopB.LayoutOrder=2
+    local exitB =btn(controlRow,"Exit","Exit", UDim2.new(1,0,1,0), UDim2.new(0,0,0,0), Color3.fromRGB(80,30,30))
+    exitB.LayoutOrder=3
 
-    local panel=Instance.new("Frame"); panel.Name="DataPanel"; panel.Size=UDim2.new(1,-24,1,-260); panel.Position=UDim2.new(0,12,0,260)
+    local statsGrid=Instance.new("Frame"); statsGrid.Name="StatusGrid"; statsGrid.Size=UDim2.new(1,-40,0,180); statsGrid.Position=UDim2.new(0,20,0,136)
+    statsGrid.BackgroundTransparency=1; statsGrid.Parent=f
+    local grid=Instance.new("UIGridLayout"); grid.CellPadding=UDim2.new(0,12,0,12); grid.CellSize=UDim2.new(0.5,-6,0,80); grid.FillDirectionMaxCells=2; grid.Parent=statsGrid
+
+    local statusValue, statusHeader = createInfoCard(statsGrid, "Status", "Idle")
+    local targetValue, targetHeader = createInfoCard(statsGrid, "Target", "None")
+    local comboValue, comboHeader   = createInfoCard(statsGrid, "Combo", "None")
+    local evValue, evHeader         = createInfoCard(statsGrid, "Evasive", "Ready")
+    self.status=statusValue; self.statusHeader=statusHeader
+    self.target=targetValue; self.targetHeader=targetHeader
+    self.combo=comboValue; self.comboHeader=comboHeader
+    self.ev=evValue; self.evHeader=evHeader
+
+    local detailRow=Instance.new("Frame"); detailRow.Name="DetailRow"; detailRow.Size=UDim2.new(1,-40,0,96); detailRow.Position=UDim2.new(0,20,0,332)
+    detailRow.BackgroundTransparency=1; detailRow.Parent=f
+    local detailLayout=Instance.new("UIListLayout"); detailLayout.FillDirection=Enum.FillDirection.Horizontal; detailLayout.SortOrder=Enum.SortOrder.LayoutOrder
+    detailLayout.Padding=UDim.new(0,12); detailLayout.Parent=detailRow
+
+    local movesValue, movesHeader, movesCard = createInfoCard(detailRow, "Dash Cooldowns", "", {textSize=16, font=Enum.Font.Gotham})
+    movesCard.Size=UDim2.new(0.5,-6,1,0)
+    self.moves=movesValue; self.movesHeader=movesHeader
+    local rulesText = "FDash[14..30] • SideOff relock≤3.5 • Still>5s→dash • Idle atk≤15s • M1 openers"
+    local rulesValue, rulesHeader, rulesCard = createInfoCard(detailRow, "Rules", rulesText, {textSize=14, font=Enum.Font.Gotham, textColor=Color3.fromRGB(210,220,255)})
+    rulesCard.Size=UDim2.new(0.5,-6,1,0)
+    self.rules=rulesValue; self.rulesHeader=rulesHeader
+
+    local panel=Instance.new("Frame"); panel.Name="DataPanel"; panel.Size=UDim2.new(1,-40,0,248); panel.Position=UDim2.new(0,20,0,452)
     panel.BackgroundColor3=Color3.fromRGB(20,22,30); panel.BorderSizePixel=0; panel.Parent=f
     local pst=Instance.new("UIStroke"); pst.Color=Color3.fromRGB(76,110,255); pst.Thickness=1; pst.Transparency=0.2; pst.Parent=panel
 
@@ -588,14 +672,34 @@ function GUI.new()
 
     self.gui=g; self.frame=f; self.startB=startB; self.stopB=stopB; self.exitB=exitB
 
+    self:setS("Status: idle"); self:setT("Target: none"); self:setC("Combo: none"); self:setE("Evasive: ready")
+    self:updateCDs(0,0,0); self.rules.Text = rulesText
+
     self:addConsole(rightCol)
     return self
 end
-function GUI:setS(t) self.status.Text=t end
-function GUI:setT(t) self.target.Text=t end
-function GUI:setC(t) self.combo.Text=t end
-function GUI:setE(t) self.ev.Text=t end
-function GUI:updateCDs(f,b,s) self.moves.Text = string.format("Dash CDs: F=%.2f | B=%.2f | S=%.2f", math.max(0,f), math.max(0,b), math.max(0,s)) end
+
+local function applyCardText(label:TextLabel?, header:TextLabel?, fallback:string, text:string)
+    if not label then return end
+    text = text or ""
+    local prefix, rest = text:match("^([^:]+):%s*(.+)$")
+    if prefix and rest then
+        if header then header.Text = string.upper(prefix) end
+        label.Text = rest
+    else
+        if header and fallback then header.Text = string.upper(fallback) end
+        label.Text = text
+    end
+end
+
+function GUI:setS(t) applyCardText(self.status, self.statusHeader, "Status", t) end
+function GUI:setT(t) applyCardText(self.target, self.targetHeader, "Target", t) end
+function GUI:setC(t) applyCardText(self.combo, self.comboHeader, "Combo", t) end
+function GUI:setE(t) applyCardText(self.ev, self.evHeader, "Evasive", t) end
+function GUI:updateCDs(f,b,s)
+    if not self.moves then return end
+    self.moves.Text = string.format("F %.2fs   B %.2fs   S %.2fs", math.max(0,f), math.max(0,b), math.max(0,s))
+end
 function GUI:updateCombos(data)
     for _,ch in ipairs(self.comboList:GetChildren()) do if ch:IsA("TextLabel") then ch:Destroy() end end
     local combos = data.combos or {}
@@ -1066,11 +1170,13 @@ function Bot:_trackConnection(conn)
 end
 
 function Bot:_aimCameraAt(tHRP:BasePart?)
-    if not (tHRP) then return end
+    if not tHRP then return end
     local cam = workspace.CurrentCamera
     if not cam then return end
     local camPos = cam.CFrame.Position
-    local dir = tHRP.Position - camPos
+    local targetPos = safePos(tHRP)
+    if not targetPos then return end
+    local dir = targetPos - camPos
     if dir.Magnitude < 1e-3 then return end
     cam.CFrame = CFrame.new(camPos, camPos + dir.Unit)
 end
@@ -1455,26 +1561,30 @@ function Bot:_beginDashOrientation(kind:string, tr:AnimationTrack, style:("off"|
         if self.hum and self.hum:GetState()==Enum.HumanoidStateType.FallingDown then return false end
         return true
     end
-    local function faceToward(pos:Vector3)
-        if not canTurn() then return end
-        local here=self.rp.Position
-        local to  = Vector3.new(pos.X, here.Y, pos.Z) - here
+    local function faceToward(pos:Vector3?)
+        if not (pos and canTurn()) then return end
+        local here = safePos(self.rp)
+        if not here then return end
+        local to = Vector3.new(pos.X, here.Y, pos.Z) - here
         if to.Magnitude<1e-3 then return end
         self.rp.CFrame = CFrame.lookAt(here, here + to.Unit)
         alignCam()
     end
-    local function faceAwayFrom(pos:Vector3)
-        if not canTurn() then return end
-        local here=self.rp.Position
-        local to  = Vector3.new(pos.X, here.Y, pos.Z) - here
+    local function faceAwayFrom(pos:Vector3?)
+        if not (pos and canTurn()) then return end
+        local here = safePos(self.rp)
+        if not here then return end
+        local to = Vector3.new(pos.X, here.Y, pos.Z) - here
         if to.Magnitude<1e-3 then return end
         self.rp.CFrame = CFrame.lookAt(here, here - to.Unit)
         alignCam()
     end
     local function facePerp(toU:Vector3, cw:boolean)
         if not canTurn() then return end
+        local here = safePos(self.rp)
+        if not here then return end
         local perp = cw and Vector3.new(toU.Z,0,-toU.X) or Vector3.new(-toU.Z,0,toU.X)
-        self.rp.CFrame = CFrame.lookAt(self.rp.Position, self.rp.Position + perp.Unit)
+        self.rp.CFrame = CFrame.lookAt(here, here + perp.Unit)
         alignCam()
     end
 
@@ -1497,39 +1607,43 @@ function Bot:_beginDashOrientation(kind:string, tr:AnimationTrack, style:("off"|
                 tgt = pick and pick.hrp or nil
             end
             if tgt then
-                local to = Vector3.new(tgt.Position.X, self.rp.Position.Y, tgt.Position.Z) - self.rp.Position
-                if to.Magnitude > 1e-3 then
-                    local toU = to.Unit
-                    if kind=="fdash" then
-                        if style=="off" then
-                            if not didOrbit then
-                                faceToward(tgt.Position)
-                                if to.Magnitude <= CFG.Dash.OrbitTrigger then
-                                    didOrbit = true; orbitStart = os.clock()
+                local here = safePos(self.rp)
+                local tgtPos = safePos(tgt)
+                if here and tgtPos then
+                    local to = Vector3.new(tgtPos.X, here.Y, tgtPos.Z) - here
+                    if to.Magnitude > 1e-3 then
+                        local toU = to.Unit
+                        if kind=="fdash" then
+                            if style=="off" then
+                                if not didOrbit then
+                                    faceToward(tgtPos)
+                                    if to.Magnitude <= CFG.Dash.OrbitTrigger then
+                                        didOrbit = true; orbitStart = os.clock()
+                                    end
+                                else
+                                    local elapsed = os.clock() - orbitStart
+                                    if elapsed <= CFG.Dash.OrbitDur then facePerp(toU, orbitCW)
+                                    else faceToward(tgtPos) end
                                 end
                             else
-                                local elapsed = os.clock() - orbitStart
-                                if elapsed <= CFG.Dash.OrbitDur then facePerp(toU, orbitCW)
-                                else faceToward(tgt.Position) end
+                                faceAwayFrom(tgtPos)
+                            end
+                        elseif kind=="bdash" then
+                            if style=="off" then
+                                local timeLeft = (t0 + length) - os.clock()
+                                if to.Magnitude <= CFG.Dash.BackClose then facePerp(toU, orbitCW)
+                                else faceAwayFrom(tgtPos) end
+                                if timeLeft <= CFG.Dash.PreEndBackFace then faceToward(tgtPos) end
+                            else
+                                faceToward(tgtPos)
                             end
                         else
-                            faceAwayFrom(tgt.Position)
-                        end
-                    elseif kind=="bdash" then
-                        if style=="off" then
-                            local timeLeft = (t0 + length) - os.clock()
-                            if to.Magnitude <= CFG.Dash.BackClose then facePerp(toU, orbitCW)
-                            else faceAwayFrom(tgt.Position) end
-                            if timeLeft <= CFG.Dash.PreEndBackFace then faceToward(tgt.Position) end
-                        else
-                            faceToward(tgt.Position)
-                        end
-                    else 
-                        if style=="off" then
-                            if to.Magnitude <= CFG.Dash.SideOffLock then faceToward(tgt.Position)
-                            else facePerp(toU, orbitCW) end
-                        else
-                            facePerp(toU, orbitCW)
+                            if style=="off" then
+                                if to.Magnitude <= CFG.Dash.SideOffLock then faceToward(tgtPos)
+                                else facePerp(toU, orbitCW) end
+                            else
+                                facePerp(toU, orbitCW)
+                            end
                         end
                     end
                 end
@@ -1541,15 +1655,23 @@ function Bot:_beginDashOrientation(kind:string, tr:AnimationTrack, style:("off"|
         local pick = self:selectTarget()
         local t2   = (tHRP and tHRP.Parent) and tHRP or (pick and pick.hrp)
         if t2 and self.hum and self.hum.Health>0 and self.hum:GetState()~=Enum.HumanoidStateType.FallingDown then
-            self.rp.CFrame = CFrame.lookAt(self.rp.Position, Vector3.new(t2.Position.X, self.rp.Position.Y, t2.Position.Z))
-            alignCam()
+            local here = safePos(self.rp)
+            local tgtPos = safePos(t2)
+            if here and tgtPos then
+                self.rp.CFrame = CFrame.lookAt(here, Vector3.new(tgtPos.X, here.Y, tgtPos.Z))
+                alignCam()
+            end
         end
 
         local closeEnemy = enemy or pick
         if closeEnemy and closeEnemy.hrp and self.run and self.alive and not self.actThread then
             local dist = closeEnemy.dist or math.huge
-            if dist==math.huge and self.rp then
-                dist = (closeEnemy.hrp.Position - self.rp.Position).Magnitude
+            if dist==math.huge then
+                local here = safePos(self.rp)
+                local enemyPos = safePos(closeEnemy.hrp)
+                if here and enemyPos then
+                    dist = (enemyPos - here).Magnitude
+                end
             end
             if dist <= 5.0 and not self.blocking then
                 self:_registerM1Attempt(closeEnemy)
@@ -1823,7 +1945,11 @@ function Bot:aimAt(tHRP:BasePart?)
         return
     end
 
-    local cf = yawLook(self.rp.Position, tHRP.Position)
+    local here = safePos(self.rp)
+    local there = safePos(tHRP)
+    if not (here and there) then return end
+
+    local cf = yawLook(here, there)
     if not cf then return end
 
     self.rp.CFrame = cf
@@ -2431,14 +2557,21 @@ function Bot:_requestSideDash(tHRP:BasePart?, style:string?, r:Enemy?)
     if not (self.rp and tHRP) then return end
     local g = CFG.Gates.S
     local dist = r and r.dist
-    if not dist and self.rp then dist = (tHRP.Position - self.rp.Position).Magnitude end
+    if not dist then
+        local here = safePos(self.rp)
+        local targetPos = safePos(tHRP)
+        if here and targetPos then
+            dist = (targetPos - here).Magnitude
+        end
+    end
     if not dist or not distOK(dist, g.lo, g.hi) then return end
 
-    
+
     self:aimAt(tHRP)
 
-    local myPos   = self.rp.Position
-    local tPos    = tHRP.Position
+    local myPos   = safePos(self.rp)
+    local tPos    = safePos(tHRP)
+    if not (myPos and tPos) then return end
     local right   = flat(self.rp.CFrame.RightVector)
     if right.Magnitude < 1e-3 then right = Vector3.new(1,0,0) end
     right = right.Unit
@@ -2511,7 +2644,13 @@ function Bot:_requestBackDash(tHRP:BasePart?, style:string?, r:Enemy?)
     if not (self.rp and tHRP) then return end
     local g = CFG.Gates.B
     local dist = r and r.dist
-    if not dist and self.rp then dist = (tHRP.Position - self.rp.Position).Magnitude end
+    if not dist then
+        local here = safePos(self.rp)
+        local targetPos = safePos(tHRP)
+        if here and targetPos then
+            dist = (targetPos - here).Magnitude
+        end
+    end
     if not dist or not distOK(dist, g.lo, g.hi) then return end
 
     local wasW = self.moveKeys[Enum.KeyCode.W]
