@@ -7,6 +7,138 @@ local VIM         = game:GetService("VirtualInputManager")
 
 local LP = Players.LocalPlayer or Players.PlayerAdded:Wait()
 
+local ConfigFileName = "TSB_Bot_Config.json"
+
+local function cfgDeepCopy(v)
+    if type(v) ~= "table" then
+        return v
+    end
+    local t = {}
+    for k, val in pairs(v) do
+        t[k] = cfgDeepCopy(val)
+    end
+    return t
+end
+
+local function cfgDeepMerge(defaults, saved)
+    if type(defaults) ~= "table" then
+        if saved ~= nil and type(saved) == type(defaults) then
+            return saved
+        else
+            return defaults
+        end
+    end
+    local result = {}
+    local savedTable = type(saved) == "table" and saved or nil
+    for k, defVal in pairs(defaults) do
+        local savedVal = savedTable and savedTable[k] or nil
+        if type(defVal) == "table" then
+            if type(savedVal) == "table" then
+                result[k] = cfgDeepMerge(defVal, savedVal)
+            else
+                result[k] = cfgDeepCopy(defVal)
+            end
+        else
+            if savedVal ~= nil and type(savedVal) == type(defVal) then
+                result[k] = savedVal
+            else
+                result[k] = defVal
+            end
+        end
+    end
+    return result
+end
+
+local function cfgRead()
+    if typeof(isfile) == "function" and isfile(ConfigFileName) then
+        local ok, data = pcall(readfile, ConfigFileName)
+        if ok and type(data) == "string" then
+            return data
+        end
+    end
+    return nil
+end
+
+local function cfgWrite(str)
+    if type(str) ~= "string" then
+        return
+    end
+    if typeof(writefile) == "function" then
+        pcall(writefile, ConfigFileName, str)
+    end
+end
+
+local function cfgLoad(defaults)
+    local base = cfgDeepCopy(defaults or {})
+    local raw = cfgRead()
+    if not raw or raw == "" then
+        return base
+    end
+    local ok, decoded = pcall(function()
+        return HttpService:JSONDecode(raw)
+    end)
+    if not ok or type(decoded) ~= "table" then
+        return base
+    end
+    return cfgDeepMerge(base, decoded)
+end
+
+local function cfgSave(tbl)
+    local ok, json = pcall(function()
+        return HttpService:JSONEncode(tbl or {})
+    end)
+    if not ok or type(json) ~= "string" then
+        return
+    end
+    cfgWrite(json)
+end
+
+local function cfgSplitPath(path)
+    local parts = {}
+    for part in string.gmatch(path, "[^%.]+") do
+        parts[#parts + 1] = part
+    end
+    return parts
+end
+
+local function cfgGetPath(root, path)
+    if type(root) ~= "table" or type(path) ~= "string" then
+        return nil
+    end
+    local node = root
+    for part in string.gmatch(path, "[^%.]+") do
+        if type(node) ~= "table" then
+            return nil
+        end
+        node = node[part]
+        if node == nil then
+            return nil
+        end
+    end
+    return node
+end
+
+local function cfgSetPath(root, path, value)
+    if type(root) ~= "table" or type(path) ~= "string" then
+        return
+    end
+    local parts = cfgSplitPath(path)
+    if #parts == 0 then
+        return
+    end
+    local node = root
+    for i = 1, #parts - 1 do
+        local key = parts[i]
+        if type(node[key]) ~= "table" then
+            node[key] = {}
+        end
+        node = node[key]
+    end
+    local finalKey = parts[#parts]
+    node[finalKey] = value
+end
+
+
 local DashAnim = {
     F  = "10479335397",
     B  = "10491993682",
@@ -138,6 +270,10 @@ local CFG = {
     
     AutoSave = 30,
 }
+
+local DEFAULT_CFG = cfgDeepCopy(CFG)
+CFG = cfgLoad(DEFAULT_CFG)
+
 
 
 local BASE_COOLDOWN = {
