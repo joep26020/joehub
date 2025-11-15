@@ -61,11 +61,16 @@ end
 
 local function cfgWrite(str)
     if type(str) ~= "string" then
-        return
+        return false, "invalid config payload"
     end
-    if typeof(writefile) == "function" then
-        pcall(writefile, ConfigFileName, str)
+    if typeof(writefile) ~= "function" then
+        return false, "writefile unavailable"
     end
+    local ok, err = pcall(writefile, ConfigFileName, str)
+    if not ok then
+        return false, err
+    end
+    return true
 end
 
 local function cfgLoad(defaults)
@@ -84,13 +89,13 @@ local function cfgLoad(defaults)
 end
 
 local function cfgSave(tbl)
-    local ok, json = pcall(function()
+    local ok, jsonOrErr = pcall(function()
         return HttpService:JSONEncode(tbl or {})
     end)
-    if not ok or type(json) ~= "string" then
-        return
+    if not ok or type(jsonOrErr) ~= "string" then
+        return false, jsonOrErr
     end
-    cfgWrite(json)
+    return cfgWrite(jsonOrErr)
 end
 
 local function cfgSplitPath(path)
@@ -267,12 +272,17 @@ local CFG = {
         prevWeight     = 0.50,
     },
 
-    
+
+    TuneLimits = {},
+    AI = { external = false },
+
     AutoSave = 30,
 }
 
 local DEFAULT_CFG = cfgDeepCopy(CFG)
 CFG = cfgLoad(DEFAULT_CFG)
+CFG.TuneLimits = CFG.TuneLimits or {}
+CFG.AI = CFG.AI or { external = false }
 
 
 
@@ -292,6 +302,28 @@ CFG.Config = {
     Cooldown = CFG.Cooldown,
     Gates = CFG.Gates,
 }
+
+local SAVEABLE_CFG_KEYS = {
+    Reward   = true,
+    Cooldown = true,
+    Gates    = true,
+    SpaceMin = true,
+    SpaceMax = true,
+    M1Range  = true,
+    AutoSave = true,
+    TuneLimits = true,
+    AI = true,
+}
+
+local function cfgBuildSnapshot()
+    local snap = {}
+    for key in pairs(SAVEABLE_CFG_KEYS) do
+        if CFG[key] ~= nil then
+            snap[key] = cfgDeepCopy(CFG[key])
+        end
+    end
+    return snap
+end
 
 
 local function LOCK(tbl)
@@ -328,6 +360,24 @@ local TUNE_SCHEMA = {
     ["SpaceMax"]   = {min=3,  max=14, round=0.05},
     ["M1Range"]    = {min=3,  max=8,  round=0.05},
 }
+
+local function applySavedTuneLimits()
+    local saved = (type(CFG.TuneLimits) == "table") and CFG.TuneLimits or {}
+    local sanitized = {}
+    for key, range in pairs(saved) do
+        local schema = TUNE_SCHEMA[key]
+        if schema and type(range) == "table" then
+            local minVal = type(range.min) == "number" and range.min or schema.min
+            local maxVal = type(range.max) == "number" and range.max or schema.max
+            schema.min = minVal
+            schema.max = maxVal
+            sanitized[key] = {min = minVal, max = maxVal}
+        end
+    end
+    CFG.TuneLimits = sanitized
+end
+
+applySavedTuneLimits()
 
 local function _roundTo(v, step)
     if not step or step <= 0 then return v end
@@ -668,6 +718,7 @@ PANELS:
 • Value Limiters — adjust the min/max bounds the AI can tune.
 
 TIPS:
+• Use Save Config to persist GUI reward/limit edits between sessions.
 • Update rewards/limits visually, then /policy save to persist.
 • If something breaks, check the Errors section first.
 ]]
@@ -1061,6 +1112,29 @@ function GUI:addConsole(container)
     run.Text = "Run"
     run.Parent = inputRow
 
+    local saveRow = Instance.new("Frame")
+    saveRow.BackgroundTransparency = 1
+    saveRow.Size = UDim2.new(1,0,0,24)
+    saveRow.Parent = consoleBody
+
+    local saveBtn = btn(saveRow, "SaveConfig", "Save Config", UDim2.new(0,120,1,0), UDim2.new(0,0,0,0), Color3.fromRGB(60,88,140))
+    saveBtn.TextSize = 13
+
+    local cfgStatus = Instance.new("TextLabel")
+    cfgStatus.BackgroundTransparency = 1
+    cfgStatus.Position = UDim2.new(0,130,0,0)
+    cfgStatus.Size = UDim2.new(1,-130,1,0)
+    cfgStatus.Font = Enum.Font.Gotham
+    cfgStatus.TextSize = 13
+    cfgStatus.TextXAlignment = Enum.TextXAlignment.Left
+    cfgStatus.TextColor3 = Color3.fromRGB(180,235,190)
+    cfgStatus.Text = "Config: saved"
+    cfgStatus.Parent = saveRow
+
+    saveBtn.MouseButton1Click:Connect(function()
+        self:saveConfigToDisk()
+    end)
+
     -- ERRORS
     local errorSection, errorBody = createPanelSection(container, "Errors")
     errorSection.LayoutOrder = 2
@@ -1126,10 +1200,14 @@ function GUI:addConsole(container)
     self.helpFrame = help
     self.errorConsole = err
     self.errorLayout = errLayout
+    self.saveConfigButton = saveBtn
+    self.configStatusLabel = cfgStatus
 
     -- reward + limiter editors go under Help
     self:addRewardEditor(container, 4)
     self:addLimiterEditor(container, 5)
+
+    self:updateConfigSaveState(false)
 end
 
 
@@ -1168,6 +1246,35 @@ function GUI:logError(line)
     self.errorConsole.CanvasSize = UDim2.new(0,0,0,h + 8)
     local windowY = (self.errorConsole.AbsoluteWindowSize and self.errorConsole.AbsoluteWindowSize.Y) or 0
     self.errorConsole.CanvasPosition = Vector2.new(0, math.max(0, h + 8 - windowY))
+end
+
+function GUI:updateConfigSaveState(dirty)
+    self.configDirty = dirty and true or false
+    local lbl = self.configStatusLabel
+    if lbl then
+        if self.configDirty then
+            lbl.Text = "Config: unsaved changes"
+            lbl.TextColor3 = Color3.fromRGB(255,210,140)
+        else
+            lbl.Text = "Config: saved"
+            lbl.TextColor3 = Color3.fromRGB(180,235,190)
+        end
+    end
+end
+
+function GUI:markConfigDirty()
+    if self.configDirty then return end
+    self:updateConfigSaveState(true)
+end
+
+function GUI:saveConfigToDisk()
+    local ok, err = cfgSave(cfgBuildSnapshot())
+    if ok then
+        self:updateConfigSaveState(false)
+        self:log("[config] saved to " .. ConfigFileName)
+    else
+        self:logError("config save failed: " .. tostring(err or "unknown"))
+    end
 end
 
 function GUI:addRewardEditor(container, order)
@@ -1245,6 +1352,9 @@ function GUI:addRewardEditor(container, order)
                 return
             end
             CFG.Reward[key] = value
+            if self.markConfigDirty then
+                self:markConfigDirty()
+            end
             self:log(string.format("[reward] %s = %.3f", key, value))
         end
 
@@ -1345,6 +1455,11 @@ function GUI:addLimiterEditor(container, order)
             end
             schema.min = minVal
             schema.max = maxVal
+            CFG.TuneLimits = CFG.TuneLimits or {}
+            CFG.TuneLimits[key] = {min = minVal, max = maxVal}
+            if self.markConfigDirty then
+                self:markConfigDirty()
+            end
             self:log(string.format("[limits] %s = %.3f..%.3f", key, minVal, maxVal))
         end
 
@@ -4467,8 +4582,15 @@ function AI.RunCommand(line)
     for w in string.gmatch(line, "%S+") do table.insert(args, w) end
     local cmd = (args[1] or ""):lower()
 
+    local function markCfgDirty()
+        if bot and bot.gui and bot.gui.markConfigDirty then
+            bot.gui:markConfigDirty()
+        end
+    end
+
     local function afterSet()
         if bot and bot.ls then bot.ls:log("cmd_set",{line=line}) end
+        markCfgDirty()
     end
 
     if cmd == "/start" then bot:start(); return "Started." end
@@ -4487,6 +4609,7 @@ function AI.RunCommand(line)
     if cmd == "/external" and args[2] then
         local on = (args[2]:lower()=="on")
         CFG.AI = CFG.AI or {}; CFG.AI.external = on
+        markCfgDirty()
         return "external decide() = "..tostring(on)
     end
 
@@ -4495,6 +4618,7 @@ function AI.RunCommand(line)
         if bot._nextAutoSaveAt then
             bot._nextAutoSaveAt = os.clock() + (CFG.AutoSave or 30)
         end
+        markCfgDirty()
         return "autosave = "..tostring(CFG.AutoSave).."s"
     end
 
@@ -4524,11 +4648,13 @@ function AI.RunCommand(line)
                 applyAlpha=0.70, prevAlpha=0.30, prevWeight=0.50
             }
             for k,v in pairs(D) do CFG.Reward[k]=v end
+            markCfgDirty()
             return "reward reset."
         elseif sub == "set" and args[3] and _num(args[4]) then
             local key = args[3]
             if CFG.Reward[key] == nil then return "unknown reward key." end
             CFG.Reward[key] = _num(args[4])
+            markCfgDirty()
             return "reward "..key.." = "..tostring(CFG.Reward[key])
         end
     end
