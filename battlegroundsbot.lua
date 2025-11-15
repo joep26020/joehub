@@ -343,6 +343,8 @@ local BASE_SPACES = {
     M1Range  = CFG.M1Range,
 }
 
+local FORWARD_DASH_COOLDOWN = 20.0
+
 
 local TUNE_SCHEMA = {
     ["Cooldown.F"] = {min=6,  max=30, round=0.1},
@@ -498,6 +500,11 @@ local function safePos(part:BasePart?):Vector3?
     if ok then return pos end
     return nil
 end
+
+local FALL_STATES = {
+    [Enum.HumanoidStateType.FallingDown] = true,
+    [Enum.HumanoidStateType.Ragdoll] = true,
+}
 local STUN_TAILS = {
     ["10473655082"] = true,
     ["10473654583"] = true,
@@ -712,7 +719,6 @@ COMMANDS:
 
 PANELS:
 • Command Console — execute the slash commands above.
-• Errors — rolling feed of runtime issues and warnings.
 • Help & Tips — this quick reference.
 • Reward Editor — tweak CFG.Reward weights without typing commands.
 • Value Limiters — adjust the min/max bounds the AI can tune.
@@ -720,7 +726,7 @@ PANELS:
 TIPS:
 • Use Save Config to persist GUI reward/limit edits between sessions.
 • Update rewards/limits visually, then /policy save to persist.
-• If something breaks, check the Errors section first.
+• If something breaks, review the console output or restart the bot.
 ]]
 local function btn(p,n,t,sz,pos,clr)
     local b = Instance.new("TextButton")
@@ -1135,27 +1141,9 @@ function GUI:addConsole(container)
         self:saveConfigToDisk()
     end)
 
-    -- ERRORS
-    local errorSection, errorBody = createPanelSection(container, "Errors")
-    errorSection.LayoutOrder = 2
-
-    local err = Instance.new("ScrollingFrame")
-    err.Name = "Errors"
-    err.Size = UDim2.new(1,0,0,70) -- was 90
-    err.BackgroundColor3 = Color3.fromRGB(24,10,14)
-    err.ScrollBarThickness = 4
-    err.BorderSizePixel = 0
-    err.CanvasSize = UDim2.new(0,0,0,0)
-    err.Parent = errorBody
-
-    local errLayout = Instance.new("UIListLayout")
-    errLayout.Padding = UDim.new(0,2)
-    errLayout.SortOrder = Enum.SortOrder.LayoutOrder
-    errLayout.Parent = err
-
     -- HELP
     local helpSection, helpBody = createPanelSection(container, "Help & Tips")
-    helpSection.LayoutOrder = 3
+    helpSection.LayoutOrder = 2
 
     local help = Instance.new("ScrollingFrame")
     help.Name = "Help"
@@ -1198,14 +1186,12 @@ function GUI:addConsole(container)
     self.cmdRun = run
     self.helpText = ht
     self.helpFrame = help
-    self.errorConsole = err
-    self.errorLayout = errLayout
     self.saveConfigButton = saveBtn
     self.configStatusLabel = cfgStatus
 
     -- reward + limiter editors go under Help
-    self:addRewardEditor(container, 4)
-    self:addLimiterEditor(container, 5)
+    self:addRewardEditor(container, 3)
+    self:addLimiterEditor(container, 4)
 
     self:updateConfigSaveState(false)
 end
@@ -1231,21 +1217,6 @@ end
 
 function GUI:logError(line)
     self:log("[error] " .. tostring(line))
-    if not self.errorConsole then return end
-    local l = Instance.new("TextLabel")
-    l.BackgroundTransparency = 1
-    l.Size = UDim2.new(1, -6, 0, 18)
-    l.TextXAlignment = Enum.TextXAlignment.Left
-    l.Font = Enum.Font.Gotham
-    l.TextSize = 14
-    l.TextColor3 = Color3.fromRGB(255,160,160)
-    l.Text = tostring(line)
-    l.Parent = self.errorConsole
-    local layout = self.errorLayout
-    local h = layout and layout.AbsoluteContentSize.Y or 0
-    self.errorConsole.CanvasSize = UDim2.new(0,0,0,h + 8)
-    local windowY = (self.errorConsole.AbsoluteWindowSize and self.errorConsole.AbsoluteWindowSize.Y) or 0
-    self.errorConsole.CanvasPosition = Vector2.new(0, math.max(0, h + 8 - windowY))
 end
 
 function GUI:updateConfigSaveState(dirty)
@@ -1705,6 +1676,9 @@ function Bot.new()
     self.pendingResume=false
     self.pendingLifeStart=false
     self._nextAutoSaveAt = os.clock() + (CFG.AutoSave or 30)
+    self.errorState = false
+    self.handlingError = false
+    self.recoveringFromFall = false
 
 
     self.inDash=false
@@ -1821,11 +1795,7 @@ function Bot.new()
         end)
 
         if not ok then
-            warn("[BGBot] update error: " .. tostring(err))
-            if self.gui then
-                self.gui:logError(tostring(err))
-                self.gui:setS("Status: error – check console")
-            end
+            self:_handleRuntimeError("update", err)
         end
     end)
 
@@ -1856,10 +1826,7 @@ function Bot.new()
         end)
 
         if not ok then
-            warn("[BGBot] hardAim error: " .. tostring(err))
-            if self.gui then
-                self.gui:logError("hardAim: " .. tostring(err))
-            end
+            self:_handleRuntimeError("hardAim", err)
         end
     end)
 
@@ -1927,6 +1894,36 @@ function Bot:destroy()
     end
     if self.hardAimHB then self.hardAimHB:Disconnect() end
     self.hardAimHB = nil
+end
+
+function Bot:_handleRuntimeError(source:string, err:any)
+    if self.destroyed or self.handlingError then return end
+    self.handlingError = true
+    local message = string.format("%s", tostring(err))
+    warn(string.format("[BGBot] %s error: %s", source, message))
+    if self.gui then
+        self.gui:logError(string.format("[%s] %s", source, message))
+    end
+    self.autoStart = false
+    local gui = self.gui
+    local ok, stopErr = pcall(function()
+        if self.run then
+            self:stop()
+        else
+            self:clearMove()
+            self:_stopDashOrientation()
+            self:_stopBlocking()
+            self:_restoreCamera()
+        end
+    end)
+    if not ok then
+        warn(string.format("[BGBot] stop cleanup error: %s", tostring(stopErr)))
+    end
+    self.errorState = true
+    if gui then
+        gui:setS("Status: error – press Start to retry or Exit to close")
+    end
+    self.handlingError = false
 end
 
 
@@ -2365,11 +2362,6 @@ end
 
 local function now() return os.clock() end
 local function distOK(d:number, lo:number, hi:number) return d>=lo and d<=hi end
-local FALL_STATES = {
-    [Enum.HumanoidStateType.FallingDown] = true,
-    [Enum.HumanoidStateType.Ragdoll] = true,
-}
-
 local BANDIT_ACTION_WINDOW = 1.6
 
 local function isBehind(self:any, tgt:Enemy?):boolean
@@ -3469,11 +3461,17 @@ function Bot:selectTarget():Enemy?
         if not (m and m.Parent) then
             self:_cleanupEnemy(m)
         else
-            if self:_ensureEnemyParts(r) and self.rp and r.hrp and ((r.dist or math.huge) == math.huge) then
-                r.dist = (r.hrp.Position - self.rp.Position).Magnitude
+            local dist = math.huge
+            if self:_ensureEnemyParts(r) and self.rp and r.hrp then
+                local myPos = safePos(self.rp)
+                local enemyPos = safePos(r.hrp)
+                if myPos and enemyPos then
+                    dist = (enemyPos - myPos).Magnitude
+                end
             end
-            if self:_enemyIsValidTarget(r) and (r.dist or math.huge) < nd then
-                nearest, nd = r, r.dist or math.huge
+            r.dist = dist
+            if self:_enemyIsValidTarget(r) and dist < nd then
+                nearest, nd = r, dist
             end
         end
     end
@@ -3653,7 +3651,8 @@ function Bot:maybeDash(r:Enemy)
     local candidates = {}
     local canS = self:dashReady("S") and distOK(d, CFG.Gates.S.lo, CFG.Gates.S.hi)
     local canB = self:dashReady("B") and distOK(d, CFG.Gates.B.lo, CFG.Gates.B.hi)
-    local canF = self:dashReady("F") and distOK(d, CFG.Gates.F.lo, CFG.Gates.F.hi) and ((nowT - (self.lastFDUser or -1e9)) >= 45.0)
+    local canF = self:dashReady("F") and distOK(d, CFG.Gates.F.lo, CFG.Gates.F.hi)
+        and ((nowT - (self.lastFDUser or -1e9)) >= FORWARD_DASH_COOLDOWN)
 
     if canS then
         table.insert(candidates, {name = "S", bias = 0.55, exec = function()
@@ -3671,8 +3670,9 @@ function Bot:maybeDash(r:Enemy)
         end})
     end
     if canF then
-        local fBias = -0.60
-        if d > 50 then fBias = fBias + 0.35 end
+        local fBias = 0.35
+        if d > 40 then fBias = fBias + 0.25 end
+        if d < CFG.SpaceMax then fBias = fBias + 0.15 end
         table.insert(candidates, {name = "F", bias = fBias, exec = function()
             self:_requestForwardDash(r); return true
         end})
@@ -3682,11 +3682,13 @@ function Bot:maybeDash(r:Enemy)
     if self:_hasRecentStun(r) then
         for _,cand in ipairs(candidates) do
             if cand.name == "S" then cand.bias = (cand.bias or 0) + 0.8 end
+            if cand.name == "F" then cand.bias = (cand.bias or 0) + 0.4 end
         end
     end
     if d > 60 then
         for _,cand in ipairs(candidates) do
             if cand.name == "S" then cand.bias = (cand.bias or 0) + 0.5 end
+            if cand.name == "F" then cand.bias = (cand.bias or 0) + 0.3 end
         end
     end
 
@@ -3916,11 +3918,14 @@ function Bot:chase(r:Enemy)
         self.strafe=(math.random()<0.5) and -1 or 1
         self.lastStrafe=nowT
     end
-    strafe=self.strafe
-    if r.dist<CFG.SpaceMin*0.5 then
-        forward=-0.4
-    elseif r.dist<CFG.SpaceMin then
-        forward=0.65
+    strafe=self.strafe * 0.65
+    local spaceMin = CFG.SpaceMin or 4.6
+    if r.dist < spaceMin * 0.35 then
+        forward = -0.15
+    elseif r.dist < spaceMin * 0.8 then
+        forward = 0.9
+    else
+        forward = 1
     end
     self:setInput(forward,strafe)
     self:maybeDash(r)
@@ -3941,7 +3946,7 @@ function Bot:approachFarTarget(r:Enemy)
     
     if self:dashReady("S") then
         self:tryDash("S", r.hrp, "off", r)
-    elseif self:dashReady("F") and (t - (self.lastFDUser or -1e9) >= 45.0) then
+    elseif self:dashReady("F") and (t - (self.lastFDUser or -1e9) >= FORWARD_DASH_COOLDOWN) then
         self:tryDash("F", r.hrp, "off", r)
     end
 end
@@ -4252,6 +4257,7 @@ function Bot:start()
     local h=self.hum
     if not h or h.Health<=0 then self.gui:setS("Status: waiting spawn"); return end
     if self.run then self.gui:setS("Status: running"); return end
+    self.errorState = false
     self.autoStart=true; self.run=true; self.sess=self.ls:startSession(); self.since=os.clock()
     self.gui:setS("Status: running"); self.gui:setC("Combo: none"); self.ls:log("session_start",{char=CFG.CharKey})
     self.closeT=os.clock(); self.closeD=math.huge
@@ -4265,6 +4271,7 @@ function Bot:stop()
     self.inDash = false
     self:_stopBlocking()
     self:_restoreCamera()
+    self.recoveringFromFall = false
     self.gui:setS("Status: idle"); self.gui:setC("Combo: none"); self.ls:log("session_stop",{dur=os.clock()-self.since})
     self.stunFollow = nil
 end
@@ -4293,6 +4300,31 @@ function Bot:update(dt:number)
     self:_ensureCharacterBindings()
     if not(self.char and self.hum and self.rp) then return end
     if self.hum.Health<=0 then self.run=false return end
+
+    local fallingNow = false
+    do
+        local ok, state = pcall(function()
+            return self.hum:GetState()
+        end)
+        fallingNow = ok and FALL_STATES[state] or false
+    end
+
+    if fallingNow then
+        if not self.recoveringFromFall then
+            self.recoveringFromFall = true
+            self:clearMove()
+            self:_cancelActiveCombo()
+            if self.gui then
+                self.gui:setS("Status: recovering (knocked down)")
+            end
+        end
+        return
+    elseif self.recoveringFromFall then
+        self.recoveringFromFall = false
+        if self.gui then
+            self.gui:setS(self.run and "Status: running" or "Status: idle")
+        end
+    end
 
     if not self.run then
         self:_autoResumeTick()
@@ -4708,8 +4740,8 @@ function AI.Decide(input)
     end
     if tgt and bot:dashReady("F")
        and d>=CFG.Gates.F.lo and d<=CFG.Gates.F.hi
-       and (os.clock() - (bot.lastFDUser or -1e9) >= 45.0) then
-        add({name="F", bias=-0.20, exec=function() return bot:tryDash("F", tgt.hrp, "off", tgt) end})
+       and (os.clock() - (bot.lastFDUser or -1e9) >= FORWARD_DASH_COOLDOWN) then
+        add({name="F", bias=0.30, exec=function() return bot:tryDash("F", tgt.hrp, "off", tgt) end})
     end
 
     
