@@ -448,13 +448,13 @@ local function text(p,n,t,sz,pos,ts,bold)
     local pad=Instance.new("UIPadding"); pad.PaddingLeft=UDim.new(0,10); pad.Parent=l; return l
 end
 
-local function createPanelSection(parent:Instance, title:string)
+local function createPanelSection(parent, title, startCollapsed)
     local section = Instance.new("Frame")
     section.Name = title:gsub("%s+","").."Section"
     section.BackgroundColor3 = Color3.fromRGB(22,24,33)
     section.BorderSizePixel = 0
     section.AutomaticSize = Enum.AutomaticSize.Y
-    section.Size = UDim2.new(1,0,0,80)
+    section.Size = UDim2.new(1,0,0,0)
     section.Parent = parent
 
     local stroke = Instance.new("UIStroke")
@@ -463,33 +463,54 @@ local function createPanelSection(parent:Instance, title:string)
     stroke.Transparency = 0.35
     stroke.Parent = section
 
-    local header = Instance.new("TextLabel")
+    -- clickable header
+    local header = Instance.new("TextButton")
     header.Name = "Header"
     header.BackgroundTransparency = 1
-    header.Position = UDim2.new(0,10,0,6)
-    header.Size = UDim2.new(1,-20,0,26)
+    header.Position = UDim2.new(0,10,0,4)
+    header.Size = UDim2.new(1,-20,0,22)
     header.Font = Enum.Font.GothamBold
-    header.TextSize = 16
+    header.TextSize = 14 -- smaller
     header.TextColor3 = Color3.fromRGB(220,230,255)
     header.TextXAlignment = Enum.TextXAlignment.Left
-    header.Text = title
+    header.AutoButtonColor = false
+    header.Text = "" -- set in setCollapsed
     header.Parent = section
 
     local body = Instance.new("Frame")
     body.Name = "Body"
     body.BackgroundTransparency = 1
-    body.Position = UDim2.new(0,10,0,36)
-    body.Size = UDim2.new(1,-20,1,-46)
+    body.Position = UDim2.new(0,10,0,28)
+    body.Size = UDim2.new(1,-20,0,0)
     body.AutomaticSize = Enum.AutomaticSize.Y
     body.Parent = section
 
     local bodyLayout = Instance.new("UIListLayout")
-    bodyLayout.Padding = UDim.new(0,6)
+    bodyLayout.Padding = UDim.new(0,4)
     bodyLayout.SortOrder = Enum.SortOrder.LayoutOrder
     bodyLayout.Parent = body
 
+    local function setCollapsed(collapsed)
+        section:SetAttribute("Collapsed", collapsed and true or false)
+        body.Visible = not collapsed
+        if collapsed then
+            header.Text = "[+] " .. title
+        else
+            header.Text = "[-] " .. title
+        end
+    end
+
+    local initial = startCollapsed and true or false
+    setCollapsed(initial)
+
+    header.MouseButton1Click:Connect(function()
+        local cur = section:GetAttribute("Collapsed")
+        setCollapsed(not cur)
+    end)
+
     return section, body
 end
+
 
 local PANEL_HELP_TEXT = [[
 COMMANDS:
@@ -515,13 +536,32 @@ TIPS:
 • If something breaks, check the Errors section first.
 ]]
 local function btn(p,n,t,sz,pos,clr)
-    local b=Instance.new("TextButton"); b.Name=n; b.Size=sz; b.Position=pos
-    b.BackgroundColor3=clr or Color3.fromRGB(48,60,96)
-    b.TextColor3=Color3.fromRGB(240,240,240); b.Font=Enum.Font.GothamBold; b.TextSize=18; b.Text=t; b.BorderSizePixel=0; b.AutoButtonColor=true
-    local s=Instance.new("UIStroke"); s.Color=Color3.fromRGB(94,123,255); s.Thickness=1.4; s.Transparency=0.35; s.Parent=b
-    local corner=Instance.new("UICorner"); corner.CornerRadius=UDim.new(0,6); corner.Parent=b
-    b.Parent=p; return b
+    local b = Instance.new("TextButton")
+    b.Name = n
+    b.Size = sz
+    b.Position = pos
+    b.BackgroundColor3 = clr or Color3.fromRGB(48,60,96)
+    b.TextColor3 = Color3.fromRGB(240,240,240)
+    b.Font = Enum.Font.GothamBold
+    b.TextSize = 14 -- smaller text
+    b.Text = t
+    b.BorderSizePixel = 0
+    b.AutoButtonColor = true
+
+    local s = Instance.new("UIStroke")
+    s.Color = Color3.fromRGB(94,123,255)
+    s.Thickness = 1.4
+    s.Transparency = 0.35
+    s.Parent = b
+
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0,4)
+    corner.Parent = b
+
+    b.Parent = p
+    return b
 end
+
 local function drag(f:Frame)
     local g=false; local st,sp
     f.InputBegan:Connect(function(i) if i.UserInputType==Enum.UserInputType.MouseButton1 then g=true; st=i.Position; sp=f.Position; i.Changed:Connect(function() if i.UserInputState==Enum.UserInputState.End then g=false end end) end end)
@@ -548,10 +588,10 @@ local function createInfoCard(parent:Instance, title:string, initialText:string?
     local header = Instance.new("TextLabel")
     header.Name = title.."Header"
     header.BackgroundTransparency = 1
-    header.Size = UDim2.new(1,-20,0,16)
-    header.Position = UDim2.new(0,10,0,10)
+    header.Size = UDim2.new(1,-20,0,14)
+    header.Position = UDim2.new(0,10,0,8)
     header.Font = Enum.Font.GothamSemibold
-    header.TextSize = 12
+    header.TextSize = 11 -- smaller
     header.TextColor3 = Color3.fromRGB(150,160,210)
     header.TextXAlignment = Enum.TextXAlignment.Left
     header.Text = string.upper(title)
@@ -560,10 +600,10 @@ local function createInfoCard(parent:Instance, title:string, initialText:string?
     local value = Instance.new("TextLabel")
     value.Name = title.."Value"
     value.BackgroundTransparency = 1
-    value.Size = UDim2.new(1,-20,1,-36)
-    value.Position = UDim2.new(0,10,0,30)
+    value.Size = UDim2.new(1,-20,1,-28)
+    value.Position = UDim2.new(0,10,0,22)
     value.Font = (opts and opts.font) or Enum.Font.GothamBold
-    value.TextSize = (opts and opts.textSize) or 18
+    value.TextSize = (opts and opts.textSize) or 16 -- was 18
     value.TextColor3 = (opts and opts.textColor) or Color3.fromRGB(230,235,255)
     value.TextXAlignment = (opts and opts.textXAlignment) or Enum.TextXAlignment.Left
     value.TextYAlignment = Enum.TextYAlignment.Top
@@ -573,111 +613,217 @@ local function createInfoCard(parent:Instance, title:string, initialText:string?
 
     return value, header, card
 end
+
 function GUI.new()
-    local self=setmetatable({},GUI)
-    local g=Instance.new("ScreenGui"); g.Name="BGBotUI"; g.ResetOnSpawn=false; g.ZIndexBehavior=Enum.ZIndexBehavior.Sibling; g.Parent=gethui and gethui() or game:GetService("CoreGui")
-    local f=Instance.new("Frame"); f.Name="Main"; f.Size=UDim2.new(0,720,0,720); f.Position=UDim2.new(0.5,-360,0.5,-360); f.BackgroundColor3=Color3.fromRGB(17,18,26); f.BorderSizePixel=0; f.Parent=g; drag(f)
-    local s=Instance.new("UIStroke"); s.Color=Color3.fromRGB(76,110,255); s.Thickness=1.5; s.Transparency=0.15; s.Parent=f
-    local corner=Instance.new("UICorner"); corner.CornerRadius=UDim.new(0,10); corner.Parent=f
+    local self = setmetatable({}, GUI)
 
-    local title=Instance.new("TextLabel"); title.Name="Header"; title.Size=UDim2.new(1,-40,0,48); title.Position=UDim2.new(0,20,0,12)
-    title.BackgroundTransparency=1; title.Font=Enum.Font.GothamBold; title.TextSize=28; title.TextXAlignment=Enum.TextXAlignment.Left
-    title.TextColor3=Color3.fromRGB(205,214,255); title.Text="Aggro Bot v6.0"; title.Parent=f
+    local g = Instance.new("ScreenGui")
+    g.Name = "BGBotUI"
+    g.ResetOnSpawn = false
+    g.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    g.Parent = gethui and gethui() or game:GetService("CoreGui")
 
-    local controlRow=Instance.new("Frame"); controlRow.Name="ControlRow"; controlRow.Size=UDim2.new(1,-40,0,48); controlRow.Position=UDim2.new(0,20,0,72)
-    controlRow.BackgroundTransparency=1; controlRow.Parent=f
-    local controlLayout=Instance.new("UIGridLayout"); controlLayout.CellPadding=UDim2.new(0,12,0,0); controlLayout.CellSize=UDim2.new(1/3,-8,1,0)
-    controlLayout.FillDirectionMaxCells=3; controlLayout.HorizontalAlignment=Enum.HorizontalAlignment.Left; controlLayout.Parent=controlRow
+    local f = Instance.new("Frame")
+    f.Name = "Main"
+    f.Size = UDim2.new(0, 640, 0, 540) -- smaller
+    f.Position = UDim2.new(0.5, -320, 0.5, -270)
+    f.BackgroundColor3 = Color3.fromRGB(17,18,26)
+    f.BorderSizePixel = 0
+    f.Parent = g
+    drag(f)
 
-    local startB=btn(controlRow,"Start","Start",UDim2.new(1,0,1,0),UDim2.new(0,0,0,0))
-    startB.LayoutOrder=1
-    local stopB =btn(controlRow,"Stop","Stop", UDim2.new(1,0,1,0), UDim2.new(0,0,0,0), Color3.fromRGB(120,50,50))
-    stopB.LayoutOrder=2
-    local exitB =btn(controlRow,"Exit","Exit", UDim2.new(1,0,1,0), UDim2.new(0,0,0,0), Color3.fromRGB(80,30,30))
-    exitB.LayoutOrder=3
+    local s = Instance.new("UIStroke")
+    s.Color = Color3.fromRGB(76,110,255)
+    s.Thickness = 1.5
+    s.Transparency = 0.15
+    s.Parent = f
 
-    local statsGrid=Instance.new("Frame"); statsGrid.Name="StatusGrid"; statsGrid.Size=UDim2.new(1,-40,0,180); statsGrid.Position=UDim2.new(0,20,0,136)
-    statsGrid.BackgroundTransparency=1; statsGrid.Parent=f
-    local grid=Instance.new("UIGridLayout"); grid.CellPadding=UDim2.new(0,12,0,12); grid.CellSize=UDim2.new(0.5,-6,0,80); grid.FillDirectionMaxCells=2; grid.Parent=statsGrid
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0,8)
+    corner.Parent = f
+
+    -- header
+    local title = Instance.new("TextLabel")
+    title.Name = "Header"
+    title.Size = UDim2.new(1,-40,0,40)
+    title.Position = UDim2.new(0,20,0,10)
+    title.BackgroundTransparency = 1
+    title.Font = Enum.Font.GothamBold
+    title.TextSize = 22 -- smaller
+    title.TextXAlignment = Enum.TextXAlignment.Left
+    title.TextColor3 = Color3.fromRGB(205,214,255)
+    title.Text = "Aggro Bot v6.0"
+    title.Parent = f
+
+    -- top buttons
+    local controlRow = Instance.new("Frame")
+    controlRow.Name = "ControlRow"
+    controlRow.Size = UDim2.new(1,-40,0,36)
+    controlRow.Position = UDim2.new(0,20,0,54)
+    controlRow.BackgroundTransparency = 1
+    controlRow.Parent = f
+
+    local controlLayout = Instance.new("UIGridLayout")
+    controlLayout.CellPadding = UDim2.new(0,8,0,0)
+    controlLayout.CellSize = UDim2.new(1/3,-6,1,0)
+    controlLayout.FillDirectionMaxCells = 3
+    controlLayout.HorizontalAlignment = Enum.HorizontalAlignment.Left
+    controlLayout.Parent = controlRow
+
+    local startB = btn(controlRow,"Start","Start",UDim2.new(1,0,1,0),UDim2.new(0,0,0,0))
+    startB.LayoutOrder = 1
+    local stopB  = btn(controlRow,"Stop","Stop", UDim2.new(1,0,1,0), UDim2.new(0,0,0,0), Color3.fromRGB(120,50,50))
+    stopB.LayoutOrder = 2
+    local exitB  = btn(controlRow,"Exit","Exit", UDim2.new(1,0,1,0), UDim2.new(0,0,0,0), Color3.fromRGB(80,30,30))
+    exitB.LayoutOrder = 3
+
+    -- status cards
+    local statsGrid = Instance.new("Frame")
+    statsGrid.Name = "StatusGrid"
+    statsGrid.Size = UDim2.new(1,-40,0,120)
+    statsGrid.Position = UDim2.new(0,20,0,96)
+    statsGrid.BackgroundTransparency = 1
+    statsGrid.Parent = f
+
+    local grid = Instance.new("UIGridLayout")
+    grid.CellPadding = UDim2.new(0,8,0,8)
+    grid.CellSize = UDim2.new(0.5,-4,0,64) -- shorter cards
+    grid.FillDirectionMaxCells = 2
+    grid.Parent = statsGrid
 
     local statusValue, statusHeader = createInfoCard(statsGrid, "Status", "Idle")
     local targetValue, targetHeader = createInfoCard(statsGrid, "Target", "None")
-    local comboValue, comboHeader   = createInfoCard(statsGrid, "Combo", "None")
-    local evValue, evHeader         = createInfoCard(statsGrid, "Evasive", "Ready")
-    self.status=statusValue; self.statusHeader=statusHeader
-    self.target=targetValue; self.targetHeader=targetHeader
-    self.combo=comboValue; self.comboHeader=comboHeader
-    self.ev=evValue; self.evHeader=evHeader
+    local comboValue,  comboHeader  = createInfoCard(statsGrid, "Combo", "None")
+    local evValue,     evHeader     = createInfoCard(statsGrid, "Evasive", "Ready")
 
-    local detailRow=Instance.new("Frame"); detailRow.Name="DetailRow"; detailRow.Size=UDim2.new(1,-40,0,96); detailRow.Position=UDim2.new(0,20,0,332)
-    detailRow.BackgroundTransparency=1; detailRow.Parent=f
-    local detailLayout=Instance.new("UIListLayout"); detailLayout.FillDirection=Enum.FillDirection.Horizontal; detailLayout.SortOrder=Enum.SortOrder.LayoutOrder
-    detailLayout.Padding=UDim.new(0,12); detailLayout.Parent=detailRow
+    self.status = statusValue; self.statusHeader = statusHeader
+    self.target = targetValue; self.targetHeader = targetHeader
+    self.combo  = comboValue;  self.comboHeader  = comboHeader
+    self.ev     = evValue;     self.evHeader     = evHeader
 
-    local movesValue, movesHeader, movesCard = createInfoCard(detailRow, "Dash Cooldowns", "", {textSize=16, font=Enum.Font.Gotham})
-    movesCard.Size=UDim2.new(0.5,-6,1,0)
-    self.moves=movesValue; self.movesHeader=movesHeader
+    -- mid row: cooldowns + rules
+    local detailRow = Instance.new("Frame")
+    detailRow.Name = "DetailRow"
+    detailRow.Size = UDim2.new(1,-40,0,72)
+    detailRow.Position = UDim2.new(0,20,0,226)
+    detailRow.BackgroundTransparency = 1
+    detailRow.Parent = f
+
+    local detailLayout = Instance.new("UIListLayout")
+    detailLayout.FillDirection = Enum.FillDirection.Horizontal
+    detailLayout.SortOrder = Enum.SortOrder.LayoutOrder
+    detailLayout.Padding = UDim.new(0,8)
+    detailLayout.Parent = detailRow
+
+    local movesValue, movesHeader, movesCard =
+        createInfoCard(detailRow, "Dash Cooldowns", "", {textSize=14, font=Enum.Font.Gotham})
+    movesCard.Size = UDim2.new(0.5,-4,1,0)
+    self.moves = movesValue; self.movesHeader = movesHeader
+
     local rulesText = "FDash[14..30] • SideOff relock≤3.5 • Still>5s→dash • Idle atk≤15s • M1 openers"
-    local rulesValue, rulesHeader, rulesCard = createInfoCard(detailRow, "Rules", rulesText, {textSize=14, font=Enum.Font.Gotham, textColor=Color3.fromRGB(210,220,255)})
-    rulesCard.Size=UDim2.new(0.5,-6,1,0)
-    self.rules=rulesValue; self.rulesHeader=rulesHeader
+    local rulesValue, rulesHeader, rulesCard =
+        createInfoCard(detailRow, "Rules", rulesText, {textSize=13, font=Enum.Font.Gotham, textColor=Color3.fromRGB(210,220,255)})
+    rulesCard.Size = UDim2.new(0.5,-4,1,0)
+    self.rules = rulesValue; self.rulesHeader = rulesHeader
 
-    local panel=Instance.new("Frame"); panel.Name="DataPanel"; panel.Size=UDim2.new(1,-40,0,248); panel.Position=UDim2.new(0,20,0,452)
-    panel.BackgroundColor3=Color3.fromRGB(20,22,30); panel.BorderSizePixel=0; panel.Parent=f
-    local pst=Instance.new("UIStroke"); pst.Color=Color3.fromRGB(76,110,255); pst.Thickness=1; pst.Transparency=0.2; pst.Parent=panel
+    -- bottom panel
+    local panel = Instance.new("Frame")
+    panel.Name = "DataPanel"
+    panel.Size = UDim2.new(1,-40,0,220) -- smaller height
+    panel.Position = UDim2.new(0,20,0,310)
+    panel.BackgroundColor3 = Color3.fromRGB(20,22,30)
+    panel.BorderSizePixel = 0
+    panel.Parent = f
+
+    local pst = Instance.new("UIStroke")
+    pst.Color = Color3.fromRGB(76,110,255)
+    pst.Thickness = 1
+    pst.Transparency = 0.2
+    pst.Parent = panel
 
     local columns = Instance.new("Frame")
     columns.BackgroundTransparency = 1
-    columns.Size = UDim2.new(1,-24,1,-24)
-    columns.Position = UDim2.new(0,12,0,12)
+    columns.Size = UDim2.new(1,-24,1,-20)
+    columns.Position = UDim2.new(0,12,0,10)
     columns.Parent = panel
 
     local leftCol = Instance.new("Frame")
     leftCol.Name = "LeftColumn"
     leftCol.BackgroundTransparency = 1
-    leftCol.Size = UDim2.new(0.48,-6,1,0)
+    leftCol.Size = UDim2.new(0.46,-4,1,0)
     leftCol.Position = UDim2.new(0,0,0,0)
     leftCol.Parent = columns
 
-    local rightCol = Instance.new("Frame")
+    -- right column is scrollable
+    local rightCol = Instance.new("ScrollingFrame")
     rightCol.Name = "RightColumn"
     rightCol.BackgroundTransparency = 1
-    rightCol.Size = UDim2.new(0.52,-6,1,0)
-    rightCol.Position = UDim2.new(0.48,12,0,0)
+    rightCol.Size = UDim2.new(0.54,-4,1,0)
+    rightCol.Position = UDim2.new(0.46,8,0,0)
+    rightCol.ScrollBarThickness = 4
+    rightCol.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    rightCol.CanvasSize = UDim2.new(0,0,0,0)
+    rightCol.BorderSizePixel = 0
     rightCol.Parent = columns
 
+    -- combo tracker (left)
     local comboFrame = Instance.new("Frame")
     comboFrame.Name = "Combos"
     comboFrame.Size = UDim2.new(1,0,1,0)
-    comboFrame.BackgroundColor3=Color3.fromRGB(16,18,26)
-    comboFrame.BorderSizePixel=0
+    comboFrame.BackgroundColor3 = Color3.fromRGB(16,18,26)
+    comboFrame.BorderSizePixel = 0
     comboFrame.Parent = leftCol
+
     local comboStroke = Instance.new("UIStroke")
-    comboStroke.Color=Color3.fromRGB(76,110,255)
-    comboStroke.Thickness=1
-    comboStroke.Transparency=0.25
-    comboStroke.Parent=comboFrame
+    comboStroke.Color = Color3.fromRGB(76,110,255)
+    comboStroke.Thickness = 1
+    comboStroke.Transparency = 0.25
+    comboStroke.Parent = comboFrame
 
     local comboPad = Instance.new("UIPadding")
-    comboPad.PaddingLeft = UDim.new(0,8)
-    comboPad.PaddingRight = UDim.new(0,8)
-    comboPad.PaddingTop = UDim.new(0,8)
+    comboPad.PaddingLeft  = UDim.new(0,6)
+    comboPad.PaddingRight = UDim.new(0,6)
+    comboPad.PaddingTop   = UDim.new(0,6)
     comboPad.Parent = comboFrame
 
-    self.ctitle = text(comboFrame,"CT","Combo Tracker",UDim2.new(1,-16,0,26),UDim2.new(0,0,0,0),18,true); self.ctitle.BackgroundTransparency=1
-    local list=Instance.new("ScrollingFrame"); list.Name="List"; list.Size=UDim2.new(1,-4,1,-46); list.Position=UDim2.new(0,0,0,36)
-    list.CanvasSize=UDim2.new(0,0,0,0); list.BackgroundColor3=Color3.fromRGB(11,13,18); list.BorderSizePixel=0; list.ScrollBarThickness=4; list.Parent=comboFrame
-    local ul=Instance.new("UIListLayout"); ul.Padding=UDim.new(0,4); ul.SortOrder=Enum.SortOrder.LayoutOrder; ul.Parent=list
-    self.comboList=list; self.comboLayout=ul
+    self.ctitle = text(comboFrame,"CT","Combo Tracker",UDim2.new(1,-12,0,22),UDim2.new(0,0,0,0),16,true)
+    self.ctitle.BackgroundTransparency = 1
 
-    self.gui=g; self.frame=f; self.startB=startB; self.stopB=stopB; self.exitB=exitB
+    local list = Instance.new("ScrollingFrame")
+    list.Name = "List"
+    list.Size = UDim2.new(1,-2,1,-30)
+    list.Position = UDim2.new(0,0,0,26)
+    list.CanvasSize = UDim2.new(0,0,0,0)
+    list.BackgroundColor3 = Color3.fromRGB(11,13,18)
+    list.BorderSizePixel = 0
+    list.ScrollBarThickness = 4
+    list.Parent = comboFrame
 
-    self:setS("Status: idle"); self:setT("Target: none"); self:setC("Combo: none"); self:setE("Evasive: ready")
-    self:updateCDs(0,0,0); self.rules.Text = rulesText
+    local ul = Instance.new("UIListLayout")
+    ul.Padding = UDim.new(0,2)
+    ul.SortOrder = Enum.SortOrder.LayoutOrder
+    ul.Parent = list
+
+    self.comboList  = list
+    self.comboLayout = ul
+
+    self.gui   = g
+    self.frame = f
+    self.startB = startB
+    self.stopB  = stopB
+    self.exitB  = exitB
+
+    self:setS("Status: idle")
+    self:setT("Target: none")
+    self:setC("Combo: none")
+    self:setE("Evasive: ready")
+    self:updateCDs(0,0,0)
+    self.rules.Text = rulesText
 
     self:addConsole(rightCol)
     return self
 end
+
 
 local function applyCardText(label:TextLabel?, header:TextLabel?, fallback:string, text:string)
     if not label then return end
@@ -725,8 +871,10 @@ function GUI:addConsole(container)
     layout.SortOrder = Enum.SortOrder.LayoutOrder
     layout.Parent = container
 
+    -- COMMAND CONSOLE
     local consoleSection, consoleBody = createPanelSection(container, "Command Console")
     consoleSection.LayoutOrder = 1
+
     local consoleBodyLayout = Instance.new("UIListLayout")
     consoleBodyLayout.SortOrder = Enum.SortOrder.LayoutOrder
     consoleBodyLayout.Padding = UDim.new(0,6)
@@ -734,7 +882,7 @@ function GUI:addConsole(container)
 
     local console = Instance.new("ScrollingFrame")
     console.Name = "Console"
-    console.Size = UDim2.new(1,0,0,150)
+    console.Size = UDim2.new(1,0,0,110) -- was 150
     console.BackgroundColor3 = Color3.fromRGB(14,16,22)
     console.BorderSizePixel = 0
     console.ScrollBarThickness = 4
@@ -742,18 +890,18 @@ function GUI:addConsole(container)
     console.Parent = consoleBody
 
     local cl = Instance.new("UIListLayout")
-    cl.Padding = UDim.new(0, 2)
+    cl.Padding = UDim.new(0,2)
     cl.SortOrder = Enum.SortOrder.LayoutOrder
     cl.Parent = console
 
     local inputRow = Instance.new("Frame")
     inputRow.BackgroundTransparency = 1
-    inputRow.Size = UDim2.new(1,0,0,32)
+    inputRow.Size = UDim2.new(1,0,0,24) -- was 32
     inputRow.Parent = consoleBody
 
     local input = Instance.new("TextBox")
     input.Name = "Cmd"
-    input.Size = UDim2.new(1,-80,1,0)
+    input.Size = UDim2.new(1,-70,1,0)
     input.Position = UDim2.new(0,0,0,0)
     input.PlaceholderText = "Type /help for available commands"
     input.Text = ""
@@ -762,41 +910,46 @@ function GUI:addConsole(container)
     input.ClearTextOnFocus = false
     input.TextEditable = true
     input.Font = Enum.Font.Gotham
-    input.TextSize = 16
+    input.TextSize = 14
     input.TextXAlignment = Enum.TextXAlignment.Left
     input.Parent = inputRow
 
     local run = Instance.new("TextButton")
     run.Name = "Run"
-    run.Size = UDim2.new(0, 72, 1, 0)
-    run.Position = UDim2.new(1,-72,0,0)
+    run.Size = UDim2.new(0,64,1,0)
+    run.Position = UDim2.new(1,-64,0,0)
     run.BackgroundColor3 = Color3.fromRGB(48,60,96)
     run.TextColor3 = Color3.fromRGB(240,240,240)
     run.Font = Enum.Font.GothamBold
-    run.TextSize = 16
+    run.TextSize = 14
     run.Text = "Run"
     run.Parent = inputRow
 
+    -- ERRORS
     local errorSection, errorBody = createPanelSection(container, "Errors")
     errorSection.LayoutOrder = 2
+
     local err = Instance.new("ScrollingFrame")
     err.Name = "Errors"
-    err.Size = UDim2.new(1,0,0,90)
+    err.Size = UDim2.new(1,0,0,70) -- was 90
     err.BackgroundColor3 = Color3.fromRGB(24,10,14)
     err.ScrollBarThickness = 4
     err.BorderSizePixel = 0
     err.CanvasSize = UDim2.new(0,0,0,0)
     err.Parent = errorBody
+
     local errLayout = Instance.new("UIListLayout")
     errLayout.Padding = UDim.new(0,2)
     errLayout.SortOrder = Enum.SortOrder.LayoutOrder
     errLayout.Parent = err
 
+    -- HELP
     local helpSection, helpBody = createPanelSection(container, "Help & Tips")
     helpSection.LayoutOrder = 3
+
     local help = Instance.new("ScrollingFrame")
     help.Name = "Help"
-    help.Size = UDim2.new(1,0,0,150)
+    help.Size = UDim2.new(1,0,0,110) -- was 150
     help.BackgroundColor3 = Color3.fromRGB(18,20,28)
     help.BorderSizePixel = 0
     help.ScrollBarThickness = 4
@@ -817,7 +970,7 @@ function GUI:addConsole(container)
     ht.TextYAlignment = Enum.TextYAlignment.Top
     ht.TextWrapped = true
     ht.Font = Enum.Font.Gotham
-    ht.TextSize = 14
+    ht.TextSize = 13
     ht.TextColor3 = Color3.fromRGB(210,220,255)
     ht.Text = PANEL_HELP_TEXT
     ht.Parent = help
@@ -838,9 +991,11 @@ function GUI:addConsole(container)
     self.errorConsole = err
     self.errorLayout = errLayout
 
+    -- reward + limiter editors go under Help
     self:addRewardEditor(container, 4)
     self:addLimiterEditor(container, 5)
 end
+
 
 function GUI:log(line)
     if not self.console then return end
@@ -880,7 +1035,7 @@ function GUI:logError(line)
 end
 
 function GUI:addRewardEditor(container, order)
-    local section, body = createPanelSection(container, "Reward Editor")
+    local section, body = createPanelSection(container, "Reward Editor", true)
     section.LayoutOrder = order or (section.LayoutOrder or 4)
     local desc = Instance.new("TextLabel")
     desc.BackgroundTransparency = 1
@@ -965,7 +1120,7 @@ function GUI:addRewardEditor(container, order)
 end
 
 function GUI:addLimiterEditor(container, order)
-    local section, body = createPanelSection(container, "Value Limiters")
+    local section, body = createPanelSection(container, "Value Limiters", true)
     section.LayoutOrder = order or (section.LayoutOrder or 5)
     local desc = Instance.new("TextLabel")
     desc.BackgroundTransparency = 1
@@ -4578,4 +4733,3 @@ end
 
 AI.Init({autorun = true})
 return AI
-
