@@ -1614,7 +1614,7 @@ function Bot.new()
             if not tgt then return end
 
 			self.hum.AutoRotate = false
-            aimCFrame(self.rp, tgt)
+			aimCFrame(self.rp, tgt)
 
             local cam = workspace.CurrentCamera
             if cam then
