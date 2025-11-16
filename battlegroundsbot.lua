@@ -1612,8 +1612,9 @@ function Bot.new()
             local tgt = (self.currentTarget and self.currentTarget.hrp) or nil
             if not tgt then return end
 
-            self.hum.AutoRotate = false
-            aimCFrame(self.rp, tgt)
+			self.hum.AutoRotate = false
+            aimCFrame(self.rp, tgt)
+            self:alignCam()
 
             local cam = workspace.CurrentCamera
             if cam then
