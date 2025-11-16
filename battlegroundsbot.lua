@@ -255,20 +255,20 @@ local CFG = {
 
 
     Data  = "bgbot",
-    Flush = 0.0166,
+    Flush = 0.05,
 
     BlockAnimId = "rbxassetid://10470389827",
 
     
     Reward = {
-        dmgDealt       = 1.00,
-        dmgTaken       = -0.70,
-        finisherBonus  = 6.00,
-        forcedUnblock  = 3.00,
-        keptAdvantage  = 2.00,
-        earlyPunish    = -5.00,
-        blockNoDamage  = -3.00,
-        lostSpacing    = -2.00,
+        dmgDealt       = 2.00,
+        dmgTaken       = -0.30,
+        finisherBonus  = 3.00,
+        forcedUnblock  = 2.00,
+        keptAdvantage  = 4.00,
+        earlyPunish    = -4.00,
+        blockNoDamage  = -10.00,
+        lostSpacing    = -0.50,
 
         applyAlpha     = 0.70,
         prevAlpha      = 0.30,
@@ -279,7 +279,7 @@ local CFG = {
     TuneLimits = {},
     AI = { external = false },
 
-    AutoSave = 30,
+    AutoSave = 10,
 }
 
 local DEFAULT_CFG = cfgDeepCopy(CFG)
@@ -1439,12 +1439,6 @@ function Bot:_aimCameraAt(tHRP:BasePart?)
     cam.CFrame = CFrame.new(camPos, camPos + dir.Unit)
 end
 
-local function yawLook(from: Vector3, to: Vector3): CFrame?
-    local flat = Vector3.new(to.X, from.Y, to.Z) - from
-    if flat.Magnitude < 1e-3 then return nil end
-    return CFrame.lookAt(from, from + flat.Unit)
-end
-
 function Bot:_restoreCamera()
     local cam = workspace.CurrentCamera
     if cam and self.savedCameraType then
@@ -1612,18 +1606,14 @@ function Bot.new()
 
     self.hardAimHB = RunService.RenderStepped:Connect(function()
         local ok, err = pcall(function()
-            if not (self.rp and (self.run or self.blocking)) then return end
+			if self.hum and self.hum:GetState()==Enum.HumanoidStateType.FallingDown then return end
             if self.inDash then return end
-            if self.hum and self.hum:GetState()==Enum.HumanoidStateType.FallingDown then return end
 
             local tgt = (self.currentTarget and self.currentTarget.hrp) or nil
             if not tgt then return end
 
-            local cf = yawLook(self.rp.Position, tgt.Position)
-            if not cf then return end
-
             self.hum.AutoRotate = false
-            self.rp.CFrame = cf
+            aimCFrame(self.rp, tgt)
 
             local cam = workspace.CurrentCamera
             if cam then
@@ -2101,7 +2091,7 @@ function Bot:aimAt(tHRP:BasePart?)
     if self.destroyed or self.inDash then return end
     if not (self.hum and self.rp) then return end
 
-    -- Own rotation fully while the bot is active
+
     self.hum.AutoRotate = false
 
     if not tHRP then
@@ -2121,10 +2111,7 @@ function Bot:aimAt(tHRP:BasePart?)
     local there = safePos(tHRP)
     if not (here and there) then return end
 
-    local cf = yawLook(here, there)
-    if not cf then return end
-
-    self.rp.CFrame = cf
+	aimCFrame(self.rp, tHRP)
     self:alignCam()
 end
 
@@ -4257,7 +4244,6 @@ function Bot:update(dt:number)
             local meta = self.bandit.meta or {}
             self.gui:setKPI(meta.generation or 0, meta.epsilon or self.bandit.epsilon or 0.15, meta.lastLife or {})
         end
-        warn("[BGBot] policy autosaved")
     end
 
 
