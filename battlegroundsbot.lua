@@ -1038,7 +1038,6 @@ function GUI:updateCooldownBar(name, value)
     if not bars then return end
     local bar = bars[name]
     if not (bar and bar.Parent) then return end
-    -- placeholder for future visual bars
 end
 function GUI:updateCombos(data)
     for _,ch in ipairs(self.comboList:GetChildren()) do if ch:IsA("TextLabel") then ch:Destroy() end end
@@ -3274,7 +3273,10 @@ function Bot:_updateCurrentTarget(dt:number)
     r.ulted = attrTrue(r.model, "Ulted")
     r.absoluteImmortal = r.model:FindFirstChild("AbsoluteImmortal") ~= nil
     r.slowed = r.model:FindFirstChild("Slowed") ~= nil
-
+    local br = r.blockReact
+	if (br >= 4.9 and br <= 5) or (br >= -5 and br <= -4.9) then
+		-- This is a successful block, you can add tracking here if needed.
+	end
 
     local meIsConsec = self:isAnimPlaying("ConsecutivePunches")
     if meIsConsec and r.slowed then
@@ -3448,7 +3450,7 @@ function Bot:_judgeEvasive(ts:number)
     end)
 end
 
-function Bot:attemptEvasive(reason:string)
+function Bot:evasive(reason:string)
     if not self.evReady then return false end
     if self.blocking then self:_forceUnblockNow(); task.wait(0.05) end
     self:clearMove(); self.evReady=false; self.evTimer=CFG.EvasiveCD
@@ -3476,7 +3478,7 @@ function Bot:_isUlted():boolean
     local flag = attrTrue(me, "Ulted")
 
     if not flag then
-        local test = live and live:FindFirstChild("battlegroundaitest")
+        local test = live and live:FindFirstChild("battlegr0undaitest")
         flag = flag or (test and true or false)
     end
     self.isUlt = flag and true or false
@@ -3951,9 +3953,9 @@ function Bot:neutral(tgt:Enemy?)
         elseif d < nearIdeal then
             forward = -0.35
         elseif d > farIdeal then
-            forward = 0.85
+            forward = 0.95
         else
-            forward = 0.25
+            forward = 0.65
         end
 
         if d < nearIdeal and self:dashReady("B") and not self.inDash then
@@ -4387,9 +4389,8 @@ function Bot:update(dt:number)
     end
 
 
-    if self.shouldPanic then if self:attemptEvasive("panic") then self.shouldPanic=false end end
-    if self:shouldEvasive(tgt) then if self:attemptEvasive("react") then self.gui:updateCDs(self:_cdLeft("F"), self:_cdLeft("B"), self:_cdLeft("S")); return end end
-
+    if self.shouldPanic then if self:evasive("panic") then self.shouldPanic=false end end 
+	if self:shouldEvasive(tgt) then if self:evasive("react") then self.gui:updateCDs(self:_cdLeft("F"), self:_cdLeft("B"), self:_cdLeft("S")); return end end
 
     local likelyBlk = (nowT-tgt.style.lastBlk)<0.30 or (tgt.style.def>6)
     if tgt.hp<=CFG.SnipeHP and not likelyBlk and tgt.dist<=CFG.SnipeRange and (nowT-self.lastSnipe>0.8) then
@@ -4526,137 +4527,8 @@ function AI.Init(opts)
 end
 
 
-local HELP_TEXT = table.concat({
-    "COMMANDS:",
-    "/start — run the bot • /stop — pause • /exit — close UI",
-    "/epsilon <0..1> — set exploration rate",
-    "/external on|off — allow an external AI decide()",
-    "/autosave <sec> — change autosave cadence",
-    "/set <Path> <num> — edit a tunable",
-    "/tune show — print every tunable and current value",
-    "/reward show|set|reset — adjust reward weights",
-    "/policy save|load|reset — manage learned policy storage",
-    "/stats — refresh KPI line • /help — show this guide",
-}, "\n")
 
 local function _num(v) return tonumber(v) end
-
-function AI.RunCommand(line)
-    local bot = AI._bot
-    if not bot or not bot.gui then return "No bot." end
-    line = tostring(line or ""):gsub("^%s+",""):gsub("%s+$","")
-    if line == "" then return "" end
-
-    local function say(s)
-        warn("[BGBot] " .. tostring(s))
-    end
-    local args = {}
-    for w in string.gmatch(line, "%S+") do table.insert(args, w) end
-    local cmd = (args[1] or ""):lower()
-
-    local function markCfgDirty()
-        if bot and bot.gui and bot.gui.markConfigDirty then
-            bot.gui:markConfigDirty()
-        end
-    end
-
-    local function afterSet()
-        if bot and bot.ls then bot.ls:log("cmd_set",{line=line}) end
-        markCfgDirty()
-    end
-
-    if cmd == "/start" then bot:start(); return "Started." end
-    if cmd == "/stop"  then bot:stop();  return "Stopped." end
-    if cmd == "/exit"  then bot:exit();  return "Exited."  end
-
-    if cmd == "/epsilon" and _num(args[2]) then
-        bot.bandit.epsilon = math.clamp(_num(args[2]), 0, 1)
-        if bot.gui and bot.gui.setKPI then
-            local meta = bot.bandit.meta or {}
-            bot.gui:setKPI(meta.generation or 0, bot.bandit.epsilon, meta.lastLife or {})
-        end
-        return string.format("epsilon = %.2f", bot.bandit.epsilon)
-    end
-
-    if cmd == "/external" and args[2] then
-        local on = (args[2]:lower()=="on")
-        CFG.AI = CFG.AI or {}; CFG.AI.external = on
-        markCfgDirty()
-        return "external decide() = "..tostring(on)
-    end
-
-    if cmd == "/autosave" and _num(args[2]) then
-        CFG.AutoSave = math.max(5, math.floor(_num(args[2])))
-        if bot._nextAutoSaveAt then
-            bot._nextAutoSaveAt = os.clock() + (CFG.AutoSave or 30)
-        end
-        markCfgDirty()
-        return "autosave = "..tostring(CFG.AutoSave).."s"
-    end
-
-    if cmd == "/set" and args[2] and _num(args[3]) then
-        local ok, why = _applyTunable(args[2], _num(args[3]))
-        afterSet()
-        return ok and ("set ok: "..args[2]) or ("set failed: "..tostring(why))
-    end
-
-    if cmd == "/tune" and args[2] and args[2]:lower()=="show" then
-        local snap = _snapshotTunables()
-        for k,v in pairs(snap) do say(string.format("%-12s = %s", k, tostring(v))) end
-        return "tune printed."
-    end
-
-    if cmd == "/reward" and args[2] then
-        local sub = args[2]:lower()
-        if sub == "show" then
-            for k,v in pairs(CFG.Reward) do
-                say(string.format("%-14s = %s", k, tostring(v)))
-            end
-            return "reward printed."
-        elseif sub == "reset" then
-            local D = {
-                dmgDealt=1.00, dmgTaken=-0.70, finisherBonus=6.00, forcedUnblock=3.00,
-                keptAdvantage=2.00, earlyPunish=-5.00, blockNoDamage=-3.00, lostSpacing=-2.00,
-                applyAlpha=0.70, prevAlpha=0.30, prevWeight=0.50
-            }
-            for k,v in pairs(D) do CFG.Reward[k]=v end
-            markCfgDirty()
-            return "reward reset."
-        elseif sub == "set" and args[3] and _num(args[4]) then
-            local key = args[3]
-            if CFG.Reward[key] == nil then return "unknown reward key." end
-            CFG.Reward[key] = _num(args[4])
-            markCfgDirty()
-            return "reward "..key.." = "..tostring(CFG.Reward[key])
-        end
-    end
-
-    if cmd == "/policy" and args[2] then
-        local sub = args[2]:lower()
-        if sub == "save" then bot:savePolicy(); return "policy saved." end
-        if sub == "load" then bot:loadPolicy(); return "policy loaded." end
-        if sub == "reset" then
-            bot.policy = {}
-            bot.bandit.meta = {epsilon = bot.bandit.epsilon, generation = 0, tune = bot.bandit.tune or {}}
-            bot:savePolicy()
-            return "policy cleared."
-        end
-    end
-
-    if cmd == "/stats" then
-        local meta = bot.bandit.meta or {}
-        if bot.gui and bot.gui.setKPI then
-            bot.gui:setKPI(meta.generation or 0, meta.epsilon or bot.bandit.epsilon or 0.15, meta.lastLife or {})
-        end
-        return "stats updated."
-    end
-
-    if cmd == "/help" then
-        return HELP_TEXT
-    end
-
-    return "Unknown command. Try /help (also see the Help panel)."
-end
 
 
 function AI.Decide(input)
@@ -4791,46 +4663,6 @@ do
     
     
     
-    
-    
-    
-    local function installConsole()
-        if GAI._consoleInstalled then return end
-        GAI._consoleInstalled = true
-        LP.Chatted:Connect(function(msg)
-            if type(msg) ~= "string" or not msg:lower():match("^/ai") then return end
-            local cmd = msg:sub(4):gsub("^%s+","")
-            local out = ""
-            if cmd:match("^ext%s+on") then
-                GAI.ToggleExternal(true);  out = "external AI: on"
-            elseif cmd:match("^ext%s+off") then
-                GAI.ToggleExternal(false); out = "external AI: off"
-            elseif cmd:match("^eps") then
-                local v = tonumber(cmd:match("eps%s+([%d%.]+)"))
-                local r = GAI.SetEpsilon(v); out = ("epsilon -> %.2f"):format(r)
-            elseif cmd:match("^tune") then
-                local key,val = cmd:match('tune%s+([^%s]+)%s+([%-%d%.]+)')
-                if key and val then
-                    local ok = AI.SetTuning({[key]=tonumber(val)})
-                    out = ok and ("tuned "..key.." = "..val) or ("not tunable: "..tostring(key))
-                else
-                    out = "usage: /ai tune Gates.S.hi 14.0"
-                end
-            elseif cmd:match("^get") then
-                local snap = AI.GetTuning(); out = "tuning: "..HttpService:JSONEncode(snap)
-            elseif cmd:match("^export") then
-                local path = GAI.ExportPolicy(); out = "exported policy -> "..tostring(path)
-            elseif cmd:match("^import") then
-                local ok = GAI.ImportPolicy(); out = ok and "imported policy" or "import failed"
-            elseif cmd:match("^reset") then
-                GAI.ResetPolicy(); out = "policy reset"
-            else
-                out = "commands: /ai ext on|off • /ai eps <0.01-0.60> • /ai tune <Path> <num> • /ai get • /ai export • /ai import • /ai reset"
-            end
-            print("[AI]", out)
-        end)
-    end
-    installConsole()
 
     
     if Bot and not Bot._logPatched then
