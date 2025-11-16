@@ -170,11 +170,9 @@ local CFG = {
         KeyQ        = Enum.KeyCode.Q,
         HoldQ       = 0.10,
         RefaceTail  = 0.60,
-
         FWindow     = 0.80,
         BWindow     = .90,
         SWindow     = 0.40,
-
         OrbitTrigger   = 5.0,
         OrbitDur       = 0.35,
         BackClose      = 2.0,
@@ -225,7 +223,6 @@ local CFG = {
         earlyPunish    = -4.00,
         blockNoDamage  = -10.00,
         lostSpacing    = -0.50,
-
         applyAlpha     = 0.70,
         prevAlpha      = 0.30,
         prevWeight     = 0.50,
@@ -286,7 +283,6 @@ local BASE_SPACES = {
     SpaceMax = CFG.SpaceMax,
     M1Range  = CFG.M1Range,
 }
-
 local FORWARD_DASH_COOLDOWN = 20.0
 local TUNE_SCHEMA = {
     ["Gates.F.lo"] = {min=5,  max=60, round=0.1},
@@ -295,7 +291,6 @@ local TUNE_SCHEMA = {
     ["Gates.S.hi"] = {min=4,  max=30, round=0.1},
     ["Gates.B.lo"] = {min=6,  max=30, round=0.1},
     ["Gates.B.hi"] = {min=10, max=60, round=0.1},
-
     ["SpaceMin"]   = {min=2,  max=10, round=0.05},
     ["SpaceMax"]   = {min=3,  max=14, round=0.05},
     ["M1Range"]    = {min=3,  max=8,  round=0.05},
@@ -336,7 +331,6 @@ local function _applyTunable(path, val)
     if typeof(val) ~= "number" then return false, "bad type" end
     local v = math.clamp(val, sch.min, sch.max)
     v = _roundTo(v, sch.round)
-
     local parts = {}
     for token in string.gmatch(path, "[^%.]+") do table.insert(parts, token) end
     if parts[1] == "Cooldown" or parts[1] == "Gates" then
@@ -373,7 +367,6 @@ end
 local function slotCooling(slot:number):boolean
     local base = getHotbarBase(slot)
     if not base then return false end
-
     local y = base.Size and base.Size.Y and base.Size.Y.Scale or 0
     local vis = (base.Visible == nil) and true or base.Visible
     return vis and (math.abs(y) > 0.01)
@@ -659,7 +652,7 @@ local function createInfoCard(parent:Instance, title:string, initialText:string?
     header.Size = UDim2.new(1,-20,0,14)
     header.Position = UDim2.new(0,10,0,8)
     header.Font = Enum.Font.GothamSemibold
-    header.TextSize = 11 -- smaller
+    header.TextSize = 11 
     header.TextColor3 = Color3.fromRGB(150,160,210)
     header.TextXAlignment = Enum.TextXAlignment.Left
     header.Text = string.upper(title)
@@ -670,7 +663,7 @@ local function createInfoCard(parent:Instance, title:string, initialText:string?
     value.Size = UDim2.new(1,-20,1,-28)
     value.Position = UDim2.new(0,10,0,22)
     value.Font = (opts and opts.font) or Enum.Font.GothamBold
-    value.TextSize = (opts and opts.textSize) or 16 -- was 18
+    value.TextSize = (opts and opts.textSize) or 16 
     value.TextColor3 = (opts and opts.textColor) or Color3.fromRGB(230,235,255)
     value.TextXAlignment = (opts and opts.textXAlignment) or Enum.TextXAlignment.Left
     value.TextYAlignment = Enum.TextYAlignment.Top
