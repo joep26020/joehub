@@ -1606,6 +1606,7 @@ function Bot.new()
 
     self.hardAimHB = RunService.RenderStepped:Connect(function()
         local ok, err = pcall(function()
+			if not self.hum or self.hum.Health <= 0 then return end
 			if self.hum and self.hum:GetState()==Enum.HumanoidStateType.FallingDown then return end
             if self.inDash then return end
 
@@ -1614,7 +1615,6 @@ function Bot.new()
 
 			self.hum.AutoRotate = false
             aimCFrame(self.rp, tgt)
-            self:alignCam()
 
             local cam = workspace.CurrentCamera
             if cam then
