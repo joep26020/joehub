@@ -173,7 +173,7 @@ local CFG = {
     },
 
     M1Range  = 5,
-    M1MaxGap = 0.62,
+    M1MaxGap = 0.5,
     InputTap = 0.10,
     TapS     = 0.05,
     TapM     = 0.25,
@@ -1399,23 +1399,151 @@ local LIB:{Combo} = {
         traits={"launcher","requires_evasive"}
     },
 
+}
+
+type MoveDef = {name:string, role:string, dur:number, build:(()->Step)}
+
+local AUTO_COMBO_PREFIX = "auto_"
+local AUTO_COMBO_MAX_STEPS = 5
+local AUTO_COMBO_MAX_TIME = 7.5
+local AUTO_COMBO_POOL_SIZE = 10
+
+local MOVE_POOL:{MoveDef} = {
     {
-        id="sai_m1_shove_sd_cp_np",
-        name="M1->Shove->M1(HOLD)->Side(off)->CP->M1->NP",
-        min=0, max=7.5, risk=0.42,
-        steps={
-            {kind="aim"},
-            {kind="press",action="M1",hold=CFG.TapS,wait=m1Gap()},
-            {kind="press",action="Shove",wait=0.12},
-            {kind="press",action="M1HOLD",hold=CFG.TapM,wait=0.30},
-            {kind="dash",action="side",dir="off",wait=0.08},
-            {kind="press",action="CP",wait=0.36},
-            {kind="press",action="M1",hold=CFG.TapS,wait=m1Gap()},
-            {kind="press",action="NP"},
-        },
-        traits={"pressure","branching"}
+        name = "M1",
+        role = "opener",
+        dur = 0.30,
+        build = function()
+            return {kind="press",action="M1",hold=CFG.TapS,wait=m1Gap()}
+        end,
+    },
+    {
+        name = "M1HOLD",
+        role = "mid",
+        dur = 0.40,
+        build = function()
+            return {kind="press",action="M1HOLD",hold=CFG.TapM,wait=m1Gap()}
+        end,
+    },
+    {
+        name = "Shove",
+        role = "mid",
+        dur = 0.30,
+        build = function()
+            return {kind="press",action="Shove",wait=0.12}
+        end,
+    },
+    {
+        name = "CP",
+        role = "finisher",
+        dur = 0.90,
+        build = function()
+            return {kind="press",action="CP",wait=0.40}
+        end,
+    },
+    {
+        name = "NP",
+        role = "finisher",
+        dur = 0.90,
+        build = function()
+            return {kind="press",action="NP"}
+        end,
     },
 }
+
+local function _pickMove(role:string):MoveDef?
+    local pool = {}
+    for _,m in ipairs(MOVE_POOL) do
+        if m.role == role then
+            pool[#pool+1] = m
+        end
+    end
+    local n = #pool
+    if n == 0 then return nil end
+    return pool[math.random(1, n)]
+end
+
+local function _autoId(idx:number):string
+    return AUTO_COMBO_PREFIX .. tostring(idx)
+end
+
+local function _makeAutoCombo(idx:number):Combo?
+    local steps:{Step} = {}
+    steps[1] = {kind="aim"}
+    local total = 0.0
+
+    local op = _pickMove("opener")
+    if not op then return nil end
+    local s = op.build()
+    total = total + op.dur
+    steps[#steps+1] = s
+
+    local midCount = math.random(0, AUTO_COMBO_MAX_STEPS - 2)
+    for i = 1, midCount do
+        local m = _pickMove("mid")
+        if not m then break end
+        if total + m.dur > AUTO_COMBO_MAX_TIME then break end
+        local st = m.build()
+        total = total + m.dur
+        steps[#steps+1] = st
+    end
+
+    local fin = _pickMove("finisher")
+    if fin and total + fin.dur <= AUTO_COMBO_MAX_TIME + 0.5 then
+        local st = fin.build()
+        total = total + fin.dur
+        steps[#steps+1] = st
+    end
+
+    local parts = {}
+    for i = 2, #steps do
+        parts[#parts+1] = steps[i].action or "?"
+    end
+
+    local distMax = CFG.ComboDist or ((CFG.M1Range or 5) + 1)
+    local combo:Combo = {
+        id = _autoId(idx),
+        name = table.concat(parts, ">"),
+        min = 0,
+        max = distMax,
+        steps = steps,
+        traits = {"auto"},
+        risk = 0.35,
+    }
+    return combo
+end
+
+local function refreshAutoCombos()
+    local existing = {}
+    for _,c in ipairs(LIB) do
+        if type(c.id) == "string" and c.id:sub(1, #AUTO_COMBO_PREFIX) == AUTO_COMBO_PREFIX then
+            existing[c.id] = true
+        end
+    end
+
+    local function nextIdx()
+        local i = 1
+        while existing[_autoId(i)] do
+            i = i + 1
+        end
+        existing[_autoId(i)] = true
+        return i
+    end
+
+    local count = 0
+    for _ in pairs(existing) do
+        count = count + 1
+    end
+
+    while count < AUTO_COMBO_POOL_SIZE do
+        local idx = nextIdx()
+        local c = _makeAutoCombo(idx)
+        if not c then break end
+        LIB[#LIB+1] = c
+        count = count + 1
+    end
+end
+
 
 
 local Bot={}; Bot.__index=Bot
@@ -1606,9 +1734,13 @@ function Bot.new()
 
     self.hardAimHB = RunService.RenderStepped:Connect(function()
         local ok, err = pcall(function()
-			if not self.hum.Health == 0 then return end
 			if self.hum and self.hum:GetState()==Enum.HumanoidStateType.FallingDown then return end
-            if self.inDash then return end
+            if not self.run then
+                return
+            end
+
+            if not (self.hum and self.rp) then return end
+            if self.hum.Health <= 0 then return end            if self.inDash then return end
 
             local tgt = (self.currentTarget and self.currentTarget.hrp) or nil
             if not tgt then return end
@@ -3743,27 +3875,28 @@ end
 
 function Bot:execBestCloseCombo(r:Enemy)
     if not r or not r.hrp then return end
-    local preferUpper = (not r.hasEv) or self:_targetRagdolled(r) or ((r.dist or math.huge) < 4.0)
-    local npStats = self.ls:combo("sai_m1cp_np")
-    local upStats = self.ls:combo("sai_upper_path")
-    local rNP = npStats.succ or 0
-    local rUP = upStats.succ or 0
 
-    local pick = "sai_m1cp_np"
-    if preferUpper and (rUP >= rNP * 0.8) then
-        pick = "sai_upper_path"
-    end
+    local combo = self:_chooseCombo(r)
+    if not combo then return end
 
-    for _,c in ipairs(LIB) do
-        if c.id == pick then
-            if r.dist > (c.max or CFG.M1Range) then
-                self:_waitForRange(r, math.min(CFG.M1Range, 6.5), 0.45)
-            end
-            self:execCombo(c, r)
-            return
+    local dist = r.dist or math.huge
+    if dist == math.huge and r.hrp and self.rp then
+        local here = safePos(self.rp)
+        local there = safePos(r.hrp)
+        if here and there then
+            dist = (there - here).Magnitude
+            r.dist = dist
         end
     end
+
+    local maxRange = combo.max or CFG.M1Range
+    if dist > maxRange then
+        self:_waitForRange(r, math.min(maxRange, CFG.M1Range), 0.45)
+    end
+
+    self:execCombo(combo, r)
 end
+
 
 function Bot:_upperUseOK(r:Enemy):boolean
     if not r then return false end
@@ -3808,7 +3941,7 @@ function Bot:approachFarTarget(r:Enemy)
     if not self.run then return end
     if not (r and r.hrp and self.rp) then return end
     local d = r.dist or math.huge
-    if d < 60 then return end
+    if d < 50 then return end
 
     
     self:aimAt(r.hrp)
@@ -3850,33 +3983,54 @@ end
 
 
 function Bot:_chooseCombo(tgt:Enemy):Combo?
+    refreshAutoCombos()
 
-    local best,bw=nil,-1
-    for _,c in ipairs(LIB) do
-        local ok=true
-        if c.reqNoEv and tgt.hasEv then ok=false end
-        if c.min and tgt.dist < c.min then ok=false end
-        if c.max and tgt.dist > c.max then ok=false end
-
-        if ok and c.id=="sai_sd_m1h" then
-            if not (self.m1ChainCount==1 or self.m1ChainCount==2) then ok=false end
-        end
-        if ok then
-            local st=self.ls:combo(c.id); local sr=(st.succ+1)/(st.att+2)
-            local mid=((c.min or 0)+(c.max or 20))/2; local dBias=math.max(0.1, 1-math.abs((tgt.dist-mid)/20))
-            local sBias=1; local s=tgt.style
-            if s.def>4 and hasTrait(c,"guardbreak") then sBias = sBias + 0.45 end
-            if s.aggr>5 and hasTrait(c,"burst") then sBias = sBias + 0.25 end
-            if s.aggr<3 and hasTrait(c,"pressure") then sBias = sBias + 0.20 end
-            if s.ev>5 and not c.reqNoEv then sBias = sBias - 0.2 end
-
-            local risk = c.risk or 0.5
-            local w=sr*dBias*sBias*(1.0 - risk*0.25)
-            if w>bw then bw=w; best=c end
+    local dist = tgt and (tgt.dist or math.huge) or math.huge
+    if tgt and dist == math.huge and tgt.hrp and self.rp then
+        local here = safePos(self.rp)
+        local there = safePos(tgt.hrp)
+        if here and there then
+            dist = (there - here).Magnitude
+            tgt.dist = dist
         end
     end
+
+    local candidates:{Combo} = {}
+    for _,c in ipairs(LIB) do
+        local ok = true
+        if c.min and dist < c.min then ok = false end
+        if c.max and dist > c.max then ok = false end
+        if ok and c.reqNoEv and tgt and tgt.hasEv then
+            ok = false
+        end
+        if ok then
+            candidates[#candidates+1] = c
+        end
+    end
+
+    if #candidates == 0 then
+        return nil
+    end
+
+    local best, bestScore = nil, -math.huge
+    for _,c in ipairs(candidates) do
+        local stats = self.ls:combo(c.id)
+        local att = stats.att or 0
+        local succ = stats.succ or 0
+        local dmgt = stats.dmgt or 0
+        local avg = (att > 0) and (dmgt / att) or 0
+        local sr = (att > 0) and (succ / att) or 0
+        local explore = (att < 4) and 4 or 0
+        local score = avg + sr * 4 + explore
+        if score > bestScore then
+            bestScore = score
+            best = c
+        end
+    end
+
     return best
 end
+
 
 function Bot:_maybeUltActions(tgt:Enemy)
     if not self:_isUlted() then return false end
@@ -4153,16 +4307,26 @@ function Bot:start()
 end
 
 function Bot:stop()
-    if not self.run then self:clearMove(); return end
-    self.autoStart=false; self.run=false; self:clearMove(); if self.hum then self.hum.AutoRotate=true end
+    if not self.run then return end
+
+    self.run = false
+    self.autoStart = false          
+    self.alive = self.alive          
+
+ 
     self:_cancelActiveCombo()
     self:_stopDashOrientation()
     self.inDash = false
     self:_stopBlocking()
+    self:clearMove()
     self:_restoreCamera()
-    self.recoveringFromFall = false
-    self.gui:setS("Status: idle"); self.gui:setC("Combo: none"); self.ls:log("session_stop",{dur=os.clock()-self.since})
-    self.stunFollow = nil
+
+    if self.hum then
+        self.hum.AutoRotate = true
+    end
+
+    self.gui:setS("Status: idle")
+    self.gui:setC("Combo: none")
 end
 
 function Bot:exit()
@@ -4184,7 +4348,14 @@ CFG.Bind = {
 }
 
 function Bot:update(dt:number)
-    if self.destroyed then return end
+    if self.destroyed then
+        self:clearMove()
+        return
+    end
+    if (not self.run) or (not self.alive) or (not self.hum) then
+        self:clearMove()
+        return
+    end
     if self.ls and self.ls.flush then
         pcall(function()
             self.ls:flush()
