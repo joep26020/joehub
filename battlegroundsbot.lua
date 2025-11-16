@@ -660,70 +660,6 @@ local function text(p,n,t,sz,pos,ts,bold)
     local pad=Instance.new("UIPadding"); pad.PaddingLeft=UDim.new(0,10); pad.Parent=l; return l
 end
 
-local function createPanelSection(parent, title, startCollapsed)
-    local section = Instance.new("Frame")
-    section.Name = title:gsub("%s+","").."Section"
-    section.BackgroundColor3 = Color3.fromRGB(22,24,33)
-    section.BorderSizePixel = 0
-    section.AutomaticSize = Enum.AutomaticSize.Y
-    section.Size = UDim2.new(1,0,0,0)
-    section.Parent = parent
-
-    local stroke = Instance.new("UIStroke")
-    stroke.Color = Color3.fromRGB(76,110,255)
-    stroke.Thickness = 1
-    stroke.Transparency = 0.35
-    stroke.Parent = section
-
-    -- clickable header
-    local header = Instance.new("TextButton")
-    header.Name = "Header"
-    header.BackgroundTransparency = 1
-    header.Position = UDim2.new(0,10,0,4)
-    header.Size = UDim2.new(1,-20,0,22)
-    header.Font = Enum.Font.GothamBold
-    header.TextSize = 14 -- smaller
-    header.TextColor3 = Color3.fromRGB(220,230,255)
-    header.TextXAlignment = Enum.TextXAlignment.Left
-    header.AutoButtonColor = false
-    header.Text = "" -- set in setCollapsed
-    header.Parent = section
-
-    local body = Instance.new("Frame")
-    body.Name = "Body"
-    body.BackgroundTransparency = 1
-    body.Position = UDim2.new(0,10,0,28)
-    body.Size = UDim2.new(1,-20,0,0)
-    body.AutomaticSize = Enum.AutomaticSize.Y
-    body.Parent = section
-
-    local bodyLayout = Instance.new("UIListLayout")
-    bodyLayout.Padding = UDim.new(0,4)
-    bodyLayout.SortOrder = Enum.SortOrder.LayoutOrder
-    bodyLayout.Parent = body
-
-    local function setCollapsed(collapsed)
-        section:SetAttribute("Collapsed", collapsed and true or false)
-        body.Visible = not collapsed
-        if collapsed then
-            header.Text = "[+] " .. title
-        else
-            header.Text = "[-] " .. title
-        end
-    end
-
-    local initial = startCollapsed and true or false
-    setCollapsed(initial)
-
-    header.MouseButton1Click:Connect(function()
-        local cur = section:GetAttribute("Collapsed")
-        setCollapsed(not cur)
-    end)
-
-    return section, body
-end
-
-
 local function btn(p,n,t,sz,pos,clr)
     local b = Instance.new("TextButton")
     b.Name = n
@@ -814,8 +750,8 @@ function GUI.new()
 
     local f = Instance.new("Frame")
     f.Name = "Main"
-    f.Size = UDim2.new(0, 640, 0, 540) -- smaller
-    f.Position = UDim2.new(0.5, -320, 0.5, -270)
+    f.Size = UDim2.new(0, 640, 0, 580)
+    f.Position = UDim2.new(0.5, -320, 0.5, -290)
     f.BackgroundColor3 = Color3.fromRGB(17,18,26)
     f.BorderSizePixel = 0
     f.Parent = g
@@ -866,11 +802,36 @@ function GUI.new()
     local exitB  = btn(controlRow,"Exit","Exit", UDim2.new(1,0,1,0), UDim2.new(0,0,0,0), Color3.fromRGB(80,30,30))
     exitB.LayoutOrder = 3
 
+    local cfgRow = Instance.new("Frame")
+    cfgRow.Name = "ConfigRow"
+    cfgRow.Size = UDim2.new(1,-40,0,28)
+    cfgRow.Position = UDim2.new(0,20,0,96)
+    cfgRow.BackgroundTransparency = 1
+    cfgRow.Parent = f
+
+    local saveBtn = btn(cfgRow, "SaveConfig", "Save Config", UDim2.new(0,140,1,0), UDim2.new(0,0,0,0), Color3.fromRGB(60,88,140))
+    saveBtn.TextSize = 13
+
+    local cfgStatus = Instance.new("TextLabel")
+    cfgStatus.BackgroundTransparency = 1
+    cfgStatus.Position = UDim2.new(0,150,0,0)
+    cfgStatus.Size = UDim2.new(1,-150,1,0)
+    cfgStatus.Font = Enum.Font.Gotham
+    cfgStatus.TextSize = 13
+    cfgStatus.TextXAlignment = Enum.TextXAlignment.Left
+    cfgStatus.TextColor3 = Color3.fromRGB(180,235,190)
+    cfgStatus.Text = "Config: saved"
+    cfgStatus.Parent = cfgRow
+
+    saveBtn.MouseButton1Click:Connect(function()
+        self:saveConfigToDisk()
+    end)
+
     -- status cards
     local statsGrid = Instance.new("Frame")
     statsGrid.Name = "StatusGrid"
     statsGrid.Size = UDim2.new(1,-40,0,120)
-    statsGrid.Position = UDim2.new(0,20,0,96)
+    statsGrid.Position = UDim2.new(0,20,0,136)
     statsGrid.BackgroundTransparency = 1
     statsGrid.Parent = f
 
@@ -895,7 +856,7 @@ function GUI.new()
     local detailRow = Instance.new("Frame")
     detailRow.Name = "DetailRow"
     detailRow.Size = UDim2.new(1,-40,0,72)
-    detailRow.Position = UDim2.new(0,20,0,226)
+    detailRow.Position = UDim2.new(0,20,0,266)
     detailRow.BackgroundTransparency = 1
     detailRow.Parent = f
 
@@ -920,7 +881,7 @@ function GUI.new()
     local panel = Instance.new("Frame")
     panel.Name = "DataPanel"
     panel.Size = UDim2.new(1,-40,0,220) -- smaller height
-    panel.Position = UDim2.new(0,20,0,310)
+    panel.Position = UDim2.new(0,20,0,350)
     panel.BackgroundColor3 = Color3.fromRGB(20,22,30)
     panel.BorderSizePixel = 0
     panel.Parent = f
@@ -940,21 +901,9 @@ function GUI.new()
     local leftCol = Instance.new("Frame")
     leftCol.Name = "LeftColumn"
     leftCol.BackgroundTransparency = 1
-    leftCol.Size = UDim2.new(0.46,-4,1,0)
+    leftCol.Size = UDim2.new(1,0,1,0)
     leftCol.Position = UDim2.new(0,0,0,0)
     leftCol.Parent = columns
-
-    -- right column is scrollable
-    local rightCol = Instance.new("ScrollingFrame")
-    rightCol.Name = "RightColumn"
-    rightCol.BackgroundTransparency = 1
-    rightCol.Size = UDim2.new(0.54,-4,1,0)
-    rightCol.Position = UDim2.new(0.46,8,0,0)
-    rightCol.ScrollBarThickness = 4
-    rightCol.AutomaticCanvasSize = Enum.AutomaticSize.Y
-    rightCol.CanvasSize = UDim2.new(0,0,0,0)
-    rightCol.BorderSizePixel = 0
-    rightCol.Parent = columns
 
     -- combo tracker (left)
     local comboFrame = Instance.new("Frame")
@@ -1002,6 +951,8 @@ function GUI.new()
     self.startB = startB
     self.stopB  = stopB
     self.exitB  = exitB
+    self.saveConfigButton = saveBtn
+    self.configStatusLabel = cfgStatus
 
     self:setS("Status: idle")
     self:setT("Target: none")
@@ -1009,8 +960,7 @@ function GUI.new()
     self:setE("Evasive: ready")
     self:updateCDs(0,0,0)
     self.rules.Text = rulesText
-
-    self:addConsole(rightCol)
+    self:updateConfigSaveState(false)
     return self
 end
 
@@ -1062,49 +1012,6 @@ function GUI:updateCombos(data)
 end
 function GUI:destroy() if self.gui then self.gui:Destroy() end end
 
-function GUI:addConsole(container)
-    local layout = Instance.new("UIListLayout")
-    layout.Name = "SectionLayout"
-    layout.Padding = UDim.new(0,10)
-    layout.SortOrder = Enum.SortOrder.LayoutOrder
-    layout.Parent = container
-
-    local saveSection, saveBody = createPanelSection(container, "Configuration")
-    saveSection.LayoutOrder = 1
-
-    local saveRow = Instance.new("Frame")
-    saveRow.BackgroundTransparency = 1
-    saveRow.Size = UDim2.new(1,0,0,28)
-    saveRow.Parent = saveBody
-
-    local saveBtn = btn(saveRow, "SaveConfig", "Save Config", UDim2.new(0,120,1,0), UDim2.new(0,0,0,0), Color3.fromRGB(60,88,140))
-    saveBtn.TextSize = 13
-
-    local cfgStatus = Instance.new("TextLabel")
-    cfgStatus.BackgroundTransparency = 1
-    cfgStatus.Position = UDim2.new(0,130,0,0)
-    cfgStatus.Size = UDim2.new(1,-130,1,0)
-    cfgStatus.Font = Enum.Font.Gotham
-    cfgStatus.TextSize = 13
-    cfgStatus.TextXAlignment = Enum.TextXAlignment.Left
-    cfgStatus.TextColor3 = Color3.fromRGB(180,235,190)
-    cfgStatus.Text = "Config: saved"
-    cfgStatus.Parent = saveRow
-
-    saveBtn.MouseButton1Click:Connect(function()
-        self:saveConfigToDisk()
-    end)
-
-    self.saveConfigButton = saveBtn
-    self.configStatusLabel = cfgStatus
-
-    self:addRewardEditor(container, 2)
-    self:addLimiterEditor(container, 3)
-
-    self:updateConfigSaveState(false)
-end
-
-
 function GUI:updateConfigSaveState(dirty)
     self.configDirty = dirty and true or false
     local lbl = self.configStatusLabel
@@ -1131,202 +1038,6 @@ function GUI:saveConfigToDisk()
         warn("[BGBot] config saved to " .. ConfigFileName)
     else
         warn("[BGBot] config save failed: " .. tostring(err or "unknown"))
-    end
-end
-
-function GUI:addRewardEditor(container, order)
-    local section, body = createPanelSection(container, "Reward Editor", true)
-    section.LayoutOrder = order or (section.LayoutOrder or 4)
-    local desc = Instance.new("TextLabel")
-    desc.BackgroundTransparency = 1
-    desc.TextWrapped = true
-    desc.Font = Enum.Font.Gotham
-    desc.TextSize = 13
-    desc.TextColor3 = Color3.fromRGB(200,210,255)
-    desc.TextXAlignment = Enum.TextXAlignment.Left
-    desc.Size = UDim2.new(1,0,0,32)
-    desc.Text = "Adjust action rewards without retyping commands. Values feed directly into CFG.Reward."
-    desc.Parent = body
-
-    local rows = Instance.new("Frame")
-    rows.BackgroundTransparency = 1
-    rows.Size = UDim2.new(1,0,0,0)
-    rows.AutomaticSize = Enum.AutomaticSize.Y
-    rows.Parent = body
-    local rowLayout = Instance.new("UIListLayout")
-    rowLayout.Padding = UDim.new(0,4)
-    rowLayout.SortOrder = Enum.SortOrder.LayoutOrder
-    rowLayout.Parent = rows
-
-    local keys = {}
-    for k,_ in pairs(CFG.Reward or {}) do table.insert(keys, k) end
-    table.sort(keys)
-
-    for _,key in ipairs(keys) do
-        local row = Instance.new("Frame")
-        row.BackgroundColor3 = Color3.fromRGB(14,16,24)
-        row.BorderSizePixel = 0
-        row.Size = UDim2.new(1,0,0,28)
-        row.Parent = rows
-
-        local lbl = Instance.new("TextLabel")
-        lbl.BackgroundTransparency = 1
-        lbl.Position = UDim2.new(0,8,0,4)
-        lbl.Size = UDim2.new(0.45, -8, 1, -8)
-        lbl.Font = Enum.Font.Gotham
-        lbl.TextSize = 14
-        lbl.TextXAlignment = Enum.TextXAlignment.Left
-        lbl.TextColor3 = Color3.fromRGB(220,230,255)
-        lbl.Text = key
-        lbl.Parent = row
-
-        local box = Instance.new("TextBox")
-        box.BackgroundColor3 = Color3.fromRGB(28,30,40)
-        box.TextColor3 = Color3.fromRGB(240,240,240)
-        box.Font = Enum.Font.Gotham
-        box.TextSize = 14
-        box.TextXAlignment = Enum.TextXAlignment.Left
-        box.Size = UDim2.new(0.30, -6, 0, 24)
-        box.Position = UDim2.new(0.48,0,0,2)
-        box.Text = tostring(CFG.Reward[key])
-        box.ClearTextOnFocus = false
-        box.Parent = row
-
-        local apply = Instance.new("TextButton")
-        apply.Size = UDim2.new(0,60,0,24)
-        apply.Position = UDim2.new(1,-66,0,2)
-        apply.BackgroundColor3 = Color3.fromRGB(52,64,104)
-        apply.TextColor3 = Color3.fromRGB(240,240,240)
-        apply.Font = Enum.Font.GothamBold
-        apply.TextSize = 14
-        apply.Text = "Set"
-        apply.Parent = row
-
-        local function applyValue()
-            local value = tonumber(box.Text)
-            if not value then
-                warn(string.format("[BGBot] Reward %s requires a number", key))
-                return
-            end
-            CFG.Reward[key] = value
-            if self.markConfigDirty then
-                self:markConfigDirty()
-            end
-            warn(string.format("[BGBot] reward %s = %.3f", key, value))
-        end
-
-        apply.MouseButton1Click:Connect(applyValue)
-        box.FocusLost:Connect(function(enter)
-            if enter then applyValue() end
-        end)
-    end
-end
-
-function GUI:addLimiterEditor(container, order)
-    local section, body = createPanelSection(container, "Value Limiters", true)
-    section.LayoutOrder = order or (section.LayoutOrder or 5)
-    local desc = Instance.new("TextLabel")
-    desc.BackgroundTransparency = 1
-    desc.TextWrapped = true
-    desc.Font = Enum.Font.Gotham
-    desc.TextSize = 13
-    desc.TextXAlignment = Enum.TextXAlignment.Left
-    desc.TextColor3 = Color3.fromRGB(200,210,255)
-    desc.Size = UDim2.new(1,0,0,34)
-    desc.Text = "Change the min/max bounds for tunables (used by /set and the AI auto-tuner)."
-    desc.Parent = body
-
-    local rows = Instance.new("Frame")
-    rows.BackgroundTransparency = 1
-    rows.Size = UDim2.new(1,0,0,0)
-    rows.AutomaticSize = Enum.AutomaticSize.Y
-    rows.Parent = body
-    local rowLayout = Instance.new("UIListLayout")
-    rowLayout.Padding = UDim.new(0,4)
-    rowLayout.SortOrder = Enum.SortOrder.LayoutOrder
-    rowLayout.Parent = rows
-
-    local keys = {}
-    for k,_ in pairs(TUNE_SCHEMA or {}) do table.insert(keys, k) end
-    table.sort(keys)
-
-    for _,key in ipairs(keys) do
-        local schema = TUNE_SCHEMA[key]
-        local row = Instance.new("Frame")
-        row.BackgroundColor3 = Color3.fromRGB(14,16,24)
-        row.BorderSizePixel = 0
-        row.Size = UDim2.new(1,0,0,32)
-        row.Parent = rows
-
-        local lbl = Instance.new("TextLabel")
-        lbl.BackgroundTransparency = 1
-        lbl.Position = UDim2.new(0,8,0,6)
-        lbl.Size = UDim2.new(0.40,-8,0,20)
-        lbl.Font = Enum.Font.Gotham
-        lbl.TextSize = 13
-        lbl.TextXAlignment = Enum.TextXAlignment.Left
-        lbl.TextColor3 = Color3.fromRGB(220,230,255)
-        lbl.Text = key
-        lbl.Parent = row
-
-        local minBox = Instance.new("TextBox")
-        minBox.BackgroundColor3 = Color3.fromRGB(28,30,40)
-        minBox.TextColor3 = Color3.fromRGB(240,240,240)
-        minBox.Font = Enum.Font.Gotham
-        minBox.TextSize = 13
-        minBox.Size = UDim2.new(0,64,0,24)
-        minBox.Position = UDim2.new(0.45,0,0,4)
-        minBox.Text = tostring(schema.min)
-        minBox.Parent = row
-
-        local maxBox = Instance.new("TextBox")
-        maxBox.BackgroundColor3 = Color3.fromRGB(28,30,40)
-        maxBox.TextColor3 = Color3.fromRGB(240,240,240)
-        maxBox.Font = Enum.Font.Gotham
-        maxBox.TextSize = 13
-        maxBox.Size = UDim2.new(0,64,0,24)
-        maxBox.Position = UDim2.new(0.60,0,0,4)
-        maxBox.Text = tostring(schema.max)
-        maxBox.Parent = row
-
-        local apply = Instance.new("TextButton")
-        apply.Size = UDim2.new(0,60,0,24)
-        apply.Position = UDim2.new(1,-66,0,4)
-        apply.BackgroundColor3 = Color3.fromRGB(52,64,104)
-        apply.TextColor3 = Color3.fromRGB(240,240,240)
-        apply.Font = Enum.Font.GothamBold
-        apply.TextSize = 14
-        apply.Text = "Limit"
-        apply.Parent = row
-
-        local function applyLimit()
-            local minVal = tonumber(minBox.Text)
-            local maxVal = tonumber(maxBox.Text)
-            if not (minVal and maxVal) then
-                warn(string.format("[BGBot] Limiter %s needs numeric min/max", key))
-                return
-            end
-            if minVal > maxVal then
-                warn(string.format("[BGBot] Limiter %s min cannot exceed max", key))
-                return
-            end
-            schema.min = minVal
-            schema.max = maxVal
-            CFG.TuneLimits = CFG.TuneLimits or {}
-            CFG.TuneLimits[key] = {min = minVal, max = maxVal}
-            if self.markConfigDirty then
-                self:markConfigDirty()
-            end
-            warn(string.format("[BGBot] limits %s = %.3f..%.3f", key, minVal, maxVal))
-        end
-
-        apply.MouseButton1Click:Connect(applyLimit)
-        minBox.FocusLost:Connect(function(enter)
-            if enter then applyLimit() end
-        end)
-        maxBox.FocusLost:Connect(function(enter)
-            if enter then applyLimit() end
-        end)
     end
 end
 
@@ -3272,16 +2983,6 @@ function Bot:_updateCurrentTarget(dt:number)
     end
 end
 
-function Bot:_scoreTargetCandidate(model:Model, hum:Humanoid, dist:number):number
-    local hpScore = math.max(0, 100 - hum.Health)
-    local distScore = math.max(0, 60 - dist * 1.5)
-    local blockPenalty = attrTrue(model, "blocking") and -15 or 0
-    local ultPenalty = attrTrue(model, "ulted") and -25 or 0
-    local attackerBonus = (self.lastAttacker == model.Name) and 100 or 0
-    local freezeBonus = hasFreezeOnLive(model.Name) and 50 or 0
-    return hpScore + distScore + attackerBonus + freezeBonus + blockPenalty + ultPenalty
-end
-
 function Bot:selectTarget():Enemy?
     local live = workspace:FindFirstChild("Live")
     self.liveFolder = live
@@ -3294,7 +2995,7 @@ function Bot:selectTarget():Enemy?
         self:_clearTarget()
         return nil
     end
-    local bestModel, bestScore, bestDist = nil, -math.huge, math.huge
+    local bestModel, bestDist = nil, math.huge
     for _,m in ipairs(live:GetChildren()) do
         if m:IsA("Model") and m.Name ~= LP.Name then
             if not m:FindFirstChild("AbsoluteImmortal") then
@@ -3304,9 +3005,7 @@ function Bot:selectTarget():Enemy?
                     local enemyPos = safePos(hrp)
                     if enemyPos then
                         local dist = (enemyPos - myPos).Magnitude
-                        local score = self:_scoreTargetCandidate(m, hum, dist)
-                        if score > bestScore then
-                            bestScore = score
+                        if dist < bestDist then
                             bestModel = m
                             bestDist = dist
                         end
@@ -3783,7 +3482,8 @@ function Bot:approachFarTarget(r:Enemy)
     if not self.run then return end
     if not (r and r.hrp and self.rp) then return end
     local d = r.dist or math.huge
-    if d < 60 then return end
+    local farChase = CFG.FarChase or 40
+    if d < farChase then return end
 
     
     self:aimAt(r.hrp)
@@ -4466,19 +4166,6 @@ function AI.Init(opts)
 end
 
 
-local HELP_TEXT = table.concat({
-    "COMMANDS:",
-    "/start — run the bot • /stop — pause • /exit — close UI",
-    "/epsilon <0..1> — set exploration rate",
-    "/external on|off — allow an external AI decide()",
-    "/autosave <sec> — change autosave cadence",
-    "/set <Path> <num> — edit a tunable",
-    "/tune show — print every tunable and current value",
-    "/reward show|set|reset — adjust reward weights",
-    "/policy save|load|reset — manage learned policy storage",
-    "/stats — refresh KPI line • /help — show this guide",
-}, "\n")
-
 local function _num(v) return tonumber(v) end
 
 function AI.RunCommand(line)
@@ -4591,11 +4278,7 @@ function AI.RunCommand(line)
         return "stats updated."
     end
 
-    if cmd == "/help" then
-        return HELP_TEXT
-    end
-
-    return "Unknown command. Try /help (also see the Help panel)."
+    return "Unknown command."
 end
 
 
@@ -4733,88 +4416,6 @@ do
     
     
     
-    
-    local function installConsole()
-        if GAI._consoleInstalled then return end
-        GAI._consoleInstalled = true
-        LP.Chatted:Connect(function(msg)
-            if type(msg) ~= "string" or not msg:lower():match("^/ai") then return end
-            local cmd = msg:sub(4):gsub("^%s+","")
-            local out = ""
-            if cmd:match("^ext%s+on") then
-                GAI.ToggleExternal(true);  out = "external AI: on"
-            elseif cmd:match("^ext%s+off") then
-                GAI.ToggleExternal(false); out = "external AI: off"
-            elseif cmd:match("^eps") then
-                local v = tonumber(cmd:match("eps%s+([%d%.]+)"))
-                local r = GAI.SetEpsilon(v); out = ("epsilon -> %.2f"):format(r)
-            elseif cmd:match("^tune") then
-                local key,val = cmd:match('tune%s+([^%s]+)%s+([%-%d%.]+)')
-                if key and val then
-                    local ok = AI.SetTuning({[key]=tonumber(val)})
-                    out = ok and ("tuned "..key.." = "..val) or ("not tunable: "..tostring(key))
-                else
-                    out = "usage: /ai tune Gates.S.hi 14.0"
-                end
-            elseif cmd:match("^get") then
-                local snap = AI.GetTuning(); out = "tuning: "..HttpService:JSONEncode(snap)
-            elseif cmd:match("^export") then
-                local path = GAI.ExportPolicy(); out = "exported policy -> "..tostring(path)
-            elseif cmd:match("^import") then
-                local ok = GAI.ImportPolicy(); out = ok and "imported policy" or "import failed"
-            elseif cmd:match("^reset") then
-                GAI.ResetPolicy(); out = "policy reset"
-            else
-                out = "commands: /ai ext on|off • /ai eps <0.01-0.60> • /ai tune <Path> <num> • /ai get • /ai export • /ai import • /ai reset"
-            end
-            print("[AI]", out)
-        end)
-    end
-    installConsole()
-
-    
-    if Bot and not Bot._logPatched then
-        Bot._logPatched = true
-
-        
-        local _noteAction = Bot._noteAction
-        function Bot:_noteAction(actionName, ctx, tgt)
-            _noteAction(self, actionName, ctx, tgt)
-            if self.bridge and self.bridge.log then
-                pcall(self.bridge.log, {
-                    type   = "action",
-                    action = actionName,
-                    ctx    = ctx,
-                    target = tgt and tgt.model and tgt.model.Name or nil
-                })
-            end
-        end
-
-        
-        local _upd = Bot.update_ravg
-        function Bot:update_ravg(ctx, action, reward, weight)
-            _upd(self, ctx, action, reward, weight)
-            if self.bridge and self.bridge.log then
-                pcall(self.bridge.log, {
-                    type   = "reward",
-                    ctx    = ctx,
-                    action = action,
-                    reward = reward,
-                    w      = weight
-                })
-            end
-        end
-
-        
-        local _save = Bot.savePolicy
-        function Bot:savePolicy()
-            _save(self)
-            if self.kpiPath and self.bridge and self.bridge.log then
-                pcall(self.bridge.log, {type="kpi", path=self.kpiPath})
-            end
-        end
-    end
-
     
     task.defer(function()
         local b = bot()
