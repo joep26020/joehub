@@ -147,9 +147,9 @@ local CFG = {
     SnipeRange     = 60.0,
     SnipeHP        = 10,
     Cooldown = {
-        F = 15.0,
-        B =  12.0,
-        S =  7.0,
+        F = 5.0,
+        B = 5.0,
+        S = 2.0,
     },
     M1Range  = 5,
     M1MaxGap = 0.5,
@@ -283,7 +283,7 @@ local BASE_SPACES = {
     SpaceMax = CFG.SpaceMax,
     M1Range  = CFG.M1Range,
 }
-local FORWARD_DASH_COOLDOWN = 20.0
+local FORWARD_DASH_COOLDOWN = 5.0
 local TUNE_SCHEMA = {
     ["Gates.F.lo"] = {min=5,  max=60, round=0.1},
     ["Gates.F.hi"] = {min=10, max=90, round=0.1},
@@ -1149,177 +1149,346 @@ function GUI:setKPI(gen, eps, life)
 end
 type Step = {kind:string, action:string?, hold:number?, wait:number?, dir:string?}
 type Combo = {id:string, name:string, reqNoEv:boolean?, min:number?, max:number?, steps:{Step}, traits:{string}?, risk:number?}
-local function hasTrait(c:Combo,t:string):boolean if not c.traits then return false end for _,x in ipairs(c.traits) do if x==t then return true end end return false end
-local LIB:{Combo} = {
-    {
-        id="sai_sd_m1h",
-        name="M1>Shove->Side(off)->M1(HOLD)",
-        min=0, max=7.5, risk=0.28,
-        steps={
-            {kind="aim"},
-            {kind="press",action="M1",hold=CFG.TapS,wait=m1Gap()},
-            {kind="press",action="Shove",wait=0.12},
-            {kind="dash",action="side",dir="off",wait=0.08},
-            {kind="press",action="M1HOLD",hold=CFG.TapM,wait=m1Gap()},
-        },
-        traits={"pressure","guardbreak"}
-    },
-    {
-        id="sai_m1cp_np",
-        name="M1x2>CP>M1>NP",
-        min=0, max=7.2, risk=0.35,
-        steps={
-            {kind="aim"},
-            {kind="press",action="M1",hold=CFG.TapS,wait=m1Gap()},
-            {kind="press",action="M1",hold=CFG.TapS,wait=m1Gap()},
-            {kind="press",action="CP",wait=0.40},
-            {kind="press",action="M1",wait=m1Gap()},
-            {kind="press",action="NP"},
-        },
-        traits={"finisher_np"}
-    },
-    {
-        id="sai_upper_path",
-        name="M1>Upper (situational) -> Dash follow",
-        min=0, max=8, reqNoEv=true, risk=0.55,
-        steps={
-            {kind="aim"},
-            {kind="press",action="M1",hold=CFG.TapS,wait=m1Gap()},
-            {kind="press",action="Upper",wait=0.28},
-            {kind="dash",action="auto_after_upper",dir="smart",wait=0.10},
-        },
-        traits={"launcher","requires_evasive"}
-    },
-
-}
-type MoveDef = {name:string, role:string, dur:number, build:(()->Step)}
-local AUTO_COMBO_PREFIX = "auto_"
-local AUTO_COMBO_MAX_STEPS = 5
-local AUTO_COMBO_MAX_TIME = 7.5
-local AUTO_COMBO_POOL_SIZE = 10
-local MOVE_POOL:{MoveDef} = {
-    {
-        name = "M1",
-        role = "opener",
-        dur = 0.30,
-        build = function()
-            return {kind="press",action="M1",hold=CFG.TapS,wait=m1Gap()}
-        end,
-    },
-    {
-        name = "M1HOLD",
-        role = "mid",
-        dur = 0.40,
-        build = function()
-            return {kind="press",action="M1HOLD",hold=CFG.TapM,wait=m1Gap()}
-        end,
-    },
-    {
-        name = "Shove",
-        role = "mid",
-        dur = 0.30,
-        build = function()
-            return {kind="press",action="Shove",wait=0.12}
-        end,
-    },
-    {
-        name = "CP",
-        role = "finisher",
-        dur = 0.90,
-        build = function()
-            return {kind="press",action="CP",wait=0.40}
-        end,
-    },
-    {
-        name = "NP",
-        role = "finisher",
-        dur = 0.90,
-        build = function()
-            return {kind="press",action="NP"}
-        end,
-    },
-}
-local function _pickMove(role:string):MoveDef?
-    local pool = {}
-    for _,m in ipairs(MOVE_POOL) do
-        if m.role == role then
-            pool[#pool+1] = m
+local function enemyHPPercent(r:Enemy?):number
+    if not r then return 100 end
+    local hum=r.hum
+    if hum then
+        local max=tonumber(hum.MaxHealth) or hum.Health or 100
+        if max<=0 then max=100 end
+        local hp=math.max(0, hum.Health)
+        return math.clamp((hp/max)*100,0,100)
+    end
+    local hp=math.max(0, r.hp or 100)
+    return math.clamp(hp,0,100)
+end
+local function enemyEvasiveETA(r:Enemy?):number
+    if not r then return math.huge end
+    if r.hasEv then return 0 end
+    local last=r.lastEv or 0
+    return math.max(0, (CFG.EvasiveCD or 30) - (os.clock() - last))
+end
+local ComboTreeBuilder={}
+ComboTreeBuilder.__index=ComboTreeBuilder
+function ComboTreeBuilder.new(bot,tgt)
+    local self=setmetatable({},ComboTreeBuilder)
+    self.bot=bot
+    self.tgt=tgt
+    self.steps={{kind="aim"}}
+    self.tags={}
+    self.state={m1Count=0,afterCP=false,shoveOpened=false,usedShove=false,preferHeavy=false}
+    self.ctx=self:_makeContext()
+    return self
+end
+function ComboTreeBuilder:_makeContext()
+    local bot=self.bot
+    local tgt=self.tgt
+    if not tgt then return nil end
+    local dist=tgt.dist or math.huge
+    if dist==math.huge and bot.rp and tgt.hrp then
+        local here=safePos(bot.rp)
+        local there=safePos(tgt.hrp)
+        if here and there then
+            dist=(there-here).Magnitude
+            tgt.dist=dist
         end
     end
-    local n = #pool
-    if n == 0 then return nil end
-    return pool[math.random(1, n)]
+    local ctx={}
+    ctx.dist=dist
+    ctx.blocking=bot:_targetIsBlocking(tgt,0.3)
+    ctx.behind=isBehind(bot,tgt)
+    ctx.hpPercent=enemyHPPercent(tgt)
+    ctx.hasEv=tgt.hasEv or false
+    ctx.evasiveETA=enemyEvasiveETA(tgt)
+    ctx.canShove=slotReady(SLOT.Shove)
+    ctx.canNP=slotReady(SLOT.NP)
+    ctx.canCP=slotReady(SLOT.CP)
+    ctx.canUpper=slotReady(SLOT.Upper) and bot:_upperUseOK(tgt)
+    ctx.sideDashReady=bot:dashReady("S")
+    ctx.fDashReady=bot:dashReady("F")
+    ctx.maxRange=(CFG.M1Range or 5)+6
+    ctx.kill={npClose=ctx.hpPercent<=20,npFar=ctx.hpPercent<=10.5,cp=ctx.hpPercent<=14.5,shove=ctx.hpPercent<=9,upper=ctx.hpPercent<=15}
+    return ctx
 end
-local function _autoId(idx:number):string
-    return AUTO_COMBO_PREFIX .. tostring(idx)
+function ComboTreeBuilder:append(step)
+    self.steps[#self.steps+1]=step
 end
-local function _makeAutoCombo(idx:number):Combo?
-    local steps:{Step} = {}
-    steps[1] = {kind="aim"}
-    local total = 0.0
-
-    local op = _pickMove("opener")
-    if not op then return nil end
-    local s = op.build()
-    total = total + op.dur
-    steps[#steps+1] = s
-    local midCount = math.random(0, AUTO_COMBO_MAX_STEPS - 2)
-    for i = 1, midCount do
-        local m = _pickMove("mid")
-        if not m then break end
-        if total + m.dur > AUTO_COMBO_MAX_TIME then break end
-        local st = m.build()
-        total = total + m.dur
-        steps[#steps+1] = st
+function ComboTreeBuilder:addTag(tag)
+    if tag then self.tags[#self.tags+1]=tag end
+end
+function ComboTreeBuilder:addM1(wait)
+    self:append({kind="press",action="M1",hold=CFG.TapS,wait=wait or m1Gap()})
+    self.state.m1Count=math.min(4,self.state.m1Count+1)
+end
+function ComboTreeBuilder:addShoveTech(waitDash)
+    if not self.ctx.canShove then return end
+    self:append({kind="press",action="Shove",hold=0,wait=0.12})
+    self:append({kind="press",action="M1HOLD",hold=CFG.TapM,wait=m1Gap()})
+    self.state.m1Count=math.min(4,self.state.m1Count+1)
+    self.state.usedShove=true
+    if self.state.m1Count==1 then self.state.shoveOpened=true end
+    self:append({kind="wait",action="delay",hold=0,wait=waitDash or 0.3})
+    self:append({kind="dash",action="side",dir="off",wait=0.08})
+    self.ctx.canShove=false
+    self.ctx.sideDashReady=false
+end
+function ComboTreeBuilder:addCP()
+    if not self.ctx.canCP then return false end
+    self:append({kind="press",action="CP",hold=0,wait=0.4})
+    self.state.afterCP=true
+    self.ctx.canCP=false
+    return true
+end
+function ComboTreeBuilder:addNP(followM1)
+    if not self.ctx.canNP then return false end
+    self:append({kind="press",action="NP",hold=0,wait=0.25})
+    if followM1 then self:addM1() end
+    self.ctx.canNP=false
+    return true
+end
+function ComboTreeBuilder:addUpper()
+    if not self.ctx.canUpper then return false end
+    self:append({kind="press",action="Upper",hold=0,wait=0.28})
+    self.state.afterCP=false
+    self.ctx.canUpper=false
+    return true
+end
+function ComboTreeBuilder:addMiniUppercut()
+    self:append({kind="tech",action="MINI_UPPER",hold=0,wait=m1Gap()})
+    self.state.m1Count=4
+end
+function ComboTreeBuilder:addDownslam()
+    self:append({kind="tech",action="DOWNSLAM",hold=0,wait=0.4})
+    self.state.m1Count=4
+end
+function ComboTreeBuilder:addLoopdash()
+    self:append({kind="tech",action="LOOPDASH",hold=0,wait=0.18})
+    self.state.m1Count=4
+    self.ctx.fDashReady=false
+    self.ctx.sideDashReady=false
+end
+function ComboTreeBuilder:ensureM1Count(target,opts)
+    while self.state.m1Count<math.min(target,3) do self:addM1() end
+    if target>=4 and self.state.m1Count<4 then
+        if opts and opts.forceDownslam then self:addDownslam() else self:addMiniUppercut() end
     end
-    local fin = _pickMove("finisher")
-    if fin and total + fin.dur <= AUTO_COMBO_MAX_TIME + 0.5 then
-        local st = fin.build()
-        total = total + fin.dur
-        steps[#steps+1] = st
+end
+function ComboTreeBuilder:planOpener()
+    local ctx=self.ctx
+    if not ctx then return end
+    if ctx.canShove and ctx.sideDashReady and ctx.dist<=CFG.M1Range+1 then
+        local pre=0
+        if not ctx.blocking and ctx.dist<=CFG.M1Range then pre=1 end
+        if not ctx.blocking and ctx.dist<=CFG.M1Range*0.9 then pre=2 end
+        for i=1,pre do self:addM1() end
+        if pre>=2 then self.state.preferHeavy=true end
+        self:addShoveTech(0.3)
+        if pre>=2 then self:addTag("case_c") elseif pre==1 then self:addTag("case_b") else self:addTag("case_a") end
+        return
     end
-    local parts = {}
-    for i = 2, #steps do
-        parts[#parts+1] = steps[i].action or "?"
+    self:addM1()
+    if not ctx.blocking and ctx.dist<=CFG.M1Range*0.9 then self:addM1() end
+    self:addTag("m1_open")
+end
+function ComboTreeBuilder:planBridge()
+    local ctx=self.ctx
+    if not ctx then return end
+    if ctx.canShove and ctx.sideDashReady and not self.state.usedShove and self.state.m1Count>=1 then
+        self:addShoveTech(0.28)
+        self:addTag("bridge_shove")
     end
-    local distMax = CFG.ComboDist or ((CFG.M1Range or 5) + 1)
-    local combo:Combo = {
-        id = _autoId(idx),
-        name = table.concat(parts, ">"),
-        min = 0,
-        max = distMax,
-        steps = steps,
-        traits = {"auto"},
-        risk = 0.35,
-    }
+    if self.state.shoveOpened and ctx.canCP then
+        self:addCP()
+        self:addM1()
+        self:addTag("bridge_cp_opener")
+        return
+    end
+    if ctx.canCP and self.state.m1Count>=1 and ctx.dist<=CFG.M1Range+1 then
+        self:addCP()
+        self:addM1()
+        self:addTag("bridge_cp")
+        return
+    end
+    if self.state.m1Count<2 and ctx.dist<=CFG.M1Range+0.5 then
+        self:addM1()
+        self:addTag("bridge_m1")
+    end
+end
+function ComboTreeBuilder:tryKillFinisher()
+    local ctx=self.ctx
+    if not ctx then return false end
+    self:ensureM1Count(3)
+    if ctx.kill.npClose and ctx.canNP and ctx.dist<=7 then
+        self:addNP(true)
+        self:addTag("fin_np_close")
+        return true
+    end
+    if ctx.kill.npFar and ctx.canNP and ctx.dist>7 and not ctx.blocking then
+        self:addNP(false)
+        self:addTag("fin_np_far")
+        return true
+    end
+    if ctx.kill.cp and ctx.canCP and ctx.dist<=7 and not ctx.blocking then
+        self:addCP()
+        self:addTag("fin_cp")
+        return true
+    end
+    if ctx.kill.upper and ctx.canUpper and ctx.dist<=7 then
+        self:addUpper()
+        self:addTag("fin_upper")
+        return true
+    end
+    if ctx.kill.shove and ctx.canShove and ctx.sideDashReady and ctx.dist<=7 then
+        self:addShoveTech(0.25)
+        self:addTag("fin_shove")
+        return true
+    end
+    return false
+end
+function ComboTreeBuilder:_preferHeavyFinisher()
+    local ctx=self.ctx
+    if not ctx or ctx.hasEv or not self.state.preferHeavy then return false end
+    local eta=ctx.evasiveETA or 0
+    local bonusEta=eta+0.8
+    self:ensureM1Count(3)
+    if ctx.canUpper and bonusEta>=1 then
+        self:addMiniUppercut()
+        self:addUpper()
+        if self.bot:dashReady("F") then self:append({kind="dash",action="fdash",dir="off",wait=0.1}) end
+        self:addTag("fin_heavy_upper")
+        return true
+    end
+    if ctx.canNP and ctx.dist<=7 and bonusEta>=0.5 then
+        self:addMiniUppercut()
+        self:addNP(true)
+        self:addTag("fin_heavy_np")
+        return true
+    end
+    if ctx.canCP and bonusEta>=0.3 then
+        self:addDownslam()
+        self:addCP()
+        self:addTag("fin_heavy_cp")
+        return true
+    end
+    if ctx.canShove and ctx.sideDashReady and bonusEta>=0.2 then
+        self:addMiniUppercut()
+        self:append({kind="wait",action="delay",hold=0,wait=0.2})
+        self:addShoveTech(0.2)
+        self:addTag("fin_heavy_shove")
+        return true
+    end
+    return false
+end
+function ComboTreeBuilder:planFinisher()
+    local ctx=self.ctx
+    if not ctx then return end
+    if self:tryKillFinisher() then return end
+    if ctx.hasEv then
+        self:ensureM1Count(3)
+        if self.state.afterCP and ctx.canNP and ctx.dist<=7 then
+            self:addNP(true)
+            self:addTag("fin_ev_np_cp")
+            return
+        end
+        if ctx.canNP and ctx.dist<=7 then
+            self:addNP(true)
+            self:addTag("fin_ev_np")
+            return
+        end
+        if ctx.canUpper then
+            self:addUpper()
+            self:addTag("fin_ev_upper")
+            return
+        end
+        if ctx.canShove and ctx.sideDashReady then
+            self:addShoveTech(0.25)
+            self:addTag("fin_ev_shove")
+            return
+        end
+        if ctx.canCP then
+            self:addCP()
+            self:addM1()
+            self:addTag("fin_ev_cp")
+            return
+        end
+        self:addM1()
+        self:addTag("fin_ev_m1")
+        return
+    end
+    local eta=ctx.evasiveETA
+    if self:_preferHeavyFinisher() then return end
+    if eta>=2 then
+        self:ensureM1Count(3)
+        if ctx.canUpper then
+            self:addMiniUppercut()
+            self:addUpper()
+            if self.bot:dashReady("F") then self:append({kind="dash",action="fdash",dir="off",wait=0.1}) end
+            self:addTag("fin_safe_upper")
+            return
+        end
+        if ctx.canNP and ctx.dist<=7 then
+            self:addMiniUppercut()
+            self:addNP(true)
+            self:addTag("fin_safe_np")
+            return
+        end
+        if ctx.canCP then
+            self:addDownslam()
+            self:addCP()
+            self:addTag("fin_safe_downslam")
+            return
+        end
+        if ctx.canShove and ctx.sideDashReady then
+            self:addMiniUppercut()
+            self:append({kind="wait",action="delay",hold=0,wait=0.2})
+            self:addShoveTech(0.2)
+            self:addTag("fin_safe_shove")
+            return
+        end
+        if ctx.fDashReady then
+            self:addLoopdash()
+            self:addTag("fin_safe_loopdash")
+            return
+        end
+        self:addMiniUppercut()
+        self:addM1()
+        self:addTag("fin_safe_m1")
+        return
+    end
+    self:ensureM1Count(3)
+    self:addMiniUppercut()
+    if ctx.canNP then
+        self:addNP(true)
+        self:addTag("fin_ret_np")
+        return
+    end
+    if ctx.canUpper then
+        self:addUpper()
+        self:addTag("fin_ret_upper")
+        return
+    end
+    if ctx.canShove and ctx.sideDashReady then
+        self:append({kind="wait",action="delay",hold=0,wait=0.2})
+        self:addShoveTech(0.2)
+        self:addTag("fin_ret_shove")
+        return
+    end
+    if ctx.fDashReady then
+        self:addLoopdash()
+        self:addTag("fin_ret_loopdash")
+        return
+    end
+    self:addM1()
+    self:addTag("fin_ret_m1")
+end
+function ComboTreeBuilder:build()
+    if not self.ctx then return nil end
+    self:planOpener()
+    self:planBridge()
+    self:planFinisher()
+    if #self.steps<=1 then return nil end
+    if #self.tags==0 then self.tags={"core"} end
+    local combo={id="tree_"..table.concat(self.tags,"_"),name=table.concat(self.tags," > "),min=0,max=self.ctx.maxRange,steps=self.steps,risk=0.5}
     return combo
-end
-local function refreshAutoCombos()
-    local existing = {}
-    for _,c in ipairs(LIB) do
-        if type(c.id) == "string" and c.id:sub(1, #AUTO_COMBO_PREFIX) == AUTO_COMBO_PREFIX then
-            existing[c.id] = true
-        end
-    end
-    local function nextIdx()
-        local i = 1
-        while existing[_autoId(i)] do
-            i = i + 1
-        end
-        existing[_autoId(i)] = true
-        return i
-    end
-    local count = 0
-    for _ in pairs(existing) do
-        count = count + 1
-    end
-    while count < AUTO_COMBO_POOL_SIZE do
-        local idx = nextIdx()
-        local c = _makeAutoCombo(idx)
-        if not c then break end
-        LIB[#LIB+1] = c
-        count = count + 1
-    end
 end
 local Bot={}; Bot.__index=Bot
 function Bot:_trackConnection(conn)
@@ -1358,6 +1527,15 @@ function Bot:_cancelActiveCombo()
 end
 function Bot:_stopDashOrientation()
     self.dashState = nil
+    if state.kind=="side" then
+        local elapsed=math.max(0, os.clock()-state.start)
+        if self.lastRealDash then
+            if self.lastRealDash.S then self.lastRealDash.S=self.lastRealDash.S+elapsed end
+            if self.lastRealDash.F then self.lastRealDash.F=self.lastRealDash.F+elapsed end
+            if self.lastRealDash.B then self.lastRealDash.B=self.lastRealDash.B+elapsed end
+        end
+        self.sideDashPauseStart=nil
+    end
     self.inDash = false
 end
 function Bot:_stopBlocking()
@@ -1432,6 +1610,7 @@ function Bot.new()
     self.inDash=false
     self.dashState=nil
     self.dashPending = nil
+    self.sideDashPauseStart=nil
     self.sticky=nil
     self.stickyT=0
     self.stickyHold=1.6
@@ -1497,6 +1676,22 @@ function Bot.new()
         end
     end)
     return self
+end
+function Bot:_sideDashDistance():number
+    local hum=self.hum
+    if not hum then return 20 end
+    local max=tonumber(hum.MaxHealth) or hum.Health or 100
+    if max<=0 then max=100 end
+    local hp=math.max(0, hum.Health or 0)
+    local pct=(max>0) and (hp/max)*100 or 0
+    return 20 + 0.08 * math.clamp(pct,0,100)
+end
+function Bot:_sideDashAggroThreshold():number
+    return math.max(0, self:_sideDashDistance()-5)
+end
+function Bot:_sideDashRangeOK(dist:number?):boolean
+    if not dist then return false end
+    return dist>=CFG.Gates.S.lo and dist<=self:_sideDashDistance()
 end
 function Bot:_autoResumeTick()
     if self.autoStart and (not self.run) and self.hum and self.hum.Health > 0 then
@@ -1710,9 +1905,18 @@ function Bot:_hookMine(h:Humanoid)
         local c=an.AnimationPlayed:Connect(function(tr)
             local tail = tailIdFromTrack(tr)
             local nowT = os.clock()
-            if tail == DashAnim.F then self.lastRealDash.F = nowT end
-            if tail == DashAnim.B then self.lastRealDash.B = nowT end
-            if tail == DashAnim.SL or tail == DashAnim.SR then self.lastRealDash.S = nowT end
+            if tail == DashAnim.F then
+                self.lastRealDash.F = nowT
+                self.lastRealDash.B = nowT
+            end
+            if tail == DashAnim.B then
+                self.lastRealDash.B = nowT
+                self.lastRealDash.F = nowT
+            end
+            if tail == DashAnim.SL or tail == DashAnim.SR then
+                self.lastRealDash.S = nowT
+                self.sideDashPauseStart = nowT
+            end
             self.myAnims[tr]={id=tail,start=os.clock()}
             tr.Stopped:Connect(function()
                 self.myAnims[tr]=nil
@@ -2352,7 +2556,7 @@ function Bot:onM1Hit(r:Enemy)
         r.dist = dist
     end
     if self.allowDashExtend and os.clock() < self.allowDashExtend then
-        if self:dashReady("S") and distOK(dist or 99, CFG.Gates.S.lo, CFG.Gates.S.hi) then
+        if self:dashReady("S") and self:_sideDashRangeOK(dist or 99) then
             self:tryDash("S", r.hrp, "off", r)
         end
     end
@@ -2470,7 +2674,7 @@ function Bot:sideDash(tHRP:BasePart?, style:string?, r:Enemy?)
             dist = (targetPos - here).Magnitude
         end
     end
-    if not dist or not distOK(dist, g.lo, g.hi) then return end
+    if not dist or not self:_sideDashRangeOK(dist) then return end
     self:aimAt(tHRP)
     local myPos   = safePos(self.rp)
     local tPos    = safePos(tHRP)
@@ -2478,7 +2682,7 @@ function Bot:sideDash(tHRP:BasePart?, style:string?, r:Enemy?)
     local right   = flat(self.rp.CFrame.RightVector)
     if right.Magnitude < 1e-3 then right = Vector3.new(1,0,0) end
     right = right.Unit
-    local sideLen = CFG.Dash.SideLen or 10.0
+    local sideLen = self:_sideDashDistance()
     local aPos    = myPos - right * sideLen 
     local dPos    = myPos + right * sideLen 
     local dA = (tPos - aPos).Magnitude
@@ -2502,8 +2706,11 @@ function Bot:sideDash(tHRP:BasePart?, style:string?, r:Enemy?)
     pressKey(sideKey, false)
     if wasW then self:setKey(Enum.KeyCode.W, true) end
     if wasS then self:setKey(Enum.KeyCode.S, true) end
-    self.lastDashTime = os.clock() 
-    self.lastDashKind = "S"  
+    local nowT=os.clock()
+    self.lastDashTime = nowT
+    self.lastDashKind = "S"
+    self.lastRealDash.S = nowT
+    self.sideDashPauseStart = nowT
     self.lastMoveTime = os.clock()
 end
 function Bot:forwardDash(r:Enemy, style:string?)
@@ -2519,8 +2726,11 @@ function Bot:forwardDash(r:Enemy, style:string?)
     pressKey(Enum.KeyCode.W, true); task.wait(0.02)
     holdQ(CFG.Dash.HoldQ)
     pressKey(Enum.KeyCode.W, false)
-    self.lastDashTime = os.clock()
+    local nowT=os.clock()
+    self.lastDashTime = nowT
     self.lastDashKind = "F"
+    self.lastRealDash.F = nowT
+    self.lastRealDash.B = nowT
     self.lastMoveTime = os.clock()
 end
 function Bot:backDash(tHRP:BasePart?, style:string?, r:Enemy?)
@@ -2547,8 +2757,11 @@ function Bot:backDash(tHRP:BasePart?, style:string?, r:Enemy?)
     task.wait(0.02)
     holdQ(CFG.Dash.HoldQ)
     pressKey(Enum.KeyCode.S, false)
-    self.lastDashTime = os.clock()
+    local nowT=os.clock()
+    self.lastDashTime = nowT
     self.lastDashKind = "B"
+    self.lastRealDash.B = nowT
+    self.lastRealDash.F = nowT
     if wasW then self:setKey(Enum.KeyCode.W, true) end
     if wasA then self:setKey(Enum.KeyCode.A, true) end
     if wasD then self:setKey(Enum.KeyCode.D, true) end
@@ -3139,7 +3352,9 @@ function Bot:maybeDash(r:Enemy)
     local nowT = os.clock()
     local ctx = self:_ctxKey(r)
     local candidates = {}
-    local canS = self:dashReady("S") and distOK(d, CFG.Gates.S.lo, CFG.Gates.S.hi)
+    local sideReach=self:_sideDashDistance()
+    local sideMin=math.max(CFG.Gates.S.lo, self:_sideDashAggroThreshold())
+    local canS = self:dashReady("S") and d>=sideMin and d<=sideReach
     local canB = self:dashReady("B") and distOK(d, CFG.Gates.B.lo, CFG.Gates.B.hi)
     local canF = self:dashReady("F") and distOK(d, CFG.Gates.F.lo, CFG.Gates.F.hi)
         and ((nowT - (self.lastFDUser or -1e9)) >= FORWARD_DASH_COOLDOWN)
@@ -3195,6 +3410,56 @@ function Bot:_upperSucceeded(r:Enemy, y0:number):boolean
     local y = r.hrp.Position.Y
     return air or (y - y0) > 1.8
 end
+function Bot:_doMiniUppercutStep(r:Enemy, waitTime:number?):boolean
+    if not r then return false end
+    pressKey(Enum.KeyCode.Space,true)
+    task.wait(0.03)
+    self:_registerM1Attempt(r)
+    local fired=self:_pressAction("M1", CFG.TapS)
+    if fired then self.lastM1=os.clock() end
+    task.wait(CFG.InputTap)
+    pressKey(Enum.KeyCode.Space,false)
+    task.wait(waitTime or m1Gap())
+    return fired
+end
+function Bot:_doDownslamStep(r:Enemy, waitTime:number?):boolean
+    if not r then return false end
+    pressKey(Enum.KeyCode.Space,true,0.08)
+    task.wait(0.18)
+    self:_registerM1Attempt(r)
+    local fired=self:_pressAction("M1", CFG.TapS)
+    if fired then self.lastM1=os.clock() end
+    task.wait(waitTime or 0.35)
+    return fired
+end
+function Bot:_doLoopdashStep(r:Enemy, waitTime:number?):boolean
+    if not (r and r.hrp) then return false end
+    if not self:dashReady("F") then return false end
+    if not self:_doMiniUppercutStep(r, m1Gap()) then return false end
+    local before=(r.hum and r.hum.Health) or r.hp or 0
+    local dashOk=self:tryDash("F", r.hrp, "off", r)
+    if not dashOk then return false end
+    task.wait(waitTime or 0.18)
+    local after=(r.hum and r.hum.Health) or r.hp or 0
+    if not after or after>=before then return false end
+    task.wait(0.15)
+    local dist=r.dist or math.huge
+    if dist>10 and self:dashReady("S") then
+        self:tryDash("S", r.hrp, "off", r)
+    else
+        self:setInput(0.8,0)
+        task.wait(0.2)
+        self:setInput(0,0)
+    end
+    self.m1ChainCount=0
+    self.allowDashExtend=os.clock()+0.6
+    local deadline=os.clock()+0.4
+    while os.clock()<deadline do
+        if self:_hasRecentStun(r) then return true end
+        task.wait(0.05)
+    end
+    return false
+end
 function Bot:execCombo(c:Combo, r:Enemy)
     if self.actThread then return end
     self:_finalizeActionRecords(true)
@@ -3211,6 +3476,10 @@ function Bot:execCombo(c:Combo, r:Enemy)
             if not self.run or not r.model.Parent or self:_targetImmortal(r) then
                 abort = true
                 break
+            end
+            if self.hum then
+                local okState,humState=pcall(function() return self.hum:GetState() end)
+                if okState and humState and FALL_STATES[humState] then abort=true break end
             end
             if waitForStun and st.kind ~= "aim" then
                 local confirmed=false
@@ -3270,14 +3539,14 @@ function Bot:execCombo(c:Combo, r:Enemy)
                         if distOK(r.dist, CFG.Gates.F.lo, CFG.Gates.F.hi) and math.random()<0.60 then
                             fired = self:tryDash("F", r.hrp, "off", r)
                         end
-                        if not fired and distOK(r.dist, CFG.Gates.S.lo, CFG.Gates.S.hi) and math.random()<0.25 then
+                        if not fired and self:_sideDashRangeOK(r.dist) and math.random()<0.25 then
                             fired = self:tryDash("S", r.hrp, "off", r)
                         end
                         if not fired and distOK(r.dist, CFG.Gates.B.lo, CFG.Gates.B.hi) then
                             self:tryDash("B", r.hrp, "off", r)
                         end
                     else
-                        if distOK(r.dist, CFG.Gates.S.lo, CFG.Gates.S.hi) then
+                        if self:_sideDashRangeOK(r.dist) then
                             self:tryDash("S", r.hrp, "off", r)
                         elseif distOK(r.dist, CFG.Gates.B.lo, CFG.Gates.B.hi) then
                             self:tryDash("B", r.hrp, "off", r)
@@ -3297,6 +3566,19 @@ function Bot:execCombo(c:Combo, r:Enemy)
                 elseif st.action=="auto_after_upper" then
                 end
                 task.wait(st.wait or CFG.InputTap)
+            elseif st.kind=="tech" then
+                local okStep=true
+                if st.action=="MINI_UPPER" then
+                    okStep=self:_doMiniUppercutStep(r, st.wait)
+                    waitForStun=true
+                elseif st.action=="DOWNSLAM" then
+                    okStep=self:_doDownslamStep(r, st.wait)
+                    waitForStun=true
+                elseif st.action=="LOOPDASH" then
+                    okStep=self:_doLoopdashStep(r, st.wait)
+                    waitForStun=false
+                end
+                if not okStep then abort=true break end
             elseif st.kind=="wait" then
                 task.wait(st.wait or CFG.InputTap)
             end
@@ -3413,47 +3695,10 @@ function Bot:_shouldStartCombo(tgt:Enemy):boolean
     return hasBridge or m1Recent or idlePush or chainReady
 end
 function Bot:_chooseCombo(tgt:Enemy):Combo?
-    refreshAutoCombos()
-    local dist = tgt and (tgt.dist or math.huge) or math.huge
-    if tgt and dist == math.huge and tgt.hrp and self.rp then
-        local here = safePos(self.rp)
-        local there = safePos(tgt.hrp)
-        if here and there then
-            dist = (there - here).Magnitude
-            tgt.dist = dist
-        end
-    end
-    local candidates:{Combo} = {}
-    for _,c in ipairs(LIB) do
-        local ok = true
-        if c.min and dist < c.min then ok = false end
-        if c.max and dist > c.max then ok = false end
-        if ok and c.reqNoEv and tgt and tgt.hasEv then
-            ok = false
-        end
-        if ok then
-            candidates[#candidates+1] = c
-        end
-    end
-    if #candidates == 0 then
-        return nil
-    end
-    local best, bestScore = nil, -math.huge
-    for _,c in ipairs(candidates) do
-        local stats = self.ls:combo(c.id)
-        local att = stats.att or 0
-        local succ = stats.succ or 0
-        local dmgt = stats.dmgt or 0
-        local avg = (att > 0) and (dmgt / att) or 0
-        local sr = (att > 0) and (succ / att) or 0
-        local explore = (att < 4) and 4 or 0
-        local score = avg + sr * 4 + explore
-        if score > bestScore then
-            bestScore = score
-            best = c
-        end
-    end
-    return best
+    if not tgt then return nil end
+    local builder=ComboTreeBuilder.new(self, tgt)
+    if not builder then return nil end
+    return builder:build()
 end
 function Bot:_maybeUltActions(tgt:Enemy)
     if not self:_isUlted() then return false end
@@ -3872,7 +4117,7 @@ function Bot:update(dt:number)
         self.stillTimer = self.stillTimer + dt
         if self.stillTimer > 1.2 then
             local idleCtx = self:_ctxKey(tgt)
-            if distOK(tgt.dist, CFG.Gates.S.lo, CFG.Gates.S.hi) and math.random()<0.85 then
+            if self:_sideDashRangeOK(tgt.dist) and math.random()<0.85 then
                 local fired = self:_pressAction("Shove", CFG.TapS)
                 if fired then
                     self:_noteAction("SHOVE", idleCtx, tgt)
@@ -4001,12 +4246,6 @@ function Bot:update(dt:number)
     local canCombo = self:_shouldStartCombo(tgt)
     if canCombo then
         local c=self:_chooseCombo(tgt)
-        if c then
-            if c.id=="sai_upper_path" and math.random()<0.60 then
-                c=nil
-                for _,k in ipairs(LIB) do if k.id=="sai_m1cp_np" then c=k break end end
-            end
-        end
         if c then self:execCombo(c,tgt); self.gui:updateCDs(self:_cdLeft("F"), self:_cdLeft("B"), self:_cdLeft("S")); return end
     end
     self:neutral(tgt)
@@ -4032,7 +4271,7 @@ function AI.Decide(input)
     local nowT = os.clock()
     local candidates = {}
     local function add(c) table.insert(candidates, c) end
-    if tgt and bot:dashReady("S") and d>=CFG.Gates.S.lo and d<=CFG.Gates.S.hi then
+    if tgt and bot:dashReady("S") and bot:_sideDashRangeOK(d) then
         add({name="S", bias=0.40, exec=function() return bot:tryDash("S", tgt.hrp, "off", tgt) end})
     end
     if tgt and bot:dashReady("B") and d>=CFG.Gates.B.lo and d<=CFG.Gates.B.hi then
