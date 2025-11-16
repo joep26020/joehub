@@ -131,6 +131,9 @@ local function cfgSetPath(root, path, value)
     if #parts == 0 then
         return
     end
+    if parts[1] == "Bind" or parts[1] == "Cooldown" then
+        return
+    end
     local node = root
     for i = 1, #parts - 1 do
         local key = parts[i]
@@ -484,6 +487,22 @@ local function attrOn(v:any):boolean
     return true
 end
 
+local function getAttrInsensitive(inst:Instance?, name:string):any
+    if not (inst and typeof(inst.GetAttribute)=="function" and typeof(name)=="string") then return nil end
+    local attrs = inst:GetAttributes()
+    local target = name:lower()
+    for key,value in pairs(attrs) do
+        if type(key)=="string" and key:lower()==target then
+            return value
+        end
+    end
+    return inst:GetAttribute(name)
+end
+
+local function attrTrue(inst:Instance?, name:string):boolean
+    return attrOn(getAttrInsensitive(inst, name))
+end
+
 local function m1Gap()
     
     local w = CFG.M1Min + math.random() * CFG.M1Rand
@@ -495,7 +514,7 @@ end
 local function flat(v:Vector3) return Vector3.new(v.X,0,v.Z) end
 
 local function safePos(part:BasePart?):Vector3?
-    if not part then return nil end
+    if not (part and part.Parent) then return nil end
     local ok, pos = pcall(function() return part.Position end)
     if ok then return pos end
     return nil
@@ -705,29 +724,6 @@ local function createPanelSection(parent, title, startCollapsed)
 end
 
 
-local PANEL_HELP_TEXT = [[
-COMMANDS:
-/start — run the bot • /stop — pause • /exit — close UI
-/epsilon <0..1> — set exploration rate
-/external on|off — allow an external AI decide()
-/autosave <sec> — change autosave cadence
-/set <Path> <num> — edit a tunable (Cooldown.F|S|B, Gates.{F|S|B}.{lo|hi}, SpaceMin, SpaceMax, M1Range)
-/tune show — print every tunable and current value
-/reward show|set|reset — same table as the Reward Editor below
-/policy save|load|reset — manage learned policy storage
-/stats — refresh KPI line • /help — show this guide
-
-PANELS:
-• Command Console — execute the slash commands above.
-• Help & Tips — this quick reference.
-• Reward Editor — tweak CFG.Reward weights without typing commands.
-• Value Limiters — adjust the min/max bounds the AI can tune.
-
-TIPS:
-• Use Save Config to persist GUI reward/limit edits between sessions.
-• Update rewards/limits visually, then /policy save to persist.
-• If something breaks, review the console output or restart the bot.
-]]
 local function btn(p,n,t,sz,pos,clr)
     local b = Instance.new("TextButton")
     b.Name = n
@@ -893,6 +889,7 @@ function GUI.new()
     self.target = targetValue; self.targetHeader = targetHeader
     self.combo  = comboValue;  self.comboHeader  = comboHeader
     self.ev     = evValue;     self.evHeader     = evHeader
+    self.cooldownBars = {}
 
     -- mid row: cooldowns + rules
     local detailRow = Instance.new("Frame")
@@ -1039,6 +1036,14 @@ function GUI:updateCDs(f,b,s)
     if not self.moves then return end
     self.moves.Text = string.format("F %.2fs   B %.2fs   S %.2fs", math.max(0,f), math.max(0,b), math.max(0,s))
 end
+
+function GUI:updateCooldownBar(name, value)
+    local bars = self.cooldownBars
+    if not bars then return end
+    local bar = bars[name]
+    if not (bar and bar.Parent) then return end
+    -- placeholder for future visual bars
+end
 function GUI:updateCombos(data)
     for _,ch in ipairs(self.comboList:GetChildren()) do if ch:IsA("TextLabel") then ch:Destroy() end end
     local combos = data.combos or {}
@@ -1064,64 +1069,13 @@ function GUI:addConsole(container)
     layout.SortOrder = Enum.SortOrder.LayoutOrder
     layout.Parent = container
 
-    -- COMMAND CONSOLE
-    local consoleSection, consoleBody = createPanelSection(container, "Command Console")
-    consoleSection.LayoutOrder = 1
-
-    local consoleBodyLayout = Instance.new("UIListLayout")
-    consoleBodyLayout.SortOrder = Enum.SortOrder.LayoutOrder
-    consoleBodyLayout.Padding = UDim.new(0,6)
-    consoleBodyLayout.Parent = consoleBody
-
-    local console = Instance.new("ScrollingFrame")
-    console.Name = "Console"
-    console.Size = UDim2.new(1,0,0,110) -- was 150
-    console.BackgroundColor3 = Color3.fromRGB(14,16,22)
-    console.BorderSizePixel = 0
-    console.ScrollBarThickness = 4
-    console.CanvasSize = UDim2.new(0,0,0,0)
-    console.Parent = consoleBody
-
-    local cl = Instance.new("UIListLayout")
-    cl.Padding = UDim.new(0,2)
-    cl.SortOrder = Enum.SortOrder.LayoutOrder
-    cl.Parent = console
-
-    local inputRow = Instance.new("Frame")
-    inputRow.BackgroundTransparency = 1
-    inputRow.Size = UDim2.new(1,0,0,24) -- was 32
-    inputRow.Parent = consoleBody
-
-    local input = Instance.new("TextBox")
-    input.Name = "Cmd"
-    input.Size = UDim2.new(1,-70,1,0)
-    input.Position = UDim2.new(0,0,0,0)
-    input.PlaceholderText = "Type /help for available commands"
-    input.Text = ""
-    input.BackgroundColor3 = Color3.fromRGB(26,28,38)
-    input.TextColor3 = Color3.fromRGB(230,230,240)
-    input.ClearTextOnFocus = false
-    input.TextEditable = true
-    input.Font = Enum.Font.Gotham
-    input.TextSize = 14
-    input.TextXAlignment = Enum.TextXAlignment.Left
-    input.Parent = inputRow
-
-    local run = Instance.new("TextButton")
-    run.Name = "Run"
-    run.Size = UDim2.new(0,64,1,0)
-    run.Position = UDim2.new(1,-64,0,0)
-    run.BackgroundColor3 = Color3.fromRGB(48,60,96)
-    run.TextColor3 = Color3.fromRGB(240,240,240)
-    run.Font = Enum.Font.GothamBold
-    run.TextSize = 14
-    run.Text = "Run"
-    run.Parent = inputRow
+    local saveSection, saveBody = createPanelSection(container, "Configuration")
+    saveSection.LayoutOrder = 1
 
     local saveRow = Instance.new("Frame")
     saveRow.BackgroundTransparency = 1
-    saveRow.Size = UDim2.new(1,0,0,24)
-    saveRow.Parent = consoleBody
+    saveRow.Size = UDim2.new(1,0,0,28)
+    saveRow.Parent = saveBody
 
     local saveBtn = btn(saveRow, "SaveConfig", "Save Config", UDim2.new(0,120,1,0), UDim2.new(0,0,0,0), Color3.fromRGB(60,88,140))
     saveBtn.TextSize = 13
@@ -1141,83 +1095,15 @@ function GUI:addConsole(container)
         self:saveConfigToDisk()
     end)
 
-    -- HELP
-    local helpSection, helpBody = createPanelSection(container, "Help & Tips")
-    helpSection.LayoutOrder = 2
-
-    local help = Instance.new("ScrollingFrame")
-    help.Name = "Help"
-    help.Size = UDim2.new(1,0,0,110) -- was 150
-    help.BackgroundColor3 = Color3.fromRGB(18,20,28)
-    help.BorderSizePixel = 0
-    help.ScrollBarThickness = 4
-    help.CanvasSize = UDim2.new(0,0,0,0)
-    help.Parent = helpBody
-
-    local pad = Instance.new("UIPadding")
-    pad.PaddingLeft  = UDim.new(0,8)
-    pad.PaddingRight = UDim.new(0,8)
-    pad.PaddingTop   = UDim.new(0,6)
-    pad.Parent = help
-
-    local ht = Instance.new("TextLabel")
-    ht.BackgroundTransparency = 1
-    ht.Size = UDim2.new(1,-4,0,0)
-    ht.AutomaticSize = Enum.AutomaticSize.Y
-    ht.TextXAlignment = Enum.TextXAlignment.Left
-    ht.TextYAlignment = Enum.TextYAlignment.Top
-    ht.TextWrapped = true
-    ht.Font = Enum.Font.Gotham
-    ht.TextSize = 13
-    ht.TextColor3 = Color3.fromRGB(210,220,255)
-    ht.Text = PANEL_HELP_TEXT
-    ht.Parent = help
-
-    local function refreshHelpCanvas()
-        local boundsY = (ht.TextBounds and ht.TextBounds.Y or 0)
-        help.CanvasSize = UDim2.new(0,0,0,boundsY + 12)
-    end
-    ht:GetPropertyChangedSignal("TextBounds"):Connect(refreshHelpCanvas)
-    refreshHelpCanvas()
-
-    self.console = console
-    self.consoleLayout = cl
-    self.cmd = input
-    self.cmdRun = run
-    self.helpText = ht
-    self.helpFrame = help
     self.saveConfigButton = saveBtn
     self.configStatusLabel = cfgStatus
 
-    -- reward + limiter editors go under Help
-    self:addRewardEditor(container, 3)
-    self:addLimiterEditor(container, 4)
+    self:addRewardEditor(container, 2)
+    self:addLimiterEditor(container, 3)
 
     self:updateConfigSaveState(false)
 end
 
-
-function GUI:log(line)
-    if not self.console then return end
-    local l = Instance.new("TextLabel")
-    l.BackgroundTransparency = 1
-    l.Size = UDim2.new(1, -6, 0, 18)
-    l.TextXAlignment = Enum.TextXAlignment.Left
-    l.Font = Enum.Font.Gotham
-    l.TextSize = 14
-    l.TextColor3 = Color3.fromRGB(220,225,240)
-    l.Text = line
-    l.Parent = self.console
-    local layout = self.consoleLayout
-    local h = layout and layout.AbsoluteContentSize.Y or 0
-    self.console.CanvasSize = UDim2.new(0,0,0,h + 8)
-    local windowY = (self.console.AbsoluteWindowSize and self.console.AbsoluteWindowSize.Y) or 0
-    self.console.CanvasPosition = Vector2.new(0, math.max(0, h + 8 - windowY))
-end
-
-function GUI:logError(line)
-    self:log("[error] " .. tostring(line))
-end
 
 function GUI:updateConfigSaveState(dirty)
     self.configDirty = dirty and true or false
@@ -1242,9 +1128,9 @@ function GUI:saveConfigToDisk()
     local ok, err = cfgSave(cfgBuildSnapshot())
     if ok then
         self:updateConfigSaveState(false)
-        self:log("[config] saved to " .. ConfigFileName)
+        warn("[BGBot] config saved to " .. ConfigFileName)
     else
-        self:logError("config save failed: " .. tostring(err or "unknown"))
+        warn("[BGBot] config save failed: " .. tostring(err or "unknown"))
     end
 end
 
@@ -1319,14 +1205,14 @@ function GUI:addRewardEditor(container, order)
         local function applyValue()
             local value = tonumber(box.Text)
             if not value then
-                self:logError(string.format("Reward %s requires a number", key))
+                warn(string.format("[BGBot] Reward %s requires a number", key))
                 return
             end
             CFG.Reward[key] = value
             if self.markConfigDirty then
                 self:markConfigDirty()
             end
-            self:log(string.format("[reward] %s = %.3f", key, value))
+            warn(string.format("[BGBot] reward %s = %.3f", key, value))
         end
 
         apply.MouseButton1Click:Connect(applyValue)
@@ -1417,11 +1303,11 @@ function GUI:addLimiterEditor(container, order)
             local minVal = tonumber(minBox.Text)
             local maxVal = tonumber(maxBox.Text)
             if not (minVal and maxVal) then
-                self:logError(string.format("Limiter %s needs numeric min/max", key))
+                warn(string.format("[BGBot] Limiter %s needs numeric min/max", key))
                 return
             end
             if minVal > maxVal then
-                self:logError(string.format("Limiter %s min cannot exceed max", key))
+                warn(string.format("[BGBot] Limiter %s min cannot exceed max", key))
                 return
             end
             schema.min = minVal
@@ -1431,7 +1317,7 @@ function GUI:addLimiterEditor(container, order)
             if self.markConfigDirty then
                 self:markConfigDirty()
             end
-            self:log(string.format("[limits] %s = %.3f..%.3f", key, minVal, maxVal))
+            warn(string.format("[BGBot] limits %s = %.3f..%.3f", key, minVal, maxVal))
         end
 
         apply.MouseButton1Click:Connect(applyLimit)
@@ -1584,17 +1470,11 @@ function Bot:_cancelActiveCombo()
 end
 
 function Bot:_stopDashOrientation()
-    if self.dashOrientThread then
-        pcall(task.cancel, self.dashOrientThread)
-        self.dashOrientThread = nil
-    end
+    self.dashState = nil
+    self.inDash = false
 end
 
 function Bot:_stopBlocking()
-    if self.blockThread then
-        pcall(task.cancel, self.blockThread)
-        self.blockThread = nil
-    end
     if self.blocking then
         self:_forceUnblockNow()
     end
@@ -1621,7 +1501,6 @@ function Bot.new()
     self.bridge=Bridge.new()
 
 
-    self.enemies = {} :: {[Model]:Enemy}
     self.run=false; self.state="idle"; self.actThread=nil
     self.char=nil; self.hum=nil; self.rp=nil; self.alive=false
 
@@ -1640,7 +1519,6 @@ function Bot.new()
 
     self.connections = {}
     self.destroyed = false
-    self.reconcileTask = nil
     self.savedCameraType = nil
 
     self.evReady=true; self.evTimer=0; self.shouldPanic=false
@@ -1648,8 +1526,8 @@ function Bot.new()
     self.lastM1=0; self.lastSkill=0; self.lastSnipe=0
     self.lastAttacker=nil; self.lastAtkTime=0; self.lastDmg=0; self.lastHP=0
 
-    self.blocking=false; self.blockUntil=0; self.blockThread=nil; self.lastBlockTime=0; self.blockCooldown=0
-    self.blockStartTime=nil
+    self.blocking=false; self.blockUntil=0; self.lastBlockTime=0; self.blockCooldown=0
+    self.blockStartTime=nil; self.blockReleaseAt=0; self.blockKeyDown=false
 
     self.stunFollow=nil
     self.lastStunTarget=nil
@@ -1657,7 +1535,9 @@ function Bot.new()
     self.moveKeys={ [Enum.KeyCode.W]=false,[Enum.KeyCode.A]=false,[Enum.KeyCode.S]=false,[Enum.KeyCode.D]=false }
     self.strafe=0; self.lastStrafe=0
 
-    self.live=workspace:WaitForChild("Live"); self.liveChar=self.live:FindFirstChild(LP.Name); self.liveConn=nil
+    self.liveFolder = workspace:FindFirstChild("Live")
+    self.liveChar = self.liveFolder and self.liveFolder:FindFirstChild(LP.Name) or nil
+    self.liveConn=nil
 
     self:loadPolicy()
 
@@ -1682,7 +1562,7 @@ function Bot.new()
 
 
     self.inDash=false
-    self.dashOrientThread=nil
+    self.dashState=nil
     self.dashPending = nil
 
 
@@ -1711,23 +1591,6 @@ function Bot.new()
         if getgenv().BattlegroundsBot then getgenv().BattlegroundsBot:exit() end
     end))
 
-    if self.gui and self.gui.cmdRun and self.gui.cmd then
-        self:_trackConnection(self.gui.cmdRun.MouseButton1Click:Connect(function()
-            local line = self.gui.cmd.Text
-            if line and line ~= "" then self.gui:log("> "..line) end
-            local out = AI.RunCommand(line)
-            if out and out ~= "" then self.gui:log(out) end
-        end))
-        self:_trackConnection(self.gui.cmd.FocusLost:Connect(function(enterPressed)
-            if enterPressed then
-                local line = self.gui.cmd.Text
-                if line and line ~= "" then self.gui:log("> "..line) end
-                local out = AI.RunCommand(line)
-                if out and out ~= "" then self.gui:log(out) end
-            end
-        end))
-    end
-
     self.gui:setS("Status: idle"); self.gui:setT("Target: none"); self.gui:setC("Combo: none"); self.gui:setE("Evasive: unknown")
     self.gui:updateCombos(self.ls.data); self.gui:updateCDs(0,0,0)
     if self.gui and self.gui.setKPI then
@@ -1739,56 +1602,9 @@ function Bot.new()
     self:_trackConnection(LP.CharacterAdded:Connect(function(c) self:connectChar(c) end))
 
     self:attachLive(self.liveChar)
-    for _,m in ipairs(self.live:GetChildren()) do self:addEnemy(m) end
-    self:_trackConnection(self.live.ChildAdded:Connect(function(m)
-        if not m:IsA("Model") then return end
-        if m.Name==LP.Name then self:attachLive(m) else self:addEnemy(m) end
-    end))
-    self:_trackConnection(self.live.ChildRemoved:Connect(function(m)
-        if m:IsA("Model") then
-            self:_cleanupEnemy(m)
-        end
-        if m==self.liveChar then self:attachLive(nil) end
-    end))
 
     
-    self:_trackConnection(Players.PlayerAdded:Connect(function(p)
-        self:_trackConnection(p.CharacterAdded:Connect(function(ch)
-            task.defer(function()
-                if self.destroyed then return end
-                local live = workspace:FindFirstChild("Live")
-                local mdl = live and live:FindFirstChild(p.Name)
-                if mdl and mdl:IsA("Model") then self:addEnemy(mdl) end
-            end)
-        end))
-    end))
-
-    self:_trackConnection(Players.PlayerRemoving:Connect(function(p)
-        self:_cleanupEnemyByName(p.Name)
-    end))
-
     
-    self.reconcileTask = task.spawn(function()
-        while not self.destroyed do
-            task.wait(2.0)
-            if self.destroyed then break end
-            local live = workspace:FindFirstChild("Live")
-            if live then
-                
-                for _,m in ipairs(live:GetChildren()) do
-                    if m.Name ~= LP.Name and not self.enemies[m] then
-                        self:addEnemy(m)
-                    end
-                end
-                
-                for m,_ in pairs(self.enemies) do
-                    if not m.Parent then self:_cleanupEnemy(m) end
-                end
-            end
-        end
-        self.reconcileTask = nil
-    end)
-
     self.hb = RunService.Heartbeat:Connect(function(dt)
         local ok, err = pcall(function()
             self:update(dt)
@@ -1862,11 +1678,6 @@ function Bot:destroy()
     self.liveConn = nil
 
 
-    if self.reconcileTask then
-        pcall(task.cancel, self.reconcileTask)
-        self.reconcileTask = nil
-    end
-
     for _,conn in ipairs(self.connections or {}) do
         pcall(function() conn:Disconnect() end)
     end
@@ -1874,11 +1685,7 @@ function Bot:destroy()
 
     for _,c in ipairs(self.myHumConns) do pcall(function() c:Disconnect() end) end
     self.myHumConns = {}
-
-    for _,rec in pairs(self.enemies or {}) do
-        for _,c in ipairs(rec.cons or {}) do pcall(function() c:Disconnect() end) end
-    end
-    self.enemies = {}
+    self:_clearTarget()
 
     self:clearMove()
     if self.hum then self.hum.AutoRotate = true end
@@ -1901,9 +1708,6 @@ function Bot:_handleRuntimeError(source:string, err:any)
     self.handlingError = true
     local message = string.format("%s", tostring(err))
     warn(string.format("[BGBot] %s error: %s", source, message))
-    if self.gui then
-        self.gui:logError(string.format("[%s] %s", source, message))
-    end
     self.autoStart = false
     local gui = self.gui
     local ok, stopErr = pcall(function()
@@ -1948,165 +1752,116 @@ end
 function Bot:_beginDashOrientation(kind:string, tr:AnimationTrack, style:("off"|"def"), tHRP:BasePart?, enemy:Enemy?)
     if self.inDash or not self.hum or not self.rp then return end
     self.inDash = true
-    if self.hum then self.hum.AutoRotate = false end
-
-    local function alignCam()
-        local cam = workspace.CurrentCamera
-        if not(cam and self.rp) then return end
-        local cp  = cam.CFrame.Position
-        local fv  = self.rp.CFrame.LookVector
-        local flat= Vector3.new(fv.X, 0, fv.Z)
-        if flat.Magnitude < 1e-3 then return end
-        local tgt = cp + flat.Unit
-        cam.CFrame = CFrame.new(cp, Vector3.new(tgt.X, cp.Y, tgt.Z))
-    end
-    local function canTurn()
-        if self.hum and self.hum:GetState()==Enum.HumanoidStateType.FallingDown then return false end
-        return true
-    end
-    local function faceToward(pos:Vector3?)
-        if not (pos and canTurn()) then return end
-        local here = safePos(self.rp)
-        if not here then return end
-        local to = Vector3.new(pos.X, here.Y, pos.Z) - here
-        if to.Magnitude<1e-3 then return end
-        self.rp.CFrame = CFrame.lookAt(here, here + to.Unit)
-        alignCam()
-    end
-    local function faceAwayFrom(pos:Vector3?)
-        if not (pos and canTurn()) then return end
-        local here = safePos(self.rp)
-        if not here then return end
-        local to = Vector3.new(pos.X, here.Y, pos.Z) - here
-        if to.Magnitude<1e-3 then return end
-        self.rp.CFrame = CFrame.lookAt(here, here - to.Unit)
-        alignCam()
-    end
-    local function facePerp(toU:Vector3, cw:boolean)
-        if not canTurn() then return end
-        local here = safePos(self.rp)
-        if not here then return end
-        local perp = cw and Vector3.new(toU.Z,0,-toU.X) or Vector3.new(-toU.Z,0,toU.X)
-        self.rp.CFrame = CFrame.lookAt(here, here + perp.Unit)
-        alignCam()
-    end
-
-    local t0 = os.clock()
+    self.hum.AutoRotate = false
     local length = (tr.Length and tr.Length>0) and tr.Length
                   or (kind=="fdash" and CFG.Dash.FWindow)
                   or (kind=="bdash" and CFG.Dash.BWindow)
                   or CFG.Dash.SWindow
-    local orbitCW, didOrbit, orbitStart = (math.random()<0.5), false, 0.0
-    local stopped = false
-    tr.Stopped:Connect(function() stopped = true end)
-
-    self:_stopDashOrientation()
-    self.dashOrientThread = task.spawn(function()
-        while not stopped and os.clock()-t0 <= length do
-            if not (self.run and self.hum and self.hum.Health>0 and self.rp) then break end
-            local tgt = tHRP
-            if not (tgt and tgt.Parent) then
-                local pick = self:selectTarget()
-                tgt = pick and pick.hrp or nil
-            end
-            if tgt then
-                local here = safePos(self.rp)
-                local tgtPos = safePos(tgt)
-                if here and tgtPos then
-                    local to = Vector3.new(tgtPos.X, here.Y, tgtPos.Z) - here
-                    if to.Magnitude > 1e-3 then
-                        local toU = to.Unit
-                        if kind=="fdash" then
-                            if style=="off" then
-                                if not didOrbit then
-                                    faceToward(tgtPos)
-                                    if to.Magnitude <= CFG.Dash.OrbitTrigger then
-                                        didOrbit = true; orbitStart = os.clock()
-                                    end
-                                else
-                                    local elapsed = os.clock() - orbitStart
-                                    if elapsed <= CFG.Dash.OrbitDur then facePerp(toU, orbitCW)
-                                    else faceToward(tgtPos) end
-                                end
-                            else
-                                faceAwayFrom(tgtPos)
-                            end
-                        elseif kind=="bdash" then
-                            if style=="off" then
-                                local timeLeft = (t0 + length) - os.clock()
-                                if to.Magnitude <= CFG.Dash.BackClose then facePerp(toU, orbitCW)
-                                else faceAwayFrom(tgtPos) end
-                                if timeLeft <= CFG.Dash.PreEndBackFace then faceToward(tgtPos) end
-                            else
-                                faceToward(tgtPos)
-                            end
-                        else
-                            if style=="off" then
-                                if to.Magnitude <= CFG.Dash.SideOffLock then faceToward(tgtPos)
-                                else facePerp(toU, orbitCW) end
-                            else
-                                facePerp(toU, orbitCW)
-                            end
-                        end
-                    end
-                end
-            end
-            RunService.Heartbeat:Wait()
-        end
-
-        
-        local pick = self:selectTarget()
-        local t2   = (tHRP and tHRP.Parent) and tHRP or (pick and pick.hrp)
-        if t2 and self.hum and self.hum.Health>0 and self.hum:GetState()~=Enum.HumanoidStateType.FallingDown then
-            local here = safePos(self.rp)
-            local tgtPos = safePos(t2)
-            if here and tgtPos then
-                self.rp.CFrame = CFrame.lookAt(here, Vector3.new(tgtPos.X, here.Y, tgtPos.Z))
-                alignCam()
-            end
-        end
-
-        local closeEnemy = enemy or pick
-        if closeEnemy and closeEnemy.hrp and self.run and self.alive and not self.actThread then
-            local dist = closeEnemy.dist or math.huge
-            if dist==math.huge then
-                local here = safePos(self.rp)
-                local enemyPos = safePos(closeEnemy.hrp)
-                if here and enemyPos then
-                    dist = (enemyPos - here).Magnitude
-                end
-            end
-            if dist <= 5.0 and not self.blocking then
-                self:_registerM1Attempt(closeEnemy)
-                if self:_pressAction("M1", CFG.TapS) then
-                    local nowT = os.clock()
-                    self.lastM1 = nowT
-                    self.lastAttempt = nowT
-                end
-            end
-        end
-
-        
-        local scoreKind = (kind=="fdash" and "F") or (kind=="bdash" and "B") or "S"
-        if scoreKind then
-            local scoreTarget = enemy or pick
-            if not scoreTarget and t2 and t2.Parent then
-                scoreTarget = self:getEnemyByName(t2.Parent.Name)
-            end
-            self:_postDashScore(scoreKind, scoreTarget)
-        end
-
-        
-        if pick and self:_hasRecentStun(pick) and (pick.dist or 99) <= CFG.CloseUseRange then
-            if self.allowDashExtend and os.clock() < self.allowDashExtend then
-                self:execBestCloseCombo(pick)
-            end
-        end
-        self.allowDashExtend = nil
-
-        self.inDash = false
-        self.dashOrientThread = nil
+    local state = {
+        kind = kind,
+        style = style or "off",
+        targetHRP = tHRP,
+        enemy = enemy,
+        start = os.clock(),
+        length = length or 0.4,
+        orbitCW = (math.random()<0.5),
+        track = tr,
+        stopped = false,
+    }
+    state.stoppedConn = tr.Stopped:Connect(function()
+        state.stopped = true
     end)
+    self.dashState = state
+end
+
+function Bot:_updateDashOrientation()
+    local state = self.dashState
+    if not state then return end
+    if not self.run then
+        self:_finishDashOrientation(state)
+        return
+    end
+    local tr = state.track
+    if state.stopped or not (tr and tr.IsPlaying) then
+        self:_finishDashOrientation(state)
+        return
+    end
+    local target = state.targetHRP
+    if not (target and target.Parent) then
+        local pick = self.currentTarget
+        target = pick and pick.hrp or nil
+        state.targetHRP = target
+    end
+    if not (self.rp and target) then return end
+    local here = safePos(self.rp)
+    local tgtPos = safePos(target)
+    if not (here and tgtPos) then return end
+    local to = Vector3.new(tgtPos.X, here.Y, tgtPos.Z) - here
+    if to.Magnitude <= 1e-3 then return end
+    local toU = to.Unit
+    local lookDir
+    if state.kind=="fdash" then
+        lookDir = (state.style=="off") and toU or -toU
+    elseif state.kind=="bdash" then
+        lookDir = (state.style=="off") and -toU or toU
+    else
+        local cw = state.orbitCW
+        local perp = cw and Vector3.new(toU.Z,0,-toU.X) or Vector3.new(-toU.Z,0,toU.X)
+        lookDir = (state.style=="off") and perp.Unit or (-perp).Unit
+    end
+    self.rp.CFrame = CFrame.lookAt(here, here + lookDir)
+    self:alignCam()
+    if os.clock() - state.start >= state.length then
+        self:_finishDashOrientation(state)
+    end
+end
+
+function Bot:_finishDashOrientation(state)
+    if self.dashState ~= state then return end
+    if state.stoppedConn then
+        pcall(function() state.stoppedConn:Disconnect() end)
+    end
+    self.dashState = nil
+    local pick = self:selectTarget()
+    local t2 = (state.targetHRP and state.targetHRP.Parent) and state.targetHRP or (pick and pick.hrp)
+    if t2 and self.hum and self.hum.Health>0 and self.hum:GetState()~=Enum.HumanoidStateType.FallingDown then
+        local here = safePos(self.rp)
+        local tgtPos = safePos(t2)
+        if here and tgtPos then
+            self.rp.CFrame = CFrame.lookAt(here, Vector3.new(tgtPos.X, here.Y, tgtPos.Z))
+            self:alignCam()
+        end
+    end
+    local closeEnemy = state.enemy or pick
+    if closeEnemy and closeEnemy.hrp and self.run and self.alive and not self.actThread then
+        local dist = closeEnemy.dist or math.huge
+        if dist==math.huge then
+            local here = safePos(self.rp)
+            local enemyPos = safePos(closeEnemy.hrp)
+            if here and enemyPos then
+                dist = (enemyPos - here).Magnitude
+            end
+        end
+        if dist <= 5.0 and not self.blocking then
+            self:_registerM1Attempt(closeEnemy)
+            if self:_pressAction("M1", CFG.TapS) then
+                local nowT = os.clock()
+                self.lastM1 = nowT
+                self.lastAttempt = nowT
+            end
+        end
+    end
+    local scoreKind = (state.kind=="fdash" and "F") or (state.kind=="bdash" and "B") or "S"
+    if scoreKind then
+        self:_postDashScore(scoreKind, closeEnemy or pick)
+    end
+    if pick and self:_hasRecentStun(pick) and (pick.dist or 99) <= CFG.CloseUseRange then
+        if self.allowDashExtend and os.clock() < self.allowDashExtend then
+            self:execBestCloseCombo(pick)
+        end
+    end
+    self.allowDashExtend = nil
+    self.inDash = false
 end
 
 
@@ -2197,6 +1952,21 @@ function Bot:_hookMine(h:Humanoid)
 end
 function Bot:_myAnimId():string? local best,ts=nil,-1; for _,v in pairs(self.myAnims) do if v.start>ts then ts=v.start; best=v.id end end; return best end
 
+function Bot:isAnimPlaying(name:string):boolean
+    if not name then return false end
+    local targetTail
+    if name == "ConsecutivePunches" then
+        targetTail = CFG.Attack.AnimIds.cp
+    end
+    if not targetTail then return false end
+    for _,meta in pairs(self.myAnims or {}) do
+        if meta.id == targetTail then
+            return true
+        end
+    end
+    return false
+end
+
 
 function Bot:connectChar(char:Model)
     if self.destroyed then return end
@@ -2261,7 +2031,10 @@ function Bot:connectChar(char:Model)
             self:_recordDamageEvent(nil, dmg, false, {dist = curDist})
             local attacker=self.lastAttacker
             if attacker then
-                local rec=self:getEnemyByName(attacker)
+                local rec=self.currentTarget
+                if rec and rec.model and rec.model.Name ~= attacker then
+                    rec = nil
+                end
                 if rec then
                     rec.recent=(rec.recent or 0)*0.5 + dmg
                     rec.style.aggr=math.clamp(rec.style.aggr + math.min(3,dmg/4),0,10)
@@ -2295,12 +2068,13 @@ function Bot:_ensureCharacterBindings()
         self:connectChar(char)
     end
 
-    if (not self.liveChar) or (not self.liveChar.Parent) then
-        local live = workspace:FindFirstChild("Live")
-        local mdl = live and live:FindFirstChild(LP.Name) or nil
-        if mdl and mdl ~= self.liveChar then
-            self:attachLive(mdl)
-        end
+    local live = workspace:FindFirstChild("Live")
+    self.liveFolder = live
+    local mdl = live and live:FindFirstChild(LP.Name) or nil
+    if mdl and mdl ~= self.liveChar then
+        self:attachLive(mdl)
+    elseif (not mdl) and self.liveChar then
+        self:attachLive(nil)
     end
 
     if self.hum and self.hum.Parent==nil and char then
@@ -2641,17 +2415,14 @@ function Bot:_applyTune(tune:any)
     local function set(path, val) if val~=nil then _applyTunable(path, val) end end
 
     if tune.F then
-        set("Cooldown.F", tune.F.cooldown)
         set("Gates.F.lo", tune.F.gateLo and (BASE_GATES.F.lo + tune.F.gateLo))
         set("Gates.F.hi", tune.F.gateHi and (BASE_GATES.F.hi + tune.F.gateHi))
     end
     if tune.S then
-        set("Cooldown.S", tune.S.cooldown)
         set("Gates.S.lo", tune.S.gateLo and (BASE_GATES.S.lo + tune.S.gateLo))
         set("Gates.S.hi", tune.S.gateHi and (BASE_GATES.S.hi + tune.S.gateHi))
     end
     if tune.B then
-        set("Cooldown.B", tune.B.cooldown)
         set("Gates.B.lo", tune.B.gateLo and (BASE_GATES.B.lo + tune.B.gateLo))
         set("Gates.B.hi", tune.B.gateHi and (BASE_GATES.B.hi + tune.B.gateHi))
     end
@@ -2798,29 +2569,37 @@ function Bot:_targetRagdolled(r:Enemy?):boolean
     return false
 end
 
+function Bot:_targetImmortal(r:Enemy?):boolean
+    if not r or not r.model then return false end
+    if r.absoluteImmortal ~= nil then
+        return r.absoluteImmortal
+    end
+    return r.model:FindFirstChild("AbsoluteImmortal") ~= nil
+end
+
 function Bot:_targetIsBlocking(r:Enemy?, window:number?):boolean
     if not r then return false end
     local nowT = os.clock()
     local limit = window or 0.35
 
-    if r.model then
-        local attr = r.model:GetAttribute("Blocking") or r.model:GetAttribute("IsBlocking") or r.model:GetAttribute("Block")
-        if attrOn(attr) then return true end
+    local blockingAttr = attrTrue(r.model, "blocking")
+    local blockTail = CFG.BlockAnimId and CFG.BlockAnimId:match("(%d+)$")
+    local blockingAnimPlaying = false
+    if blockTail then
+        for _,slot in pairs(r.active or {}) do
+            if slot and slot.id == blockTail then
+                blockingAnimPlaying = true
+                break
+            end
+        end
+    end
+
+    if blockingAnimPlaying or blockingAttr then
+        return true
     end
 
     if r.style and (nowT - (r.style.lastBlk or 0)) <= limit then
         return true
-    end
-
-    if r.active then
-        local blockTail = CFG.BlockAnimId and CFG.BlockAnimId:match("(%d+)$")
-        if blockTail then
-            for _,slot in pairs(r.active) do
-                if slot and slot.id == blockTail then
-                    return true
-                end
-            end
-        end
     end
 
     return false
@@ -2951,7 +2730,7 @@ end
 
 local function holdQ(d:number?) pressKey(CFG.Dash.KeyQ,true); task.wait(d or CFG.Dash.HoldQ); pressKey(CFG.Dash.KeyQ,false) end
 
-function Bot:_requestSideDash(tHRP:BasePart?, style:string?, r:Enemy?)
+function Bot:sideDash(tHRP:BasePart?, style:string?, r:Enemy?)
     if not (self.rp and tHRP) then return end
     local g = CFG.Gates.S
     local dist = r and r.dist
@@ -2997,7 +2776,8 @@ function Bot:_requestSideDash(tHRP:BasePart?, style:string?, r:Enemy?)
     if wasW then self:setKey(Enum.KeyCode.W, false) end
     if wasS then self:setKey(Enum.KeyCode.S, false) end
 
-    self.dashPending = {kind="side", style=(style or "off"), tHRP=tHRP, enemy=r}
+    local dashStyle = (style == "def") and "def" or "off"
+    self.dashPending = {kind="side", style=dashStyle, tHRP=tHRP, enemy=r}
 
     pressKey(sideKey, true)
     task.wait(0.02)
@@ -3015,7 +2795,7 @@ end
 
 
 
-function Bot:_requestForwardDash(r:Enemy)
+function Bot:forwardDash(r:Enemy, style:string?)
     if not (self.rp and r and r.hrp) then return end
     if self:_cdLeft("F")>0 then return end
     local d = r.dist
@@ -3025,12 +2805,13 @@ function Bot:_requestForwardDash(r:Enemy)
     self.lastFD = os.clock()
     self.lastFDUser = os.clock()
 
-    self.dashPending = {kind="fdash", style="off", tHRP=r.hrp, enemy=r}
+    local dashStyle = (style == "def") and "def" or "off"
+    self.dashPending = {kind="fdash", style=dashStyle, tHRP=r.hrp, enemy=r}
     pressKey(Enum.KeyCode.W, true); task.wait(0.02)
     holdQ(CFG.Dash.HoldQ)
     pressKey(Enum.KeyCode.W, false)
 
-    
+
     self.lastDashTime = os.clock()
     self.lastDashKind = "F"
 
@@ -3038,7 +2819,7 @@ function Bot:_requestForwardDash(r:Enemy)
 end
 
 
-function Bot:_requestBackDash(tHRP:BasePart?, style:string?, r:Enemy?)
+function Bot:backDash(tHRP:BasePart?, style:string?, r:Enemy?)
     if not (self.rp and tHRP) then return end
     local g = CFG.Gates.B
     local dist = r and r.dist
@@ -3058,7 +2839,8 @@ function Bot:_requestBackDash(tHRP:BasePart?, style:string?, r:Enemy?)
     if wasA then self:setKey(Enum.KeyCode.A, false) end
     if wasD then self:setKey(Enum.KeyCode.D, false) end
 
-    self.dashPending = {kind="bdash", style=(style or "off"), tHRP=tHRP, enemy=r}
+    local dashStyle = (style == "def") and "def" or "off"
+    self.dashPending = {kind="bdash", style=dashStyle, tHRP=tHRP, enemy=r}
 
     pressKey(Enum.KeyCode.S, true)
     task.wait(0.02)
@@ -3083,27 +2865,69 @@ function Bot:dashReady(kind:string):boolean
     return (os.clock() - last) >= cd
 end
 
+function Bot:_resolveDashStyle(kind:string, requested:string?, enemy:Enemy?):("off"|"def")
+    local style = (requested == "def") and "def" or "off"
+    local hum = self.hum
+    local hpRatio = 1
+    if hum then
+        local maxHealth = hum.MaxHealth
+        if typeof(maxHealth) == "number" and maxHealth > 0 then
+            hpRatio = math.clamp(hum.Health / maxHealth, 0, 1)
+        else
+            hpRatio = hum.Health > 0 and 1 or 0
+        end
+    end
+    local enemyAggro = (enemy and enemy.style and enemy.style.aggr) or 0
+    local enemyDist = enemy and enemy.dist or math.huge
+    local enemyUlt = enemy and enemy.ulted
+    local threatened = (enemyAggro >= 6)
+        or (enemyDist <= (CFG.SpaceMin + 1.5))
+        or (enemyUlt == true)
+        or (kind == "B")
+
+    if style == "off" then
+        if hpRatio < 0.4 or threatened then
+            style = "def"
+        end
+    else
+        local enemyLow = enemy and enemy.hp and enemy.hp <= (CFG.SnipeHP * 1.5)
+        if hpRatio > 0.65 and (enemyLow or enemyAggro < 3) and enemyDist > (CFG.SpaceMin + 2.5) then
+            style = "off"
+        end
+    end
+    return style
+end
+
 
 function Bot:tryDash(kind:string, tHRP:BasePart?, style:string?, r:Enemy?)
-    if not tHRP or self.inDash then return false end
-    if self.blocking then return false end
-    style = style or "off"
+    local targetPart = tHRP
+    if kind == "F" then
+        targetPart = (r and r.hrp) or targetPart
+    end
+    if kind ~= "F" and not targetPart then return false end
+    if self.inDash or self.blocking then return false end
+    local allowDuringM1 = self.allowDashExtend and os.clock() < self.allowDashExtend
+    if self.isM1ing and not allowDuringM1 then return false end
+    local resolvedStyle = self:_resolveDashStyle(kind, style, r)
     local executed=false
     if kind=="S" then
-        if self:dashReady("S") then self:_requestSideDash(tHRP, style, r); executed=true end
+        if self:dashReady("S") then self:sideDash(targetPart, resolvedStyle, r); executed=true end
     elseif kind=="F" then
-        if self:dashReady("F") then self:_requestForwardDash(r); executed=true end
+        if self:dashReady("F") and r then
+            self:forwardDash(r, resolvedStyle)
+            executed=true
+        end
     elseif kind=="B" then
-        if self:dashReady("B") then self:_requestBackDash(tHRP, style, r); executed=true end
+        if self:dashReady("B") then self:backDash(targetPart, resolvedStyle, r); executed=true end
     end
     if executed then
-        
+
         self.lastDashTime = os.clock()
         self.lastDashKind = kind
 
         local ctx=self:_ctxKey(r)
         self:_noteAction(kind, ctx, r)
-        self.ls:log("dash",{kind=kind, enemy=r and r.model and r.model.Name or "none", dist=r and r.dist or nil, style=style})
+        self.ls:log("dash",{kind=kind, enemy=r and r.model and r.model.Name or "none", dist=r and r.dist or nil, style=resolvedStyle})
         return true
     end
     return false
@@ -3125,8 +2949,7 @@ end
 function Bot:isSelfBlockingVisual():boolean
     local live = self.liveChar
     if live then
-        local blk = live:GetAttribute("Blocking") or live:GetAttribute("IsBlocking") or live:GetAttribute("Block")
-        if attrOn(blk) then return true end
+        if attrTrue(live, "blocking") then return true end
     end
     local bid = CFG.BlockAnimId and CFG.BlockAnimId:match("(%d+)$")
     if bid then
@@ -3139,73 +2962,79 @@ end
 
 function Bot:_forceUnblockNow()
     local b=CFG.Bind.Block
-    if b and b.t=="Key" then
+    if b and b.t=="Key" and self.blockKeyDown then
         VIM:SendKeyEvent(false,b.k,false,game)
     end
+    self.blockKeyDown = false
     self.blocking=false
     self.blockUntil=0
+    self.blockReleaseAt = 0
 end
 function Bot:block(dur:number?, target:Enemy?, reason:string?)
     if os.clock() < self.blockCooldown then return end
     local b=CFG.Bind.Block; if not b or b.t~="Key" then return end
-    if self.blocking and self.blockThread then return end
     local hold = math.clamp(dur or 0.35, 0.25, 0.60)
     self.blocking=true
     self.blockStartTime=os.clock()
     self.blockUntil = self.blockStartTime + hold
+    self.blockReleaseAt = self.blockUntil
     if target and target.model then
         local aid=self:_animId(target)
         local threat = aid and self.ls:threat(aid) or 0
         self.ls:log("block", {enemy=target.model.Name, anim=aid, threat=threat, dur=hold, reason=reason or "auto"})
     end
-    self.blockThread = task.spawn(function()
-        VIM:SendKeyEvent(true,b.k,false,game)
-        local tEnd=os.clock()+hold
-        while os.clock()<tEnd and self.run and self.alive and self.blocking do task.wait(0.03) end
-        VIM:SendKeyEvent(false,b.k,false,game)
+end
+
+function Bot:_processBlocking()
+    local b = CFG.Bind.Block
+    if not self.blocking then
+        if self.blockKeyDown and b and b.t=="Key" then
+            VIM:SendKeyEvent(false, b.k, false, game)
+        end
+        self.blockKeyDown = false
+        return
+    end
+    if b and b.t=="Key" and not self.blockKeyDown then
+        VIM:SendKeyEvent(true, b.k, false, game)
+        self.blockKeyDown = true
+    end
+    if os.clock() >= (self.blockReleaseAt or 0) then
+        self:_forceUnblockNow()
         self.blocking=false
-        self.blockUntil=0
-        self.blockThread=nil
         self.blockStartTime=nil
         self.lastBlockTime=os.clock()
         self.blockCooldown = self.lastBlockTime + 0.35
-    end)
+    end
 end
 
 
-function Bot:_cleanupEnemy(target:any)
-    if not self.enemies then return end
-    local model, rec
-    if typeof(target) == "Instance" then
-        model = target
-        rec = self.enemies[target]
-    else
-        rec = target
-        model = rec and rec.model or nil
+function Bot:_clearTarget(target:Enemy?)
+    local rec = target or self.currentTarget
+    if not rec then return end
+    for _,c in ipairs(rec.cons or {}) do
+        pcall(function()
+            c:Disconnect()
+        end)
     end
-    if rec then
-        for _,c in ipairs(rec.cons or {}) do pcall(function() c:Disconnect() end) end
-        rec.cons = {}
-        if rec.humConn then pcall(function() rec.humConn:Disconnect() end) end
-        if rec.hrpConn then pcall(function() rec.hrpConn:Disconnect() end) end
-        if rec.animWatchConn then pcall(function() rec.animWatchConn:Disconnect() end) end
-        rec.animWatchConn = nil
-    end
-    if model then
-        self.enemies[model] = nil
-    end
+    rec.cons = {}
+    if rec.humConn then pcall(function() rec.humConn:Disconnect() end) end
+    if rec.hrpConn then pcall(function() rec.hrpConn:Disconnect() end) end
+    if rec.animWatchConn then pcall(function() rec.animWatchConn:Disconnect() end) end
+    rec.animWatchConn = nil
     if self.currentTarget == rec then
         self.currentTarget = nil
     end
 end
 
-function Bot:_cleanupEnemyByName(name:string)
-    if not name then return end
-    for m,r in pairs(self.enemies or {}) do
-        if (m and m.Name == name) or (r and r.playerName == name) then
-            self:_cleanupEnemy(m)
-        end
+function Bot:_setCurrentTargetModel(model:Model?)
+    if model and self.currentTarget and self.currentTarget.model == model then
+        return self.currentTarget
     end
+    self:_clearTarget()
+    if not model then return nil end
+    local rec = self:_createTargetRecord(model)
+    self.currentTarget = rec
+    return rec
 end
 
 function Bot:_attachEnemyHumanoid(r:Enemy, hum:Humanoid?)
@@ -3220,7 +3049,7 @@ function Bot:_attachEnemyHumanoid(r:Enemy, hum:Humanoid?)
             local delta = math.max(0, prev - nh)
             if delta > 0 then
                 local wasMe = false
-                local last = r.model:GetAttribute("LastHit") or r.model:GetAttribute("lastHit")
+                local last = getAttrInsensitive(r.model, "LastHit")
                 if last == LP.Name then
                     wasMe = true
                 end
@@ -3229,7 +3058,10 @@ function Bot:_attachEnemyHumanoid(r:Enemy, hum:Humanoid?)
                     if creator and creator.Value == LP then wasMe = true end
                 end
                 if not wasMe then
-                    local dam = r.model:GetAttribute("LastDamager") or r.model:GetAttribute("lastDamager") or r.model:GetAttribute("LastDamagerName")
+                    local dam = getAttrInsensitive(r.model, "LastDamager")
+                    if dam == nil then
+                        dam = getAttrInsensitive(r.model, "LastDamagerName")
+                    end
                     if typeof(dam) == "Instance" and dam == LP then wasMe = true
                     elseif typeof(dam) == "string" and dam == LP.Name then wasMe = true end
                 end
@@ -3283,26 +3115,12 @@ function Bot:_ensureEnemyParts(r:Enemy):boolean
     return (r.hum ~= nil) and (r.hrp ~= nil)
 end
 
-function Bot:_enemyIsValidTarget(r:Enemy):boolean
-    if not r or not r.model or not r.model.Parent then return false end
-    if r.playerName then
-        local ply = Players:FindFirstChild(r.playerName)
-        r.ply = ply
-        if not ply then return false end
-    end
-    if not self:_ensureEnemyParts(r) then return false end
-    if not r.hum or r.hum.Health <= 0 then return false end
-    if not r.hrp or not r.hrp.Parent then return false end
-    if not r.dist or r.dist == math.huge then return false end
-    return true
-end
-
 
 local function sidTail(id:string?):string if not id then return "unk" end local n=id:match("(%d+)$"); return n or id end
 
-function Bot:addEnemy(m:Model)
-    if not (m and m:IsA("Model")) then return end
-    if m.Name==LP.Name then return end
+function Bot:_createTargetRecord(m:Model):Enemy?
+    if not (m and m:IsA("Model")) then return nil end
+    if m.Name==LP.Name then return nil end
 
     local ply = Players:FindFirstChild(m.Name)
     local r:Enemy = {
@@ -3317,7 +3135,7 @@ function Bot:addEnemy(m:Model)
 
     if r.hum then
         table.insert(r.cons, r.hum.Died:Connect(function()
-            local last = r.model:GetAttribute("LastHit") or r.model:GetAttribute("lastHit")
+            local last = getAttrInsensitive(r.model, "LastHit")
             if last == LP.Name then
                 self.lifeStats.kills = (self.lifeStats.kills or 0) + 1
             end
@@ -3388,15 +3206,13 @@ function Bot:addEnemy(m:Model)
             if self.stunFollow and self.stunFollow.target == r then
                 self.stunFollow = nil
             end
-            self:_cleanupEnemy(m)
+            self:_clearTarget(r)
         end
     end))
 
-    self.enemies[m]=r
+    return r
 end
 
-
-function Bot:getEnemyByName(n:string):Enemy? for _,r in pairs(self.enemies) do if r.model and r.model.Name==n then return r end end end
 
 local function hasFreezeOnLive(name:string):boolean
     local live = workspace:FindFirstChild("Live")
@@ -3407,75 +3223,103 @@ end
 
 function Bot:_animId(rec:Enemy):string? local best,ts=nil,-1; for _,slot in pairs(rec.active) do if slot.start>ts then ts=slot.start; best=slot.id end end; return best end
 
-function Bot:updateEnemies(dt:number)
-    if not self.rp then return end
-    local my=self.rp.Position; local nowT=os.clock()
-    for m,r in pairs(self.enemies) do
-        if not (m and m.Parent) then
-            self:_cleanupEnemy(m)
-        else
-            if r.playerName and not Players:FindFirstChild(r.playerName) then
-                self:_cleanupEnemy(m)
-            else
-                self:_ensureEnemyParts(r)
-                if r.stunScore then
-                    r.stunScore = math.max(0, r.stunScore - dt*0.7)
-                    if r.stunScore < 0.05 then r.stunScore = 0 end
-                end
-                r.dist = r.hrp and (r.hrp.Position - my).Magnitude or math.huge
-                local st=r.style
-                r.recent = (r.recent or 0)*math.clamp(1-dt*0.6,0,1)
-                r.aRecent= (r.aRecent or 0)*math.clamp(1-dt*0.6,0,1)
-                st.aggr=math.max(0, st.aggr - dt*0.35); st.def=math.max(0, st.def - dt*0.25); st.ev=math.max(0, st.ev - dt*0.25)
-                if r.lastStunByMe and (nowT - r.lastStunByMe) > 1.2 then r.lastStunByMe = nil end
-                if r.lastEv>0 then r.hasEv = (nowT - r.lastEv) >= CFG.EvasiveCD end
-                if attrOn(m:GetAttribute("Attacking") or m:GetAttribute("Attack") or m:GetAttribute("isAttacking")) then st.aggr=math.clamp(st.aggr+dt*3.5,0,10); st.lastAtk=nowT end
-                if attrOn(m:GetAttribute("Blocking") or m:GetAttribute("IsBlocking") or m:GetAttribute("Block")) then st.def=math.clamp(st.def+dt*3,0,10); st.lastBlk=nowT end
-                if attrOn(m:GetAttribute("Dashing") or m:GetAttribute("IsDashing") or m:GetAttribute("Dash")) then st.ev=math.clamp(st.ev+dt*2.5,0,8); st.lastDash=nowT end
-                if r.hum and r.hum.Health<=0 then
-                    r.score = -1e9
-                else
-                    r.hp = (r.hum and r.hum.Health) or r.hp
-                    local hpF   = (100 - r.hp)
-                    local distF = math.clamp(40 - r.dist, -40, 40)
-                    local evF   = r.hasEv and -25 or 15
-                    local agF   = st.aggr*4
-                    local defP  = st.def*1.5
-                    local dmgF  = (r.recent or 0)*1.2
-                    local aid=self:_animId(r); local ath= aid and self.ls:threat(aid) or 0
-
-                    r.aggro = (r.recent*1.2 + r.aRecent*0.8) + (ath*2)
-                    local stunBias = (r.stunScore or 0)*45
-                    r.score = hpF + distF + evF + agF - defP + dmgF + math.clamp(ath*4, -8, 16) + math.min(40, r.aggro*0.5) + stunBias
-                    if self.lastAttacker and r.model.Name==self.lastAttacker then r.score = r.score + 120 end
-                    if hasFreezeOnLive(r.model.Name) then r.score = r.score + 60 end
-                end
-            end
+function Bot:_updateCurrentTarget(dt:number)
+    local r = self.currentTarget
+    if not r then return end
+    if not (r.model and r.model.Parent) then
+        self:_clearTarget(r)
+        return
+    end
+    if not self:_ensureEnemyParts(r) then
+        self:_clearTarget(r)
+        return
+    end
+    local here = safePos(self.rp)
+    local enemyPos = safePos(r.hrp)
+    if here and enemyPos then
+        r.dist = (enemyPos - here).Magnitude
+    else
+        r.dist = math.huge
+    end
+    local nowT = os.clock()
+    local st = r.style
+    st.aggr=math.max(0, st.aggr - dt*0.35)
+    st.def =math.max(0, st.def - dt*0.25)
+    st.ev  =math.max(0, st.ev  - dt*0.25)
+    r.recent = (r.recent or 0)*math.clamp(1-dt*0.6,0,1)
+    r.aRecent= (r.aRecent or 0)*math.clamp(1-dt*0.6,0,1)
+    if r.lastStunByMe and (nowT - r.lastStunByMe) > 1.2 then r.lastStunByMe = nil end
+    if r.lastEv>0 then r.hasEv = (nowT - r.lastEv) >= CFG.EvasiveCD end
+    if attrTrue(r.model, "blocking") then
+        st.def=math.clamp(st.def+dt*3,0,10)
+        st.lastBlk=nowT
+    end
+    r.hp = (r.hum and r.hum.Health) or r.hp
+    r.blockReact = getAttrInsensitive(r.model, "BlockReact") or 0
+    r.ulted = attrTrue(r.model, "Ulted")
+    r.absoluteImmortal = r.model:FindFirstChild("AbsoluteImmortal") ~= nil
+    r.slowed = r.model:FindFirstChild("Slowed") ~= nil
+    local lastHit = getAttrInsensitive(r.model, "LastHit")
+    if typeof(lastHit)=="string" and lastHit ~= "" then
+        r.lastHitBy = lastHit
+    end
+    local lastM1 = getAttrInsensitive(r.model, "LastM1Hitted")
+    if typeof(lastM1)=="string" then
+        local name = lastM1:match("([^;]+)")
+        if name and name ~= "" then
+            r.lastM1By = name
         end
     end
 end
 
+function Bot:_scoreTargetCandidate(model:Model, hum:Humanoid, dist:number):number
+    local hpScore = math.max(0, 100 - hum.Health)
+    local distScore = math.max(0, 60 - dist * 1.5)
+    local blockPenalty = attrTrue(model, "blocking") and -15 or 0
+    local ultPenalty = attrTrue(model, "ulted") and -25 or 0
+    local attackerBonus = (self.lastAttacker == model.Name) and 100 or 0
+    local freezeBonus = hasFreezeOnLive(model.Name) and 50 or 0
+    return hpScore + distScore + attackerBonus + freezeBonus + blockPenalty + ultPenalty
+end
+
 function Bot:selectTarget():Enemy?
-    local nearest, nd = nil, math.huge
-    for m,r in pairs(self.enemies) do
-        if not (m and m.Parent) then
-            self:_cleanupEnemy(m)
-        else
-            local dist = math.huge
-            if self:_ensureEnemyParts(r) and self.rp and r.hrp then
-                local myPos = safePos(self.rp)
-                local enemyPos = safePos(r.hrp)
-                if myPos and enemyPos then
-                    dist = (enemyPos - myPos).Magnitude
+    local live = workspace:FindFirstChild("Live")
+    self.liveFolder = live
+    if not (live and self.rp) then
+        self:_clearTarget()
+        return nil
+    end
+    local myPos = safePos(self.rp)
+    if not myPos then
+        self:_clearTarget()
+        return nil
+    end
+    local bestModel, bestScore, bestDist = nil, -math.huge, math.huge
+    for _,m in ipairs(live:GetChildren()) do
+        if m:IsA("Model") and m.Name ~= LP.Name then
+            if not m:FindFirstChild("AbsoluteImmortal") then
+                local hum = m:FindFirstChildOfClass("Humanoid")
+                local hrp = m:FindFirstChild("HumanoidRootPart")
+                if hum and hrp and hrp.Parent and hum.Health > 0 then
+                    local enemyPos = safePos(hrp)
+                    if enemyPos then
+                        local dist = (enemyPos - myPos).Magnitude
+                        local score = self:_scoreTargetCandidate(m, hum, dist)
+                        if score > bestScore then
+                            bestScore = score
+                            bestModel = m
+                            bestDist = dist
+                        end
+                    end
                 end
-            end
-            r.dist = dist
-            if self:_enemyIsValidTarget(r) and dist < nd then
-                nearest, nd = r, dist
             end
         end
     end
-    return nearest
+    local rec = self:_setCurrentTargetModel(bestModel)
+    if rec and bestDist and bestDist ~= math.huge then
+        rec.dist = bestDist
+    end
+    return rec
 end
 
 
@@ -3571,7 +3415,7 @@ end
 
 function Bot:attemptEvasive(reason:string)
     if not self.evReady then return false end
-    if self.blocking and self.blockThread then self:_forceUnblockNow(); task.wait(0.05) end
+    if self.blocking then self:_forceUnblockNow(); task.wait(0.05) end
     self:clearMove(); self.evReady=false; self.evTimer=CFG.EvasiveCD
     local dk = (math.random()<0.5) and Enum.KeyCode.A or Enum.KeyCode.D
     local t0=os.clock()
@@ -3583,6 +3427,10 @@ function Bot:attemptEvasive(reason:string)
     return true
 end
 
+function Bot:evasive(reason:string?)
+    return self:attemptEvasive(reason or "manual")
+end
+
 
 function Bot:_isUlted():boolean
     local t=os.clock()
@@ -3590,7 +3438,7 @@ function Bot:_isUlted():boolean
     self.lastUltCheck=t
     local live=workspace:FindFirstChild("Live")
     local me  = live and live:FindFirstChild(LP.Name)
-    local flag = me and attrOn(me:GetAttribute("Ulted"))
+    local flag = attrTrue(me, "Ulted")
 
     if not flag then
         local test = live and live:FindFirstChild("battlegroundaitest")
@@ -3656,7 +3504,7 @@ function Bot:maybeDash(r:Enemy)
 
     if canS then
         table.insert(candidates, {name = "S", bias = 0.55, exec = function()
-            self:_requestSideDash(r.hrp, "off", r); return true
+            return self:tryDash("S", r.hrp, "off", r)
         end})
     end
     if canB then
@@ -3666,7 +3514,7 @@ function Bot:maybeDash(r:Enemy)
             bBias = bBias + 0.8
         end
         table.insert(candidates, {name = "B", bias = bBias, exec = function()
-            self:_requestBackDash(r.hrp, "off", r); return true
+            return self:tryDash("B", r.hrp, "off", r)
         end})
     end
     if canF then
@@ -3674,7 +3522,7 @@ function Bot:maybeDash(r:Enemy)
         if d > 40 then fBias = fBias + 0.25 end
         if d < CFG.SpaceMax then fBias = fBias + 0.15 end
         table.insert(candidates, {name = "F", bias = fBias, exec = function()
-            self:_requestForwardDash(r); return true
+            return self:tryDash("F", r.hrp, "off", r)
         end})
     end
     if #candidates == 0 then return end
@@ -4247,9 +4095,13 @@ end
 
 
 function Bot:updateAttacker()
-    if not self.liveChar then self.liveChar = self.live and self.live:FindFirstChild(LP.Name) or nil end
+    if not self.liveChar then
+        local live = self.liveFolder or workspace:FindFirstChild("Live")
+        self.liveFolder = live
+        self.liveChar = live and live:FindFirstChild(LP.Name) or nil
+    end
     if not self.liveChar then return end
-    local a=self.liveChar:GetAttribute("LastHit") or self.liveChar:GetAttribute("lastHit")
+    local a=getAttrInsensitive(self.liveChar, "LastHit")
     if typeof(a)=="string" and a~="" then self.lastAttacker=a end
 end
 
@@ -4301,6 +4153,9 @@ function Bot:update(dt:number)
     if not(self.char and self.hum and self.rp) then return end
     if self.hum.Health<=0 then self.run=false return end
 
+    self:_processBlocking()
+    self:_updateDashOrientation()
+
     local fallingNow = false
     do
         local ok, state = pcall(function()
@@ -4336,37 +4191,49 @@ function Bot:update(dt:number)
     if os.clock() >= (self._nextAutoSaveAt or 0) then
         self:savePolicy()
         self._nextAutoSaveAt = os.clock() + (CFG.AutoSave or 30)
-        if self.gui then
+        if self.gui and self.gui.setKPI then
             local meta = self.bandit.meta or {}
-            if self.gui.setKPI then
-                self.gui:setKPI(meta.generation or 0, meta.epsilon or self.bandit.epsilon or 0.15, meta.lastLife or {})
-            end
-            self.gui:log("[autosave] policy saved")
+            self.gui:setKPI(meta.generation or 0, meta.epsilon or self.bandit.epsilon or 0.15, meta.lastLife or {})
         end
+        warn("[BGBot] policy autosaved")
     end
 
 
     if self.evTimer>0 then self.evTimer = self.evTimer - dt; if self.evTimer<=0 then self.evTimer=0; self.evReady=true end end
     self.gui:setE(self.evReady and "Evasive: ready" or ("Evasive: "..string.format("%.1fs",math.max(0,self.evTimer))))
 
-    self:updateEnemies(dt); self:updateAttacker()
+    self:_updateCurrentTarget(dt)
+    self:updateAttacker()
     local nowT=os.clock()
     if self.lastAttacker and nowT-self.lastAtkTime>3 then self.lastAttacker=nil; self.lastDmg=0 end
 
     local tgt=self:selectTarget()
-    self.currentTarget = tgt
     self.lastTargetDist = tgt and tgt.dist or nil
-    if (not self.inDash) and tgt and tgt.hrp then
-        self:aimAt(tgt.hrp)
-    end
-    if tgt then
-        self:approachFarTarget(tgt)
-    end
     if not tgt then
         self.gui:setT("Target: none")
         if not self.run then self:clearMove() end
         self.gui:updateCDs(self:_cdLeft("F"), self:_cdLeft("B"), self:_cdLeft("S"))
         return
+    end
+    if (not self.inDash) and tgt.hrp then
+        self:aimAt(tgt.hrp)
+    end
+    self:approachFarTarget(tgt)
+    local targetImmortal = self:_targetImmortal(tgt)
+    if targetImmortal then
+        self.gui:setT(("Target: %s (untouchable)"):format(tgt.model.Name))
+        self:neutral(tgt)
+        self.gui:updateCDs(self:_cdLeft("F"), self:_cdLeft("B"), self:_cdLeft("S"))
+        return
+    end
+    local meConsec = self:isAnimPlaying("ConsecutivePunches")
+    if meConsec and (tgt.slowed or (tgt.model and tgt.model:FindFirstChild("Slowed"))) then
+        if not tgt.comboLockActive then
+            tgt.comboLockActive = true
+            self:_noteStun(tgt, "combo_lock")
+        end
+    elseif tgt.comboLockActive then
+        tgt.comboLockActive = nil
     end
     self.gui:setT(("Target: %s (%.0f hp)"):format(tgt.model.Name, tgt.hp))
 
@@ -4599,7 +4466,18 @@ function AI.Init(opts)
 end
 
 
-local HELP_TEXT = PANEL_HELP_TEXT
+local HELP_TEXT = table.concat({
+    "COMMANDS:",
+    "/start — run the bot • /stop — pause • /exit — close UI",
+    "/epsilon <0..1> — set exploration rate",
+    "/external on|off — allow an external AI decide()",
+    "/autosave <sec> — change autosave cadence",
+    "/set <Path> <num> — edit a tunable",
+    "/tune show — print every tunable and current value",
+    "/reward show|set|reset — adjust reward weights",
+    "/policy save|load|reset — manage learned policy storage",
+    "/stats — refresh KPI line • /help — show this guide",
+}, "\n")
 
 local function _num(v) return tonumber(v) end
 
@@ -4609,7 +4487,9 @@ function AI.RunCommand(line)
     line = tostring(line or ""):gsub("^%s+",""):gsub("%s+$","")
     if line == "" then return "" end
 
-    local function say(s) bot.gui:log(s) end
+    local function say(s)
+        warn("[BGBot] " .. tostring(s))
+    end
     local args = {}
     for w in string.gmatch(line, "%S+") do table.insert(args, w) end
     local cmd = (args[1] or ""):lower()
@@ -4963,10 +4843,7 @@ function AI.OnEvent(eventType, data)
     if not bot then return end
     data = data or {}
 
-    if eventType == "player_spotted" and typeof(data.model) == "Instance" then
-        bot:addEnemy(data.model)
-
-    elseif eventType == "damage_dealt" then
+    if eventType == "damage_dealt" then
         bot:_recordDamageEvent(data.target, tonumber(data.amount) or 0, true, {dist=data.dist})
 
     elseif eventType == "damage_taken" then
@@ -4979,8 +4856,10 @@ function AI.OnEvent(eventType, data)
         bot:_endLife()
 
     elseif eventType == "stun" and data.target then
-        local rec = bot:getEnemyByName(data.target)
-        if rec then bot:_noteStun(rec, tostring(data.animTail or "manual")) end
+        local rec = bot.currentTarget
+        if rec and rec.model and rec.model.Name == data.target then
+            bot:_noteStun(rec, tostring(data.animTail or "manual"))
+        end
 
     elseif eventType == "save" then
         bot:savePolicy(); bot.ls:flush()
