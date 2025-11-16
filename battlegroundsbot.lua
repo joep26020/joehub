@@ -1606,7 +1606,7 @@ function Bot.new()
 
     self.hardAimHB = RunService.RenderStepped:Connect(function()
         local ok, err = pcall(function()
-			if not self.hum or self.hum.Health <= 0 then return end
+			if not self.hum.Health == 0 then return end
 			if self.hum and self.hum:GetState()==Enum.HumanoidStateType.FallingDown then return end
             if self.inDash then return end
 
@@ -1618,7 +1618,8 @@ function Bot.new()
 
             local cam = workspace.CurrentCamera
             if cam then
-                local cp = cam.CFrame.Position
+                local cf = cam.CFrame  
+                local cp = cf.Position
                 local lv = cf.LookVector
                 cam.CFrame = CFrame.new(
                     cp,
@@ -3450,10 +3451,6 @@ function Bot:evasive(reason:string)
     self.ls:log("evasive",{why=reason,t=t0})
     self:_judgeEvasive(t0)
     return true
-end
-
-function Bot:evasive(reason:string?)
-    return self:attemptEvasive(reason or "manual")
 end
 
 
