@@ -1149,6 +1149,7 @@ function GUI:setKPI(gen, eps, life)
 end
 type Step = {kind:string, action:string?, hold:number?, wait:number?, dir:string?}
 type Combo = {id:string, name:string, reqNoEv:boolean?, min:number?, max:number?, steps:{Step}, traits:{string}?, risk:number?}
+local isBehind
 local function enemyHPPercent(r:Enemy?):number
     if not r then return 100 end
     local hum=r.hum
@@ -1195,7 +1196,7 @@ function ComboTreeBuilder:_makeContext()
     local ctx={}
     ctx.dist=dist
     ctx.blocking=bot:_targetIsBlocking(tgt,0.3)
-    ctx.behind=isBehind(bot,tgt)
+    ctx.behind = isBehind and isBehind(bot, tgt) or false
     ctx.hpPercent=enemyHPPercent(tgt)
     ctx.hasEv=tgt.hasEv or false
     ctx.evasiveETA=enemyEvasiveETA(tgt)
@@ -1526,8 +1527,9 @@ function Bot:_cancelActiveCombo()
     end
 end
 function Bot:_stopDashOrientation()
+    local state = self.dashState
     self.dashState = nil
-    if state.kind=="side" then
+    if state and state.kind=="side" then
         local elapsed=math.max(0, os.clock()-state.start)
         if self.lastRealDash then
             if self.lastRealDash.S then self.lastRealDash.S=self.lastRealDash.S+elapsed end
@@ -2137,7 +2139,7 @@ end
 local function now() return os.clock() end
 local function distOK(d:number, lo:number, hi:number) return d>=lo and d<=hi end
 local BANDIT_ACTION_WINDOW = 1.6
-local function isBehind(self:any, tgt:Enemy?):boolean
+isBehind = function(self:any, tgt:Enemy?):boolean
     if not (self and self.rp and tgt and tgt.hrp) then return false end
     local toMe = flat(self.rp.Position - tgt.hrp.Position)
     local look = flat(tgt.hrp.CFrame.LookVector)
