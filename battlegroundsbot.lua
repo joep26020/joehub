@@ -152,10 +152,10 @@ local CFG = {
         S = 2.0,
     },
     M1Range  = 5,
-    M1MaxGap = 0.5,
+    M1MaxGap = 0.45,
     InputTap = 0.10,
     TapS     = 0.05,
-    TapM     = 0.25,
+    TapM     = 0.2,
     M1Min    = 0.4,
     M1Rand   = 0.05,
     NPFinisherId  = "normal_punch",
@@ -1222,33 +1222,33 @@ function ComboTreeBuilder:addM1(wait)
 end
 function ComboTreeBuilder:addShoveTech(waitDash)
     if not self.ctx.canShove then return end
-    self:append({kind="press",action="Shove",hold=0,wait=0.12})
-    self:append({kind="press",action="M1HOLD",hold=CFG.TapM,wait=m1Gap()})
+    self:append({kind="press",action="Shove",hold=0,wait=0.1})
+    self:append({kind="press",action="M1HOLD",hold=CFG.TapM,wait=.15()})
     self.state.m1Count=math.min(4,self.state.m1Count+1)
     self.state.usedShove=true
     if self.state.m1Count==1 then self.state.shoveOpened=true end
-    self:append({kind="wait",action="delay",hold=0,wait=waitDash or 0.3})
-    self:append({kind="dash",action="side",dir="off",wait=0.08})
+    self:append({kind="wait",action="delay",hold=0,wait=waitDash or 0.1})
+    self:append({kind="dash",action="side",dir="off",wait=0.35})
     self.ctx.canShove=false
     self.ctx.sideDashReady=false
 end
 function ComboTreeBuilder:addCP()
     if not self.ctx.canCP then return false end
-    self:append({kind="press",action="CP",hold=0,wait=0.4})
+    self:append({kind="press",action="CP",hold=0,wait=1.6})
     self.state.afterCP=true
     self.ctx.canCP=false
     return true
 end
 function ComboTreeBuilder:addNP(followM1)
     if not self.ctx.canNP then return false end
-    self:append({kind="press",action="NP",hold=0,wait=0.25})
+    self:append({kind="press",action="NP",hold=0,wait=0.1})
     if followM1 then self:addM1() end
     self.ctx.canNP=false
     return true
 end
 function ComboTreeBuilder:addUpper()
     if not self.ctx.canUpper then return false end
-    self:append({kind="press",action="Upper",hold=0,wait=0.28})
+    self:append({kind="press",action="Upper",hold=0,wait=0.35})
     self.state.afterCP=false
     self.ctx.canUpper=false
     return true
@@ -1262,10 +1262,9 @@ function ComboTreeBuilder:addDownslam()
     self.state.m1Count=4
 end
 function ComboTreeBuilder:addLoopdash()
-    self:append({kind="tech",action="LOOPDASH",hold=0,wait=0.18})
-    self.state.m1Count=4
+    self:append({kind="tech",action="LOOPDASH",hold=0,wait=0.15})
+    self.state.m1Count=1
     self.ctx.fDashReady=false
-    self.ctx.sideDashReady=false
 end
 function ComboTreeBuilder:ensureM1Count(target,opts)
     while self.state.m1Count<math.min(target,3) do self:addM1() end
@@ -4144,6 +4143,29 @@ function Bot:update(dt:number)
         end
     else
         self.stillTimer = 0
+    end
+    do
+        local now2 = os.clock()
+        if self.run and tgt and self.alive and self.hum and self.rp then
+            local idleFor = now2 - (self.lastOffenseTime or 0)
+            if idleFor >= 5.0 and not self.inDash and not self.blocking and not self.isAttacking then
+                self:_ensureEnemyParts(tgt)
+                if tgt.hrp then
+                    self:aimAt(tgt.hrp)
+                    local here  = safePos(self.rp)
+                    local there = safePos(tgt.hrp)
+                    if here and there then
+                        local dist = (there - here).Magnitude
+                        tgt.dist = dist
+                        if dist > (CFG.SpaceMin or 4.6) then
+                            self:setInput(1, (math.random() < 0.5) and -0.75 or 0.75)
+                        else
+                            self:setInput(0, 0)
+                        end
+                    end
+                end
+            end
+        end
     end
     self:aimAt(tgt.hrp)
     if not self.run then
