@@ -1149,177 +1149,236 @@ function GUI:setKPI(gen, eps, life)
 end
 type Step = {kind:string, action:string?, hold:number?, wait:number?, dir:string?}
 type Combo = {id:string, name:string, reqNoEv:boolean?, min:number?, max:number?, steps:{Step}, traits:{string}?, risk:number?}
-local function hasTrait(c:Combo,t:string):boolean if not c.traits then return false end for _,x in ipairs(c.traits) do if x==t then return true end end return false end
-local LIB:{Combo} = {
-    {
-        id="sai_sd_m1h",
-        name="M1>Shove->Side(off)->M1(HOLD)",
-        min=0, max=7.5, risk=0.28,
-        steps={
-            {kind="aim"},
-            {kind="press",action="M1",hold=CFG.TapS,wait=m1Gap()},
-            {kind="press",action="Shove",wait=0.12},
-            {kind="dash",action="side",dir="off",wait=0.08},
-            {kind="press",action="M1HOLD",hold=CFG.TapM,wait=m1Gap()},
-        },
-        traits={"pressure","guardbreak"}
-    },
-    {
-        id="sai_m1cp_np",
-        name="M1x2>CP>M1>NP",
-        min=0, max=7.2, risk=0.35,
-        steps={
-            {kind="aim"},
-            {kind="press",action="M1",hold=CFG.TapS,wait=m1Gap()},
-            {kind="press",action="M1",hold=CFG.TapS,wait=m1Gap()},
-            {kind="press",action="CP",wait=0.40},
-            {kind="press",action="M1",wait=m1Gap()},
-            {kind="press",action="NP"},
-        },
-        traits={"finisher_np"}
-    },
-    {
-        id="sai_upper_path",
-        name="M1>Upper (situational) -> Dash follow",
-        min=0, max=8, reqNoEv=true, risk=0.55,
-        steps={
-            {kind="aim"},
-            {kind="press",action="M1",hold=CFG.TapS,wait=m1Gap()},
-            {kind="press",action="Upper",wait=0.28},
-            {kind="dash",action="auto_after_upper",dir="smart",wait=0.10},
-        },
-        traits={"launcher","requires_evasive"}
-    },
-
-}
-type MoveDef = {name:string, role:string, dur:number, build:(()->Step)}
-local AUTO_COMBO_PREFIX = "auto_"
-local AUTO_COMBO_MAX_STEPS = 5
-local AUTO_COMBO_MAX_TIME = 7.5
-local AUTO_COMBO_POOL_SIZE = 10
-local MOVE_POOL:{MoveDef} = {
-    {
-        name = "M1",
-        role = "opener",
-        dur = 0.30,
-        build = function()
-            return {kind="press",action="M1",hold=CFG.TapS,wait=m1Gap()}
-        end,
-    },
-    {
-        name = "M1HOLD",
-        role = "mid",
-        dur = 0.40,
-        build = function()
-            return {kind="press",action="M1HOLD",hold=CFG.TapM,wait=m1Gap()}
-        end,
-    },
-    {
-        name = "Shove",
-        role = "mid",
-        dur = 0.30,
-        build = function()
-            return {kind="press",action="Shove",wait=0.12}
-        end,
-    },
-    {
-        name = "CP",
-        role = "finisher",
-        dur = 0.90,
-        build = function()
-            return {kind="press",action="CP",wait=0.40}
-        end,
-    },
-    {
-        name = "NP",
-        role = "finisher",
-        dur = 0.90,
-        build = function()
-            return {kind="press",action="NP"}
-        end,
-    },
-}
-local function _pickMove(role:string):MoveDef?
-    local pool = {}
-    for _,m in ipairs(MOVE_POOL) do
-        if m.role == role then
-            pool[#pool+1] = m
+local ComboPlanner={}
+ComboPlanner.__index=ComboPlanner
+local function _hpRatio(r:Enemy?):number
+    if not r or not r.hum then return 1 end
+    local max = r.hum.MaxHealth
+    if typeof(max)~="number" or max<=0 then return 1 end
+    return math.clamp(r.hum.Health/max,0,1)
+end
+local function _hpPercent(r:Enemy?):number
+    return _hpRatio(r)*100
+end
+local function _evasiveTimeLeft(r:Enemy?):number
+    if not r then return 0 end
+    local last = r.lastEv or 0
+    local elapsed = os.clock()-last
+    local cd = CFG.EvasiveCD or 30
+    if last==0 then return 0 end
+    return math.max(0, cd-elapsed)
+end
+function ComboPlanner.new(bot, tgt:Enemy)
+    local self=setmetatable({},ComboPlanner)
+    self.bot=bot
+    self.tgt=tgt
+    self.steps={{kind="aim"}}
+    self.nameParts={}
+    self.chain=0
+    self.usedShove=false
+    self.cpBridge=false
+    self.needHeavyAfterShove=false
+    self.loopdash=false
+    return self
+end
+function ComboPlanner:addStep(step:Step)
+    self.steps[#self.steps+1]=step
+end
+function ComboPlanner:addName(part:string)
+    if part and part~="" then self.nameParts[#self.nameParts+1]=part end
+end
+function ComboPlanner:addM1(wait:number?)
+    self:addStep({kind="press",action="M1",hold=CFG.TapS,wait=wait or m1Gap()})
+    self.chain=math.min(4,self.chain+1)
+    self:addName("M1")
+end
+function ComboPlanner:addM1Hold(wait:number?)
+    self:addStep({kind="press",action="M1HOLD",hold=CFG.TapM,wait=wait or m1Gap()})
+    self.chain=math.min(4,self.chain+1)
+    self:addName("M1H")
+end
+function ComboPlanner:addMiniUpper(wait:number?)
+    self:addStep({kind="press",action="MINI_UPPER",hold=CFG.TapS,wait=wait or 0.18})
+    self.chain=math.min(4,self.chain+1)
+    self:addName("Mini")
+end
+function ComboPlanner:addDownslam(wait:number?)
+    self:addStep({kind="press",action="DOWNSLAM",hold=CFG.TapS,wait=wait or 0.2})
+    self.chain=math.min(4,self.chain+1)
+    self:addName("Downslam")
+end
+function ComboPlanner:addDash(kind:string,dir:string?,wait:number?)
+    self:addStep({kind="dash",action=kind,dir=dir or "off",wait=wait or CFG.InputTap})
+    self:addName(kind)
+end
+function ComboPlanner:addAction(name:string,wait:number?,hold:number?)
+    self:addStep({kind="press",action=name,hold=hold,wait=wait or CFG.InputTap})
+    self:addName(name)
+end
+function ComboPlanner:addWait(wait:number)
+    self:addStep({kind="wait",wait=wait})
+end
+function ComboPlanner:sideDashRangeOK():boolean
+    local dist=self.tgt.dist or math.huge
+    local hum=self.bot.hum
+    if not hum then return dist<=CFG.M1Range end
+    local max=hum.MaxHealth
+    local pct=100
+    if typeof(max)=="number" and max>0 then pct=math.clamp((hum.Health/max)*100,0,100) end
+    local reach=20+0.08*pct
+    return dist>=math.max(4, reach-5)
+end
+function ComboPlanner:addShoveTech(reason:string?)
+    self:addAction("Shove",0.12)
+    self:addM1Hold(0.32)
+    self:addDash("side","off",0.08)
+    self.usedShove=true
+    if reason=="after_m2" then self.needHeavyAfterShove=true end
+end
+function ComboPlanner:ensureChains(targetCount:number)
+    while self.chain<targetCount do self:addM1() end
+end
+function ComboPlanner:addNP()
+    self:addAction("NP",0.35)
+end
+function ComboPlanner:addUpper()
+    self:addAction("Upper",0.28)
+end
+function ComboPlanner:addCP()
+    self:addAction("CP",0.45)
+    self.cpBridge=true
+end
+function ComboPlanner:addLoopdash()
+    self:addMiniUpper()
+    self:addDash("fdash","off",0.18)
+    self:addWait(0.15)
+    if (self.tgt.dist or 0)>10 and self.bot:dashReady("S") then self:addDash("side","off",0.08) end
+    self.chain=0
+    self.loopdash=true
+    self:addM1()
+end
+function ComboPlanner:planOpener():boolean
+    local block=self.bot:_targetIsBlocking(self.tgt)
+    local behind=isBehind(self.bot,self.tgt)
+    local dist=self.tgt.dist or math.huge
+    local canShove=slotReady(SLOT.Shove) and self.bot:dashReady("S") and dist<=CFG.CloseUseRange+2
+    if canShove and (block or dist<=CFG.CloseUseRange+1) then
+        self:addShoveTech("open")
+        return true
+    end
+    if dist<=CFG.M1Range+0.5 and (not block or behind) then
+        self:addM1()
+        return true
+    end
+    if canShove and self:sideDashRangeOK() then
+        self:addShoveTech("open")
+        return true
+    end
+    if dist<=CFG.M1Range+1.0 then
+        self:addM1()
+        return true
+    end
+    return false
+end
+function ComboPlanner:planBridge()
+    local dist=self.tgt.dist or math.huge
+    if self.usedShove and dist>=8 and self.bot:dashReady("S") then
+        self:addWait(0.15)
+        self:addDash("side","off",0.08)
+    end
+    if self.usedShove then
+        if slotReady(SLOT.CP) then
+            self:addCP()
+        else
+            self:addM1()
         end
+        return
     end
-    local n = #pool
-    if n == 0 then return nil end
-    return pool[math.random(1, n)]
+    if self.chain<2 then self:addM1() end
+    if slotReady(SLOT.Shove) and self.bot:dashReady("S") then
+        local reason=self.chain>=2 and "after_m2" or "after_m1"
+        self:addShoveTech(reason)
+    end
+    if slotReady(SLOT.CP) and not self.cpBridge and self.chain>=2 then
+        self:addCP()
+        self:addM1()
+    elseif self.chain<3 then
+        self:addM1()
+    end
 end
-local function _autoId(idx:number):string
-    return AUTO_COMBO_PREFIX .. tostring(idx)
+function ComboPlanner:checkKill():boolean
+    local hp=_hpPercent(self.tgt)
+    local dist=self.tgt.dist or math.huge
+    if hp<=10.5 and dist>7 and slotReady(SLOT.NP) then self:addNP(); return true end
+    if hp<=20 and dist<=7 and slotReady(SLOT.NP) then self:addNP(); return true end
+    if hp<=14.5 and dist<=7 and slotReady(SLOT.CP) then self:addCP(); return true end
+    if hp<=9 and dist<=7 and slotReady(SLOT.Shove) and self.bot:dashReady("S") then self:addShoveTech("finisher"); return true end
+    if hp<=15 and dist<=7 and slotReady(SLOT.Upper) then self:addUpper(); return true end
+    return false
 end
-local function _makeAutoCombo(idx:number):Combo?
-    local steps:{Step} = {}
-    steps[1] = {kind="aim"}
-    local total = 0.0
-
-    local op = _pickMove("opener")
-    if not op then return nil end
-    local s = op.build()
-    total = total + op.dur
-    steps[#steps+1] = s
-    local midCount = math.random(0, AUTO_COMBO_MAX_STEPS - 2)
-    for i = 1, midCount do
-        local m = _pickMove("mid")
-        if not m then break end
-        if total + m.dur > AUTO_COMBO_MAX_TIME then break end
-        local st = m.build()
-        total = total + m.dur
-        steps[#steps+1] = st
+function ComboPlanner:planReadyEvasive()
+    self:ensureChains(3)
+    if self.cpBridge and slotReady(SLOT.NP) then self:addNP(); return end
+    if slotReady(SLOT.NP) then self:addNP(); return end
+    if slotReady(SLOT.Upper) then self:addUpper(); return end
+    if slotReady(SLOT.Shove) and self.bot:dashReady("S") then self:addShoveTech("finisher"); return end
+    if slotReady(SLOT.CP) then self:addCP(); self:addM1(); return end
+    self:addM1()
+end
+function ComboPlanner:planLongCooldown()
+    self:ensureChains(3)
+    self:addMiniUpper()
+    if slotReady(SLOT.Upper) then
+        self:addUpper()
+        if self.bot:dashReady("F") then self:addDash("fdash","off",0.12) elseif self.bot:dashReady("S") then self:addDash("side","off",0.12) end
+        return
     end
-    local fin = _pickMove("finisher")
-    if fin and total + fin.dur <= AUTO_COMBO_MAX_TIME + 0.5 then
-        local st = fin.build()
-        total = total + fin.dur
-        steps[#steps+1] = st
+    if slotReady(SLOT.NP) then self:addNP(); return end
+    if slotReady(SLOT.CP) then self:addDownslam(0.18); self:addCP(); return end
+    if slotReady(SLOT.Shove) and self.bot:dashReady("S") then self:addWait(0.2); self:addAction("Shove",0.12); return end
+    self:addLoopdash()
+end
+function ComboPlanner:planSoonCooldown()
+    self:ensureChains(3)
+    self:addMiniUpper()
+    if slotReady(SLOT.NP) then self:addNP(); return end
+    if slotReady(SLOT.Upper) then self:addUpper(); return end
+    if slotReady(SLOT.Shove) and self.bot:dashReady("S") then self:addWait(0.2); self:addAction("Shove",0.12); return end
+    self:addLoopdash()
+end
+function ComboPlanner:planFinisher()
+    if self.needHeavyAfterShove then
+        if slotReady(SLOT.NP) then self:addNP(); return end
+        if slotReady(SLOT.Upper) then self:addUpper(); return end
     end
-    local parts = {}
-    for i = 2, #steps do
-        parts[#parts+1] = steps[i].action or "?"
+    if self:checkKill() then return end
+    local evLeft=_evasiveTimeLeft(self.tgt)
+    if self.tgt.hasEv then
+        self:planReadyEvasive()
+        return
     end
-    local distMax = CFG.ComboDist or ((CFG.M1Range or 5) + 1)
-    local combo:Combo = {
-        id = _autoId(idx),
-        name = table.concat(parts, ">"),
-        min = 0,
-        max = distMax,
-        steps = steps,
-        traits = {"auto"},
-        risk = 0.35,
-    }
+    if evLeft>2 then
+        self:planLongCooldown()
+        return
+    end
+    if evLeft>0 then
+        self:planSoonCooldown()
+        return
+    end
+    self:planReadyEvasive()
+end
+function ComboPlanner:build():Combo?
+    if #self.steps<=1 then return nil end
+    local name=table.concat(self.nameParts,">")
+    if name=="" then name="ComboTree" end
+    local combo:Combo={id="combo_tree",name=name,min=0,max=CFG.ComboDist,steps=self.steps,traits={"tree"},risk=0.5}
     return combo
 end
-local function refreshAutoCombos()
-    local existing = {}
-    for _,c in ipairs(LIB) do
-        if type(c.id) == "string" and c.id:sub(1, #AUTO_COMBO_PREFIX) == AUTO_COMBO_PREFIX then
-            existing[c.id] = true
-        end
-    end
-    local function nextIdx()
-        local i = 1
-        while existing[_autoId(i)] do
-            i = i + 1
-        end
-        existing[_autoId(i)] = true
-        return i
-    end
-    local count = 0
-    for _ in pairs(existing) do
-        count = count + 1
-    end
-    while count < AUTO_COMBO_POOL_SIZE do
-        local idx = nextIdx()
-        local c = _makeAutoCombo(idx)
-        if not c then break end
-        LIB[#LIB+1] = c
-        count = count + 1
-    end
+function ComboPlanner:plan():Combo?
+    if not self:planOpener() then return nil end
+    self:planBridge()
+    self:planFinisher()
+    return self:build()
 end
 local Bot={}; Bot.__index=Bot
 function Bot:_trackConnection(conn)
@@ -1706,6 +1765,12 @@ function Bot:_hookMine(h:Humanoid)
     self.isM1ing=false
     self.m1ChainCount=0
     if not h then return end
+    table.insert(self.myHumConns, h.StateChanged:Connect(function(_, newState)
+        if FALL_STATES[newState] then
+            self.lastSelfStun=os.clock()
+            self:_cancelActiveCombo()
+        end
+    end))
     local function hook(an:Animator)
         local c=an.AnimationPlayed:Connect(function(tr)
             local tail = tailIdFromTrack(tr)
@@ -3113,6 +3178,24 @@ function Bot:_pressAction(name:string, hold:number?)
         markOffense()
         return true
     end
+    if name=="MINI_UPPER" then
+        pressKey(Enum.KeyCode.Space,true)
+        task.wait(0.04)
+        pressMouse(Enum.UserInputType.MouseButton1, hold or CFG.InputTap)
+        task.wait(0.02)
+        pressKey(Enum.KeyCode.Space,false)
+        markOffense()
+        return true
+    end
+    if name=="DOWNSLAM" then
+        pressKey(Enum.KeyCode.Space,true)
+        task.wait(0.03)
+        pressKey(Enum.KeyCode.Space,false)
+        task.wait(0.15)
+        pressMouse(Enum.UserInputType.MouseButton1, hold or CFG.InputTap)
+        markOffense()
+        return true
+    end
     if name=="Block" then pressKey(CFG.Bind.Block.k,true,hold or CFG.InputTap); return true end
     if name=="Evasive" then pressKey(CFG.Bind.Evasive.k,true,hold or CFG.InputTap); return true end
     local isUlt = self:_isUlted()
@@ -3214,7 +3297,7 @@ function Bot:execCombo(c:Combo, r:Enemy)
             end
             if waitForStun and st.kind ~= "aim" then
                 local confirmed=false
-                for _=1,6 do
+                for _=1,8 do
                     if not self.run or not r.model.Parent then abort=true break end
                     if self:_hasRecentStun(r) then confirmed=true; break end
                     task.wait(0.05)
@@ -3413,7 +3496,6 @@ function Bot:_shouldStartCombo(tgt:Enemy):boolean
     return hasBridge or m1Recent or idlePush or chainReady
 end
 function Bot:_chooseCombo(tgt:Enemy):Combo?
-    refreshAutoCombos()
     local dist = tgt and (tgt.dist or math.huge) or math.huge
     if tgt and dist == math.huge and tgt.hrp and self.rp then
         local here = safePos(self.rp)
@@ -3423,37 +3505,13 @@ function Bot:_chooseCombo(tgt:Enemy):Combo?
             tgt.dist = dist
         end
     end
-    local candidates:{Combo} = {}
-    for _,c in ipairs(LIB) do
-        local ok = true
-        if c.min and dist < c.min then ok = false end
-        if c.max and dist > c.max then ok = false end
-        if ok and c.reqNoEv and tgt and tgt.hasEv then
-            ok = false
-        end
-        if ok then
-            candidates[#candidates+1] = c
-        end
+    local planner = ComboPlanner.new(self, tgt)
+    local combo = planner:plan()
+    if combo then
+        combo.min = 0
+        combo.max = CFG.ComboDist or dist
     end
-    if #candidates == 0 then
-        return nil
-    end
-    local best, bestScore = nil, -math.huge
-    for _,c in ipairs(candidates) do
-        local stats = self.ls:combo(c.id)
-        local att = stats.att or 0
-        local succ = stats.succ or 0
-        local dmgt = stats.dmgt or 0
-        local avg = (att > 0) and (dmgt / att) or 0
-        local sr = (att > 0) and (succ / att) or 0
-        local explore = (att < 4) and 4 or 0
-        local score = avg + sr * 4 + explore
-        if score > bestScore then
-            bestScore = score
-            best = c
-        end
-    end
-    return best
+    return combo
 end
 function Bot:_maybeUltActions(tgt:Enemy)
     if not self:_isUlted() then return false end
@@ -4001,12 +4059,6 @@ function Bot:update(dt:number)
     local canCombo = self:_shouldStartCombo(tgt)
     if canCombo then
         local c=self:_chooseCombo(tgt)
-        if c then
-            if c.id=="sai_upper_path" and math.random()<0.60 then
-                c=nil
-                for _,k in ipairs(LIB) do if k.id=="sai_m1cp_np" then c=k break end end
-            end
-        end
         if c then self:execCombo(c,tgt); self.gui:updateCDs(self:_cdLeft("F"), self:_cdLeft("B"), self:_cdLeft("S")); return end
     end
     self:neutral(tgt)
