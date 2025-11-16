@@ -350,10 +350,6 @@ local FORWARD_DASH_COOLDOWN = 20.0
 
 
 local TUNE_SCHEMA = {
-    ["Cooldown.F"] = {min=6,  max=30, round=0.1},
-    ["Cooldown.B"] = {min=6,  max=30, round=0.1},
-    ["Cooldown.S"] = {min=2,  max=20, round=0.1},
-
     ["Gates.F.lo"] = {min=5,  max=60, round=0.1},
     ["Gates.F.hi"] = {min=10, max=90, round=0.1},
     ["Gates.S.lo"] = {min=2,  max=20, round=0.1},
@@ -2705,20 +2701,35 @@ end
 function Bot:_waitForRange(r:Enemy, range:number, timeout:number):boolean
     if not (self.rp and r and r.hrp) then return false end
     local deadline = os.clock() + timeout
+
     while os.clock() < deadline do
-        local dist = (r.hrp.Position - self.rp.Position).Magnitude
+        if not (r.model and r.model.Parent) or not (r.hrp and r.hrp.Parent) then
+            break
+        end
+        if self:_targetImmortal(r) then
+            break
+        end
+
+        local here  = safePos(self.rp)
+        local there = safePos(r.hrp)
+        if not (here and there) then break end
+
+        local dist = (there - here).Magnitude
         r.dist = dist
         if dist <= range then
             self:setInput(0, 0)
             return true
         end
+
         self:aimAt(r.hrp)
         self:setInput(1, 0)
         RunService.Heartbeat:Wait()
     end
+
     self:setInput(0, 0)
     return false
 end
+
 
 function Bot:_cdLeft(which:string)
     local last = self.lastRealDash and self.lastRealDash[which]
@@ -2900,6 +2911,10 @@ end
 
 
 function Bot:tryDash(kind:string, tHRP:BasePart?, style:string?, r:Enemy?)
+    if r and self:_targetImmortal(r) then
+        return false
+    end
+
     local targetPart = tHRP
     if kind == "F" then
         targetPart = (r and r.hrp) or targetPart
@@ -3259,6 +3274,23 @@ function Bot:_updateCurrentTarget(dt:number)
     r.ulted = attrTrue(r.model, "Ulted")
     r.absoluteImmortal = r.model:FindFirstChild("AbsoluteImmortal") ~= nil
     r.slowed = r.model:FindFirstChild("Slowed") ~= nil
+
+
+    local meIsConsec = self:isAnimPlaying("ConsecutivePunches")
+    if meIsConsec and r.slowed then
+        if (not r.comboLockFromMeAt) or (nowT - r.comboLockFromMeAt) > 0.1 then
+            r.comboLockFromMeAt = nowT
+            local cpId = CFG.Attack.AnimIds and CFG.Attack.AnimIds.cp
+            local tail = cpId and (cpId:match("(%d+)$") or cpId) or "cp"
+            self:_noteStun(r, tail)
+        end
+    else
+
+        if r.comboLockFromMeAt and (nowT - r.comboLockFromMeAt) > 1.2 then
+            r.comboLockFromMeAt = nil
+        end
+    end
+
     local lastHit = getAttrInsensitive(r.model, "LastHit")
     if typeof(lastHit)=="string" and lastHit ~= "" then
         r.lastHitBy = lastHit
@@ -3289,34 +3321,37 @@ function Bot:selectTarget():Enemy?
         self:_clearTarget()
         return nil
     end
+
     local myPos = safePos(self.rp)
     if not myPos then
         self:_clearTarget()
         return nil
     end
-    local bestModel, bestScore, bestDist = nil, -math.huge, math.huge
-    for _,m in ipairs(live:GetChildren()) do
+
+    local bestModel, bestDist = nil, math.huge
+
+    for _, m in ipairs(live:GetChildren()) do
         if m:IsA("Model") and m.Name ~= LP.Name then
+            -- Never target AbsoluteImmortal
             if not m:FindFirstChild("AbsoluteImmortal") then
                 local hum = m:FindFirstChildOfClass("Humanoid")
                 local hrp = m:FindFirstChild("HumanoidRootPart")
-                if hum and hrp and hrp.Parent and hum.Health > 0 then
+                if hum and hrp and hum.Health > 0 and hrp.Parent then
                     local enemyPos = safePos(hrp)
                     if enemyPos then
                         local dist = (enemyPos - myPos).Magnitude
-                        local score = self:_scoreTargetCandidate(m, hum, dist)
-                        if score > bestScore then
-                            bestScore = score
+                        if dist < bestDist then
+                            bestDist  = dist
                             bestModel = m
-                            bestDist = dist
                         end
                     end
                 end
             end
         end
     end
+
     local rec = self:_setCurrentTargetModel(bestModel)
-    if rec and bestDist and bestDist ~= math.huge then
+    if rec and bestDist < math.huge then
         rec.dist = bestDist
     end
     return rec
@@ -3485,6 +3520,7 @@ end
 
 function Bot:maybeDash(r:Enemy)
     if not r or not r.hrp then return end
+    if self:_targetImmortal(r) then return end
     if self.inDash or self.blocking or self.isM1ing then return end
 
     
@@ -3577,8 +3613,10 @@ function Bot:execCombo(c:Combo, r:Enemy)
         local waitForStun=false
 
         for _,st in ipairs(c.steps) do
-            if not self.run or not r.model.Parent then abort=true break end
-
+            if not self.run or not r.model.Parent or self:_targetImmortal(r) then
+                abort = true
+                break
+            end
             if waitForStun and st.kind ~= "aim" then
                 local confirmed=false
                 for _=1,6 do
@@ -3879,8 +3917,12 @@ function Bot:_maybeUltActions(tgt:Enemy)
 end
 
 function Bot:neutral(tgt:Enemy?)
-    if not tgt or not tgt.hrp then self:setInput(0,0); return end
-    self:alignCam(); self:aimAt(tgt.hrp)
+    if not tgt or not tgt.hrp or self:_targetImmortal(tgt) then
+        self:setInput(0, 0)
+        return
+    end
+    self:alignCam()
+    self:aimAt(tgt.hrp)
     local d,nowT=tgt.dist,os.clock()
 
     if d>CFG.FarChase then
@@ -4093,17 +4135,25 @@ function Bot:neutral(tgt:Enemy?)
     self:setInput(forward,strafe)
 end
 
+local function _getLiveModelFor(name:string)
+    local live = workspace:FindFirstChild("Live")
+    if not live then return nil end
+    return live:FindFirstChild(name)
+end
+
 
 function Bot:updateAttacker()
-    if not self.liveChar then
-        local live = self.liveFolder or workspace:FindFirstChild("Live")
-        self.liveFolder = live
-        self.liveChar = live and live:FindFirstChild(LP.Name) or nil
+    local live = _getLiveModelFor(LP.Name)
+    self.liveFolder = workspace:FindFirstChild("Live")
+    self.liveChar   = live
+
+    if not live then return end
+    local a = getAttrInsensitive(live, "LastHit")
+    if typeof(a) == "string" and a ~= "" then
+        self.lastAttacker = a
     end
-    if not self.liveChar then return end
-    local a=getAttrInsensitive(self.liveChar, "LastHit")
-    if typeof(a)=="string" and a~="" then self.lastAttacker=a end
 end
+
 
 function Bot:start()
     local h=self.hum
@@ -4148,10 +4198,18 @@ CFG.Bind = {
 
 function Bot:update(dt:number)
     if self.destroyed then return end
-    self.ls:flush()
+    if self.ls and self.ls.flush then
+        pcall(function()
+            self.ls:flush()
+        end)
+    end
+
     self:_ensureCharacterBindings()
-    if not(self.char and self.hum and self.rp) then return end
-    if self.hum.Health<=0 then self.run=false return end
+    if not (self.char and self.hum and self.rp) then return end
+    if self.hum.Health <= 0 then
+        self.run = false
+        return
+    end
 
     self:_processBlocking()
     self:_updateDashOrientation()
@@ -4182,7 +4240,9 @@ function Bot:update(dt:number)
     end
 
     if not self.run then
-        self:_autoResumeTick()
+        if self.autoStart then
+            self:_autoResumeTick()
+        end
     end
 
 
@@ -4862,7 +4922,12 @@ function AI.OnEvent(eventType, data)
         end
 
     elseif eventType == "save" then
-        bot:savePolicy(); bot.ls:flush()
+        bot:savePolicy()
+        if bot.ls and bot.ls.flush then
+            pcall(function()
+                bot.ls:flush()
+            end)
+        end
 
     elseif eventType == "load" then
         bot:loadPolicy()
@@ -4871,9 +4936,12 @@ end
 
 function AI.Save()
     local b = AI._bot
-    if b then
-        b:savePolicy()
-        if b.ls then b.ls:flush() end
+    if not b then return end
+    b:savePolicy()
+    if b.ls and b.ls.flush then
+        pcall(function()
+            b.ls:flush()
+        end)
     end
 end
 
