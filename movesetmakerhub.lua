@@ -11,6 +11,7 @@ local CollectionService  = game:GetService("CollectionService")
 local HttpService = game:GetService("HttpService")
 local sequenceUIList = {}      -- UI handles go in here
 local animationReplacements = {}
+local configNameBox
 local buildReplacementTable
 local connections = {}
 
@@ -20,6 +21,57 @@ local connections = {}
 -- You can change this to whatever “subfolder/filename” you like.
 local CONFIG_FOLDER = "MyMoveSets"      -- e.g. "MyMoveSets"
 local CONFIG_FILE   = CONFIG_FOLDER .. "/latestMoveset.json"
+
+local function readLastConfigMeta()
+    if not (isfile and isfile(CONFIG_FILE)) then
+        return nil
+    end
+    local ok, raw = pcall(readfile, CONFIG_FILE)
+    if not ok then
+        return nil
+    end
+    local okDecode, decoded = pcall(function()
+        return HttpService:JSONDecode(raw)
+    end)
+    if okDecode and typeof(decoded) == "table" then
+        return decoded
+    end
+    return nil
+end
+
+local function rememberLastConfigName(name)
+    if not name or name == "" then
+        return
+    end
+    local payloadOk, payload = pcall(function()
+        return HttpService:JSONEncode({ last = name, savedAt = os.time() })
+    end)
+    if payloadOk then
+        writefile(CONFIG_FILE, payload)
+    end
+end
+
+local function forgetLastConfigName(name)
+    if not name or name == "" then
+        return
+    end
+    local data = readLastConfigMeta()
+    if data and data.last == name and isfile and isfile(CONFIG_FILE) then
+        delfile(CONFIG_FILE)
+    end
+end
+
+local function getStoredConfigName()
+    local data = readLastConfigMeta()
+    if not (data and data.last) then
+        return nil
+    end
+    local path = CONFIG_FOLDER .. "/" .. data.last .. ".json"
+    if isfile and isfile(path) then
+        return data.last
+    end
+    return nil
+end
 
 local function safeNumber(str, def)    return tonumber(str) or def end
 local function isEndToken(str)        return tostring(str):lower()=="end" end
@@ -383,6 +435,7 @@ local function saveCurrentConfig(configName)
     local jsonString = HttpService:JSONEncode(dataToSave)
     local configPath = CONFIG_FOLDER .. "/" .. tostring(configName) .. ".json"
     writefile(configPath, jsonString)
+    rememberLastConfigName(tostring(configName))
 end
 
 local addSequence
@@ -394,8 +447,8 @@ local function safeDisconnect(conn)
 end
 
 
-local scrollFrame = Instance.new("ScrollingFrame")
-local configPanel = Instance.new("Frame")
+local scrollFrame
+local configPanel
 -- (predeclare)
 local createConfigButton, listSavedConfigs
 
@@ -407,15 +460,17 @@ listSavedConfigs = function()
            and not (child:IsA("TextLabel")    and child.Text == "Saved Configs")
            and not (child:IsA("TextBox")      and child.PlaceholderText == "Enter config name")
            and not (child:IsA("TextButton")   and child.Text == "Save Config")
-		   and child.Name ~= "ToggleConfigBtn" then
+                   and child.Name ~= "ToggleConfigBtn" then
             child:Destroy()
         end
     end
 
     -- 2) Now enumerate all *.json files:
     local i = 0
+    local pointerPath = CONFIG_FILE:gsub("\\", "/")
     for _, fileName in ipairs(listfiles(CONFIG_FOLDER)) do
-        if fileName:match("%.json$") then
+        local normalized = fileName:gsub("\\", "/")
+        if normalized ~= pointerPath and fileName:match("%.json$") then
             i = i + 1
             local configName = fileName:match("([^/]+)%.json$")
             createConfigButton(configName, i)
@@ -492,7 +547,18 @@ createConfigButton = function(configName, idx)
         if isfile(path) then
             delfile(path)
         end
+        forgetLastConfigName(configName)
         listSavedConfigs()
+    end)
+end
+
+local function autoloadLatestConfig()
+    local latest = getStoredConfigName()
+    if not latest then
+        return
+    end
+    task.defer(function()
+        loadConfigIntoUI(sequenceUIList, latest, scrollFrame)
     end)
 end
 
@@ -524,7 +590,8 @@ local function createGUI()
     mainFrame.ZIndex = 1
 
 
-	configPanel.Size = UDim2.new(0, 200, 1, 0)  -- Left Panel
+    configPanel = Instance.new("Frame")
+    configPanel.Size = UDim2.new(0, 200, 1, 0)  -- Left Panel
 	configPanel.Position = UDim2.new(0, -200, 0, 0)
 	configPanel.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
 	configPanel.BorderSizePixel = 0
@@ -593,13 +660,14 @@ local function createGUI()
 	configTitle.Parent = configPanel
 
 	-- TextBox to enter Config name
-	local nameBox = Instance.new("TextBox")
-	nameBox.Size = UDim2.new(1, -20, 0, 30)
+    local nameBox = Instance.new("TextBox")
+        nameBox.Size = UDim2.new(1, -20, 0, 30)
 	nameBox.Position = UDim2.new(0, 10, 0, 50)
 	nameBox.PlaceholderText = "Enter config name"
 	nameBox.BackgroundColor3 = Color3.fromRGB(100, 100, 100)
 	nameBox.TextColor3 = Color3.fromRGB(255, 255, 255)
-	nameBox.Parent = configPanel
+        nameBox.Parent = configPanel
+        configNameBox = nameBox
 
 	-- Save Config Button
 	local saveButton = Instance.new("TextButton")
@@ -939,6 +1007,7 @@ local function createGUI()
     -- SEQUENCE EDITOR CONTENT (LEFT)
     ----------------------------------------------------------------
 
+    scrollFrame = Instance.new("ScrollingFrame")
     scrollFrame.Size = UDim2.new(1, -10, 1, -10)
     scrollFrame.Position = UDim2.new(0, 5, 0, 5)
     scrollFrame.BackgroundColor3 = Color3.fromRGB(30,30,30)
@@ -3121,8 +3190,9 @@ end
 		end
 	end
 
-	hookLocalPlayerReplacement()
-	listSavedConfigs()  
+        hookLocalPlayerReplacement()
+        listSavedConfigs()
+        autoloadLatestConfig()
 end
 
 createGUI()
@@ -3239,7 +3309,10 @@ loadConfigIntoUI = function(sequenceUIList, configName, parentScrollFrame)
 
     -- 4) rebuild the runtime‐table so “animationReplacements” is up to date
     rebuildRuntimeTable()
-	reconnectLogging()
+        reconnectLogging()
+    if configNameBox then
+        configNameBox.Text = tostring(configName or "")
+    end
 end
 
 

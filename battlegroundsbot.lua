@@ -168,16 +168,17 @@ local CFG = {
     },
     Dash = {
         KeyQ        = Enum.KeyCode.Q,
-        HoldQ       = 0.10,
+        HoldQ       = 0.12,
         RefaceTail  = 0.60,
         FWindow     = 0.80,
-        BWindow     = .90,
-        SWindow     = 0.40,
+        BWindow     = 1.25,
+        SWindow     = 0.50,
         OrbitTrigger   = 5.0,
         OrbitDur       = 0.35,
-        BackClose      = 2.0,
-        SideOffLock    = 6,
-        PreEndBackFace = 0.20,
+        BackClose      = 4.0,
+        SideRelockDist = 3.5,
+        SideRelockTime = 0.50,
+        PreEndBackFace = 0.25,
         Anim = {
             fdash = { DashAnim.F },
             bdash = { DashAnim.B },
@@ -1613,6 +1614,7 @@ function Bot.new()
     self.dashPending = nil
     self.sideDashPauseStart=nil
     self.sticky=nil
+    self.comboBreakTime = 0
     self.stickyT=0
     self.stickyHold=1.6
     self.switchMargin=math.huge
@@ -1781,6 +1783,25 @@ local function isAttackTail(tail:string):boolean
     local A = CFG.Attack.AnimIds
     return isM1Tail(tail) or tail==A.np or tail==A.cp or tail==A.shove or tail==A.upper
 end
+
+local M1_ANIM_SET = {}
+do
+    local ids = CFG.Attack.AnimIds
+    for _, key in ipairs({"m1", "m2", "m3", "m4"}) do
+        local id = ids[key]
+        if id then
+            M1_ANIM_SET[id] = true
+        end
+    end
+end
+
+local UPPER_ANIM_SET = {}
+do
+    local upperId = CFG.Attack.AnimIds.upper
+    if upperId then
+        UPPER_ANIM_SET[upperId] = true
+    end
+end
 function Bot:_beginDashOrientation(kind:string, tr:AnimationTrack, style:("off"|"def"), tHRP:BasePart?, enemy:Enemy?)
     if self.inDash or not self.hum or not self.rp then return end
     self.inDash = true
@@ -1800,6 +1821,12 @@ function Bot:_beginDashOrientation(kind:string, tr:AnimationTrack, style:("off"|
         track = tr,
         stopped = false,
     }
+    if kind == "side" then
+        local minLen = CFG.Dash.SideRelockTime or 0
+        if minLen > state.length then
+            state.length = minLen
+        end
+    end
     state.stoppedConn = tr.Stopped:Connect(function()
         state.stopped = true
     end)
@@ -1813,7 +1840,10 @@ function Bot:_updateDashOrientation()
         return
     end
     local tr = state.track
-    if state.stopped or not (tr and tr.IsPlaying) then
+    local nowT = os.clock()
+    local elapsed = nowT - state.start
+    local active = (not state.stopped) and tr and tr.IsPlaying
+    if (not active) and elapsed >= (state.length or 0) then
         self:_finishDashOrientation(state)
         return
     end
@@ -1828,21 +1858,49 @@ function Bot:_updateDashOrientation()
     local tgtPos = safePos(target)
     if not (here and tgtPos) then return end
     local to = Vector3.new(tgtPos.X, here.Y, tgtPos.Z) - here
-    if to.Magnitude <= 1e-3 then return end
+    local dist = to.Magnitude
+    if dist <= 1e-3 then return end
     local toU = to.Unit
     local lookDir
     if state.kind=="fdash" then
         lookDir = (state.style=="off") and toU or -toU
     elseif state.kind=="bdash" then
-        lookDir = (state.style=="off") and -toU or toU
+        if state.style=="off" then
+            local closeD = CFG.Dash.BackClose or 4.0
+            if dist <= closeD then
+                local cw = state.orbitCW
+                local perp = cw and Vector3.new(toU.Z,0,-toU.X) or Vector3.new(-toU.Z,0,toU.X)
+                lookDir = perp.Unit
+            else
+                lookDir = -toU
+            end
+            local preFace = CFG.Dash.PreEndBackFace or 0.25
+            if (state.length or 0) - elapsed <= preFace then
+                lookDir = toU
+            end
+        else
+            lookDir = toU
+        end
     else
         local cw = state.orbitCW
         local perp = cw and Vector3.new(toU.Z,0,-toU.X) or Vector3.new(-toU.Z,0,toU.X)
-        lookDir = (state.style=="off") and perp.Unit or (-perp).Unit
+        if state.style=="off" then
+            local relock = CFG.Dash.SideRelockDist or 3.5
+            if dist <= relock then
+                lookDir = toU
+            else
+                lookDir = perp.Unit
+            end
+        else
+            lookDir = (-perp).Unit
+        end
+    end
+    if not lookDir then
+        lookDir = toU
     end
     self.rp.CFrame = CFrame.lookAt(here, here + lookDir)
     self:alignCam()
-    if os.clock() - state.start >= state.length then
+    if elapsed >= (state.length or 0) then
         self:_finishDashOrientation(state)
     end
 end
@@ -2542,6 +2600,35 @@ function Bot:_targetIsBlocking(r:Enemy?, window:number?):boolean
     end
     if r.style and (nowT - (r.style.lastBlk or 0)) <= limit then
         return true
+    end
+    return false
+end
+
+function Bot:_comboSequenceRecentlyBroken():boolean
+    local last = self.comboBreakTime or 0
+    return (os.clock() - last) <= 0.45
+end
+
+function Bot:_shouldAbortM1Retry(r:Enemy?):boolean
+    if not self.run or not self.alive then return true end
+    if self:_comboSequenceRecentlyBroken() then return true end
+    if self.blocking or self:isSelfBlockingVisual() then return true end
+    if self.inDash then return true end
+    if r then
+        if not (r.model and r.model.Parent) then return true end
+        if self:_targetIsBlocking(r, 0.25) then return true end
+        if self:_targetImmortal(r) then return true end
+        local dist = r.dist
+        if (not dist or dist==math.huge) and r.hrp and self.rp then
+            local here = safePos(self.rp)
+            local there = safePos(r.hrp)
+            if here and there then
+                dist = (there - here).Magnitude
+            end
+        end
+        if dist and dist > (CFG.M1Range + 0.75) then
+            return true
+        end
     end
     return false
 end
@@ -3315,17 +3402,63 @@ function Bot:_isUlted():boolean
     self.isUlt = flag and true or false
     return self.isUlt
 end
+function Bot:_animSetPlaying(animSet:{[string]:boolean}):boolean
+    for _, meta in pairs(self.myAnims or {}) do
+        local id = meta.id
+        if id and animSet[id] then
+            return true
+        end
+    end
+    return false
+end
+
+function Bot:_waitForAnimSet(animSet:{[string]:boolean}, timeout:number?)
+    local deadline = os.clock() + (timeout or 0.2)
+    repeat
+        if self:_animSetPlaying(animSet) then
+            return true
+        end
+        task.wait(0.01)
+    until os.clock() >= deadline
+    return false
+end
+
+function Bot:_confirmActionAnimation(triggerFn:()->(), animSet:{[string]:boolean}, timeout:number?, maxAttempts:number?, abortFn:(()->boolean)?)
+    local tries = 0
+    local limit = math.max(1, maxAttempts or 3)
+    while tries < limit do
+        if abortFn and abortFn() then
+            return false
+        end
+        tries += 1
+        triggerFn()
+        if self:_waitForAnimSet(animSet, timeout) then
+            return true
+        end
+        task.wait(0.02)
+    end
+    return false
+end
+
 function Bot:_pressAction(name:string, hold:number?)
     local function markOffense()
         self.lastOffenseTime = os.clock()
     end
     if name=="M1" or name=="M1HOLD" then
-        if self:isSelfBlockingVisual() then
+        local target = self.lastM1Target
+        local function abortCheck()
+            return self:_shouldAbortM1Retry(target)
+        end
+        if abortCheck() then
             return false
         end
-        pressMouse(Enum.UserInputType.MouseButton1, hold or CFG.InputTap)
-        markOffense()
-        return true
+        local success = self:_confirmActionAnimation(function()
+            pressMouse(Enum.UserInputType.MouseButton1, hold or CFG.InputTap)
+        end, M1_ANIM_SET, 0.18, (name=="M1HOLD" and 5 or 4), abortCheck)
+        if success then
+            markOffense()
+        end
+        return success
     end
     if name=="Block" then pressKey(CFG.Bind.Block.k,true,hold or CFG.InputTap); return true end
     if name=="Evasive" then pressKey(CFG.Bind.Evasive.k,true,hold or CFG.InputTap); return true end
@@ -3334,9 +3467,20 @@ function Bot:_pressAction(name:string, hold:number?)
     if slot then
         if not slotReady(slot) then return false end
         local b = CFG.Bind[name]; if b and b.t=="Key" then
-            pressKey(b.k,true, hold or CFG.InputTap)
-            markOffense()
-            return true
+            local function tap()
+                pressKey(b.k,true, hold or CFG.InputTap)
+            end
+            local success
+            if name == "Upper" then
+                success = self:_confirmActionAnimation(tap, UPPER_ANIM_SET, 0.25, 3, nil)
+            else
+                tap()
+                success = true
+            end
+            if success then
+                markOffense()
+            end
+            return success
         end
         return false
     end
@@ -3466,6 +3610,7 @@ function Bot:execCombo(c:Combo, r:Enemy)
     self:_finalizeActionRecords(true)
     self.stunFollow = nil
     self.curCombo=c; self:clearMove(); self.lastComboTry=os.clock(); self.gui:setC("Combo: "..c.name)
+    self.comboBreakTime = 0
     local attemptDist = r.dist or 0
     if attemptDist==math.huge then attemptDist=0 end
     self.ls:att(c.id, attemptDist); self.ls:log("combo_start",{id=c.id,tgt=r.model.Name,dist=attemptDist})
@@ -3492,8 +3637,8 @@ function Bot:execCombo(c:Combo, r:Enemy)
                 if not confirmed then abort=true break end
                 waitForStun=false
             end
-            if st.kind=="aim" then
-                self:aimAt(r.hrp); task.wait(0.03)
+                if st.kind=="aim" then
+                    self:aimAt(r.hrp); task.wait(0.03)
             elseif st.kind=="press" and st.action then
                 if st.action=="M1" then
                     if self:_targetRagdolled(r) then abort=true break end
@@ -3501,10 +3646,10 @@ function Bot:execCombo(c:Combo, r:Enemy)
                         if not self:_waitForRange(r, CFG.M1Range, 0.45) then abort=true break end
                     end
                     self:_registerM1Attempt(r)
-                    self:_pressAction("M1", st.hold)
+                    if not self:_pressAction("M1", st.hold) then abort=true break end
                     self.lastM1 = os.clock()
                     local w = st.wait or m1Gap()
-                    w = math.min(w, CFG.M1MaxGap or 0.60) 
+                    w = math.min(w, CFG.M1MaxGap or 0.60)
                     task.wait(w)
                     waitForStun = true
                 elseif st.action=="M1HOLD" then
@@ -3513,7 +3658,7 @@ function Bot:execCombo(c:Combo, r:Enemy)
                         if not self:_waitForRange(r, CFG.M1Range, 0.45) then abort=true break end
                     end
                     self:_registerM1Attempt(r)
-                    self:_pressAction("M1HOLD", st.hold)
+                    if not self:_pressAction("M1HOLD", st.hold) then abort=true break end
                     self.lastM1 = os.clock()
                     if self.lastShoveAt and (os.clock() - self.lastShoveAt) <= 0.40 then
                         self.allowDashExtend = os.clock() + 0.60
@@ -3530,8 +3675,7 @@ function Bot:execCombo(c:Combo, r:Enemy)
                     local y0 = (r.hrp and r.hrp.Position.Y) or 0
                     local ok = false
                     if slotReady(SLOT.Upper) and self:_upperUseOK(r) and (os.clock() - (self.lastDashTime or 0) >= 0.45) then
-                        self:_pressAction("Upper", st.hold)
-                        ok = true
+                        ok = self:_pressAction("Upper", st.hold)
                     end
                     task.wait(st.wait or 0.26)
                     if ok and self:_upperSucceeded(r, y0) then
@@ -3585,6 +3729,7 @@ function Bot:execCombo(c:Combo, r:Enemy)
             end
         end
         if abort or not self.run then
+            self.comboBreakTime = os.clock()
             self.gui:setC("Combo: none"); self.curCombo=nil; self.actThread=nil; return
         end
         if hasFreezeOnLive(r.model.Name) then
@@ -3595,9 +3740,10 @@ function Bot:execCombo(c:Combo, r:Enemy)
                     self:_waitForRange(r, CFG.M1Range, 0.35)
                 end
                 self:_registerM1Attempt(r)
-                self:_pressAction("M1", CFG.TapS)
-                self.lastM1=os.clock()
-                task.wait(m1Gap())
+                if self:_pressAction("M1", CFG.TapS) then
+                    self.lastM1=os.clock()
+                    task.wait(m1Gap())
+                end
             end
             if slotReady(SLOT.NP) then self:_pressAction("NP") end
         end
@@ -3607,6 +3753,7 @@ function Bot:execCombo(c:Combo, r:Enemy)
         self.ls:res(c.id,ok,dmg,attemptDist); self.ls:log("combo_res",{id=c.id,ok=ok,dmg=dmg,dist=attemptDist})
         self.gui:updateCombos(self.ls.data)
         if r.style then if ok then r.style.def=math.max(0,r.style.def-0.6) else r.style.def=math.clamp(r.style.def+0.8,0,10) end end
+        self.comboBreakTime = 0
         self.gui:setC("Combo: none"); self.curCombo=nil; self.actThread=nil
     end)
 end
