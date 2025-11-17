@@ -43,11 +43,22 @@ local function cfgDeepMerge(defaults, saved)
     return result
 end
 local function cfgRead()
-    if typeof(isfile) == "function" and isfile(ConfigFileName) then
-        local ok, data = pcall(readfile, ConfigFileName)
-        if ok and type(data) == "string" then
-            return data
+    if typeof(readfile) ~= "function" then
+        return nil
+    end
+    local hasFile = true
+    if typeof(isfile) == "function" then
+        local ok, exists = pcall(isfile, ConfigFileName)
+        if ok and not exists then
+            hasFile = false
         end
+    end
+    if not hasFile then
+        return nil
+    end
+    local ok, data = pcall(readfile, ConfigFileName)
+    if ok and type(data) == "string" then
+        return data
     end
     return nil
 end
@@ -830,6 +841,7 @@ function GUI.new()
     ul.Parent = list
     self.comboList  = list
     self.comboLayout = ul
+    self.configInputs = {}
     self.gui   = g
     self.frame = f
     self.startB = startB
@@ -919,6 +931,35 @@ function GUI:addConsole(container)
     self:addRewardEditor(container, 2)
     self:addLimiterEditor(container, 3)
     self:updateConfigSaveState(false)
+    self:refreshConfigInputs()
+end
+function GUI:_registerConfigInput(path, box, formatFn, fallbackFn)
+    if not (box and box:IsA("TextBox")) then return end
+    self.configInputs = self.configInputs or {}
+    table.insert(self.configInputs, {
+        path = path,
+        box = box,
+        format = formatFn,
+        fallback = fallbackFn,
+    })
+end
+function GUI:refreshConfigInputs()
+    if not self.configInputs then return end
+    for _,entry in ipairs(self.configInputs) do
+        local value = cfgGetPath(CFG, entry.path)
+        if value == nil and entry.fallback then
+            value = entry.fallback()
+        end
+        if value ~= nil and entry.box then
+            local text
+            if entry.format then
+                text = entry.format(value)
+            else
+                text = tostring(value)
+            end
+            entry.box.Text = text
+        end
+    end
 end
 function GUI:updateConfigSaveState(dirty)
     self.configDirty = dirty and true or false
@@ -998,6 +1039,7 @@ function GUI:addRewardEditor(container, order)
         box.Text = tostring(CFG.Reward[key])
         box.ClearTextOnFocus = false
         box.Parent = row
+        self:_registerConfigInput("Reward."..key, box)
         local apply = Instance.new("TextButton")
         apply.Size = UDim2.new(0,60,0,24)
         apply.Position = UDim2.new(1,-66,0,2)
@@ -1077,6 +1119,11 @@ function GUI:addLimiterEditor(container, order)
         minBox.Position = UDim2.new(0.45,0,0,4)
         minBox.Text = tostring(schema.min)
         minBox.Parent = row
+        self:_registerConfigInput("TuneLimits."..key..".min", minBox, nil, function()
+            local live = CFG.TuneLimits and CFG.TuneLimits[key]
+            if live and live.min ~= nil then return live.min end
+            return schema.min
+        end)
         local maxBox = Instance.new("TextBox")
         maxBox.BackgroundColor3 = Color3.fromRGB(28,30,40)
         maxBox.TextColor3 = Color3.fromRGB(240,240,240)
@@ -1086,6 +1133,11 @@ function GUI:addLimiterEditor(container, order)
         maxBox.Position = UDim2.new(0.60,0,0,4)
         maxBox.Text = tostring(schema.max)
         maxBox.Parent = row
+        self:_registerConfigInput("TuneLimits."..key..".max", maxBox, nil, function()
+            local live = CFG.TuneLimits and CFG.TuneLimits[key]
+            if live and live.max ~= nil then return live.max end
+            return schema.max
+        end)
         local apply = Instance.new("TextButton")
         apply.Size = UDim2.new(0,60,0,24)
         apply.Position = UDim2.new(1,-66,0,4)
@@ -1599,6 +1651,7 @@ function Bot.new()
     self.m1ChainCount=0
     self.lastM1Target=nil
     self.lastM1AttemptTime=0
+    self.lastM1AnimTime = 0
     local nowT=os.clock()
     self.lastAttempt=nowT; self.urgency=0
     self.arcUntil=0; self.closeT=os.clock(); self.closeD=math.huge
@@ -1789,6 +1842,8 @@ function Bot:_beginDashOrientation(kind:string, tr:AnimationTrack, style:("off"|
                   or (kind=="fdash" and CFG.Dash.FWindow)
                   or (kind=="bdash" and CFG.Dash.BWindow)
                   or CFG.Dash.SWindow
+    local pendingOrbit = self.dashPending and self.dashPending.orbitCW
+    local orbitCW = (typeof(pendingOrbit) == "boolean") and pendingOrbit or (math.random()<0.5)
     local state = {
         kind = kind,
         style = style or "off",
@@ -1796,7 +1851,7 @@ function Bot:_beginDashOrientation(kind:string, tr:AnimationTrack, style:("off"|
         enemy = enemy,
         start = os.clock(),
         length = length or 0.4,
-        orbitCW = (math.random()<0.5),
+        orbitCW = orbitCW,
         track = tr,
         stopped = false,
     }
@@ -1828,18 +1883,46 @@ function Bot:_updateDashOrientation()
     local tgtPos = safePos(target)
     if not (here and tgtPos) then return end
     local to = Vector3.new(tgtPos.X, here.Y, tgtPos.Z) - here
-    if to.Magnitude <= 1e-3 then return end
+    local dist = to.Magnitude
+    if dist <= 1e-3 then return end
     local toU = to.Unit
     local lookDir
     if state.kind=="fdash" then
         lookDir = (state.style=="off") and toU or -toU
     elseif state.kind=="bdash" then
-        lookDir = (state.style=="off") and -toU or toU
+        if state.style=="off" then
+            local cw = state.orbitCW
+            local close = CFG.Dash.BackClose or 2.0
+            if dist <= close then
+                local perp = cw and Vector3.new(toU.Z,0,-toU.X) or Vector3.new(-toU.Z,0,toU.X)
+                if perp.Magnitude < 1e-3 then perp = Vector3.new(-toU.Z,0,toU.X) end
+                lookDir = perp.Unit
+            else
+                lookDir = (-toU)
+            end
+            local timeLeft = (state.start + state.length) - os.clock()
+            if timeLeft <= (CFG.Dash.PreEndBackFace or 0.2) then
+                lookDir = toU
+            end
+        else
+            lookDir = toU
+        end
     else
         local cw = state.orbitCW
         local perp = cw and Vector3.new(toU.Z,0,-toU.X) or Vector3.new(-toU.Z,0,toU.X)
-        lookDir = (state.style=="off") and perp.Unit or (-perp).Unit
+        if perp.Magnitude < 1e-3 then perp = Vector3.new(-toU.Z,0,toU.X) end
+        if state.style=="off" then
+            local lockDist = CFG.Dash.SideOffLock or 6
+            if dist <= lockDist then
+                lookDir = toU
+            else
+                lookDir = perp.Unit
+            end
+        else
+            lookDir = (-perp).Unit
+        end
     end
+    if lookDir.Magnitude < 1e-3 then return end
     self.rp.CFrame = CFrame.lookAt(here, here + lookDir)
     self:alignCam()
     if os.clock() - state.start >= state.length then
@@ -1873,8 +1956,7 @@ function Bot:_finishDashOrientation(state)
             end
         end
         if dist <= 5.0 and not self.blocking then
-            self:_registerM1Attempt(closeEnemy)
-            if self:_pressAction("M1", CFG.TapS) then
+            if self:_fireM1("M1", closeEnemy, CFG.TapS) then
                 local nowT = os.clock()
                 self.lastM1 = nowT
                 self.lastAttempt = nowT
@@ -1901,6 +1983,7 @@ function Bot:_hookMine(h:Humanoid)
     self.isAttacking=false
     self.isM1ing=false
     self.m1ChainCount=0
+    self.lastM1AnimTime = 0
     if not h then return end
     local function hook(an:Animator)
         local c=an.AnimationPlayed:Connect(function(tr)
@@ -1962,6 +2045,7 @@ function Bot:_hookMine(h:Humanoid)
                 self.isAttacking=true
                 self.lastAttackTime=os.clock()
                 if isM1Tail(tail) then
+                    self.lastM1AnimTime = os.clock()
                     if os.clock() - self.lastM1 > CFG.M1MaxGap then
                         self.m1ChainCount = 0
                     end
@@ -2388,10 +2472,13 @@ function Bot:_applyTune(tune:any)
         set("Gates.B.lo", tune.B.gateLo and (BASE_GATES.B.lo + tune.B.gateLo))
         set("Gates.B.hi", tune.B.gateHi and (BASE_GATES.B.hi + tune.B.gateHi))
     end
-    if tune.space then 
+    if tune.space then
         set("SpaceMin", tune.space.min and (BASE_SPACES.SpaceMin + tune.space.min))
         set("SpaceMax", tune.space.max and (BASE_SPACES.SpaceMax + tune.space.max))
         set("M1Range",  tune.space.m1  and (BASE_SPACES.M1Range  + tune.space.m1))
+    end
+    if self.gui and self.gui.refreshConfigInputs then
+        self.gui:refreshConfigInputs()
     end
 end
 local AI = {
@@ -2549,6 +2636,79 @@ function Bot:_registerM1Attempt(r:Enemy?)
     self.lastM1Target = r
     self.lastM1AttemptTime = os.clock()
 end
+function Bot:_estimateEnemyDistance(r:Enemy?):number
+    if not r then return math.huge end
+    local dist = r.dist
+    if dist and dist ~= math.huge then return dist end
+    if self.rp and r.hrp then
+        local here = safePos(self.rp)
+        local there = safePos(r.hrp)
+        if here and there then
+            dist = (there - here).Magnitude
+            r.dist = dist
+            return dist
+        end
+    end
+    return math.huge
+end
+function Bot:_m1AnimTriggered(afterTime:number)
+    return (self.lastM1AnimTime or 0) > afterTime
+end
+function Bot:_shouldAbortM1Retry(target:Enemy?, opts:any)
+    if not self.run then return true end
+    if self.blocking then return true end
+    if opts and typeof(opts.breakCheck) == "function" then
+        local ok, stop = pcall(opts.breakCheck)
+        if ok and stop then return true end
+    end
+    if target then
+        local maxRange = (opts and opts.range) or (CFG.M1Range + 0.75)
+        local dist = self:_estimateEnemyDistance(target)
+        if dist > maxRange then
+            return true
+        end
+    end
+    return false
+end
+function Bot:_waitForM1Animation(actionName:string, hold:number, attemptStart:number, opts:any?)
+    opts = opts or {}
+    if self:_m1AnimTriggered(attemptStart) then
+        return true
+    end
+    local maxWait = opts.maxWait or 0.45
+    local retryInterval = opts.retryInterval or 0.08
+    local deadline = attemptStart + maxWait
+    local nextPress = attemptStart + retryInterval
+    while os.clock() < deadline do
+        if self:_m1AnimTriggered(attemptStart) then
+            return true
+        end
+        if self:_shouldAbortM1Retry(opts.target, opts) then
+            break
+        end
+        local nowT = os.clock()
+        if nowT >= nextPress then
+            if not self:_pressAction(actionName, hold) then
+                break
+            end
+            nextPress = nowT + retryInterval
+        end
+        RunService.Heartbeat:Wait()
+    end
+    return self:_m1AnimTriggered(attemptStart)
+end
+function Bot:_fireM1(actionName:string?, target:Enemy?, hold:number?, opts:any?)
+    actionName = actionName or "M1"
+    hold = hold or ((actionName=="M1HOLD") and CFG.TapM or CFG.TapS)
+    self:_registerM1Attempt(target)
+    local attemptStart = os.clock()
+    if not self:_pressAction(actionName, hold) then
+        return false
+    end
+    opts = opts or {}
+    opts.target = opts.target or target
+    return self:_waitForM1Animation(actionName, hold, attemptStart, opts)
+end
 function Bot:onM1Hit(r:Enemy)
     if not r or not r.hrp then return end
     local dist = r.dist
@@ -2604,8 +2764,7 @@ function Bot:_processStunFollow(tgt:Enemy?, nowT:number):boolean
     end
     if tgt and (not data.didM1) and dist <= CFG.M1Range then
         if (nowT - (self.lastM1 or 0)) >= CFG.M1Min*0.5 then
-            self:_registerM1Attempt(tgt)
-            if self:_pressAction("M1", CFG.TapS) then
+            if self:_fireM1("M1", tgt, CFG.TapS) then
                 self.lastM1 = nowT
                 self.lastAttempt = nowT
                 data.didM1 = true
@@ -2680,27 +2839,37 @@ function Bot:sideDash(tHRP:BasePart?, style:string?, r:Enemy?)
     local myPos   = safePos(self.rp)
     local tPos    = safePos(tHRP)
     if not (myPos and tPos) then return end
+    local to = tPos - myPos
+    if to.Magnitude < 1e-3 then return end
+    local toFlat = flat(to)
+    if toFlat.Magnitude < 1e-3 then return end
+    local toU = toFlat.Unit
     local right   = flat(self.rp.CFrame.RightVector)
     if right.Magnitude < 1e-3 then right = Vector3.new(1,0,0) end
     right = right.Unit
-    local sideLen = self:_sideDashDistance()
-    local aPos    = myPos - right * sideLen 
-    local dPos    = myPos + right * sideLen 
-    local dA = (tPos - aPos).Magnitude
-    local dD = (tPos - dPos).Magnitude
+    local dot   = right:Dot(toU)
     local offensive = (style or "off") == "off"
-    local sideKey
-    if offensive then
-        sideKey = (dA < dD) and Enum.KeyCode.A or Enum.KeyCode.D
-    else
-        sideKey = (dA > dD) and Enum.KeyCode.A or Enum.KeyCode.D
+    local sideKey = (dot >= 0) and Enum.KeyCode.D or Enum.KeyCode.A
+    if not offensive then
+        sideKey = (sideKey == Enum.KeyCode.D) and Enum.KeyCode.A or Enum.KeyCode.D
     end
     local wasW = self.moveKeys[Enum.KeyCode.W]
     local wasS = self.moveKeys[Enum.KeyCode.S]
     if wasW then self:setKey(Enum.KeyCode.W, false) end
     if wasS then self:setKey(Enum.KeyCode.S, false) end
-    local dashStyle = (style == "def") and "def" or "off"
-    self.dashPending = {kind="side", style=dashStyle, tHRP=tHRP, enemy=r}
+    local dashStyle = offensive and "off" or "def"
+    local orbitCW = (math.random() < 0.5)
+    self.dashPending = {kind="side", style=dashStyle, tHRP=tHRP, enemy=r, orbitCW = orbitCW}
+    if dashStyle == "off" then
+        local perp = orbitCW and Vector3.new(toU.Z,0,-toU.X) or Vector3.new(-toU.Z,0,toU.X)
+        if perp.Magnitude > 1e-3 then
+            local here = myPos
+            self.rp.CFrame = CFrame.lookAt(here, here + perp.Unit)
+            self:alignCam()
+        end
+    else
+        self:aimAt(tHRP)
+    end
     pressKey(sideKey, true)
     task.wait(0.02)
     pressKey(CFG.Dash.KeyQ, true); task.wait(CFG.Dash.HoldQ); pressKey(CFG.Dash.KeyQ, false)
@@ -2753,7 +2922,20 @@ function Bot:backDash(tHRP:BasePart?, style:string?, r:Enemy?)
     if wasA then self:setKey(Enum.KeyCode.A, false) end
     if wasD then self:setKey(Enum.KeyCode.D, false) end
     local dashStyle = (style == "def") and "def" or "off"
-    self.dashPending = {kind="bdash", style=dashStyle, tHRP=tHRP, enemy=r}
+    local orbitCW = (math.random() < 0.5)
+    self.dashPending = {kind="bdash", style=dashStyle, tHRP=tHRP, enemy=r, orbitCW = orbitCW}
+    local myPos = safePos(self.rp)
+    local tPos = safePos(tHRP)
+    if dashStyle == "off" and myPos and tPos then
+        local to = flat(tPos - myPos)
+        if to.Magnitude > 1e-3 then
+            local dir = (-to).Unit
+            self.rp.CFrame = CFrame.lookAt(myPos, myPos + dir)
+            self:alignCam()
+        end
+    else
+        self:aimAt(tHRP)
+    end
     pressKey(Enum.KeyCode.S, true)
     task.wait(0.02)
     holdQ(CFG.Dash.HoldQ)
@@ -3415,8 +3597,7 @@ function Bot:_doMiniUppercutStep(r:Enemy, waitTime:number?):boolean
     if not r then return false end
     pressKey(Enum.KeyCode.Space,true)
     task.wait(0.03)
-    self:_registerM1Attempt(r)
-    local fired=self:_pressAction("M1", CFG.TapS)
+    local fired=self:_fireM1("M1", r, CFG.TapS)
     if fired then self.lastM1=os.clock() end
     task.wait(CFG.InputTap)
     pressKey(Enum.KeyCode.Space,false)
@@ -3427,8 +3608,7 @@ function Bot:_doDownslamStep(r:Enemy, waitTime:number?):boolean
     if not r then return false end
     pressKey(Enum.KeyCode.Space,true,0.08)
     task.wait(0.18)
-    self:_registerM1Attempt(r)
-    local fired=self:_pressAction("M1", CFG.TapS)
+    local fired=self:_fireM1("M1", r, CFG.TapS)
     if fired then self.lastM1=os.clock() end
     task.wait(waitTime or 0.35)
     return fired
@@ -3500,9 +3680,9 @@ function Bot:execCombo(c:Combo, r:Enemy)
                     if (r.dist or math.huge) > CFG.M1Range then
                         if not self:_waitForRange(r, CFG.M1Range, 0.45) then abort=true break end
                     end
-                    self:_registerM1Attempt(r)
-                    self:_pressAction("M1", st.hold)
-                    self.lastM1 = os.clock()
+                    if self:_fireM1("M1", r, st.hold, {breakCheck=function() return abort end}) then
+                        self.lastM1 = os.clock()
+                    end
                     local w = st.wait or m1Gap()
                     w = math.min(w, CFG.M1MaxGap or 0.60) 
                     task.wait(w)
@@ -3512,11 +3692,11 @@ function Bot:execCombo(c:Combo, r:Enemy)
                     if (r.dist or math.huge) > CFG.M1Range then
                         if not self:_waitForRange(r, CFG.M1Range, 0.45) then abort=true break end
                     end
-                    self:_registerM1Attempt(r)
-                    self:_pressAction("M1HOLD", st.hold)
-                    self.lastM1 = os.clock()
-                    if self.lastShoveAt and (os.clock() - self.lastShoveAt) <= 0.40 then
-                        self.allowDashExtend = os.clock() + 0.60
+                    if self:_fireM1("M1HOLD", r, st.hold, {breakCheck=function() return abort end}) then
+                        self.lastM1 = os.clock()
+                        if self.lastShoveAt and (os.clock() - self.lastShoveAt) <= 0.40 then
+                            self.allowDashExtend = os.clock() + 0.60
+                        end
                     end
                     local w = st.wait or m1Gap()
                     w = math.min(w, CFG.M1MaxGap or 0.60)
@@ -3594,9 +3774,9 @@ function Bot:execCombo(c:Combo, r:Enemy)
                 if (r.dist or math.huge) > CFG.M1Range then
                     self:_waitForRange(r, CFG.M1Range, 0.35)
                 end
-                self:_registerM1Attempt(r)
-                self:_pressAction("M1", CFG.TapS)
-                self.lastM1=os.clock()
+                if self:_fireM1("M1", r, CFG.TapS, {breakCheck=function() return abort end}) then
+                    self.lastM1=os.clock()
+                end
                 task.wait(m1Gap())
             end
             if slotReady(SLOT.NP) then self:_pressAction("NP") end
@@ -3812,10 +3992,9 @@ function Bot:neutral(tgt:Enemy?)
     if d<=CFG.M1Range and (nowT - (self.lastM1 or 0)) >= (CFG.M1Min * 0.55) and not ragdolled and not self.blocking then
         table.insert(skillCandidates, {
             name = "M1",
-            bias = 0.65, 
+            bias = 0.65,
             exec = function()
-                self:_registerM1Attempt(tgt)
-                local fired = self:_pressAction("M1", CFG.TapS)
+                local fired = self:_fireM1("M1", tgt, CFG.TapS)
                 if fired then
                     self.lastM1        = nowT
                     self.lastAttempt   = nowT
@@ -3838,11 +4017,11 @@ function Bot:neutral(tgt:Enemy?)
                     self.lastShoveAt = os.clock()
                     self.lastSkill = nowT
                     self.lastAttempt = nowT
+                    local target = tgt
                     task.delay(0.10, function()
                         if not (self.run and self.alive) then return end
-                        if not (tgt and tgt.model and tgt.model.Parent) then return end
-                        self:_registerM1Attempt(tgt)
-                        if self:_pressAction("M1", CFG.TapM) then
+                        if not (target and target.model and target.model.Parent) then return end
+                        if self:_fireM1("M1", target, CFG.TapM) then
                             self.lastM1 = os.clock()
                         end
                     end)
@@ -3905,8 +4084,7 @@ function Bot:neutral(tgt:Enemy?)
             end
         end
         if (not self.isAttacking) and d <= CFG.M1Range and not ragdolled and not self.blocking then
-            self:_registerM1Attempt(tgt)
-            if self:_pressAction("M1", CFG.TapS) then
+            if self:_fireM1("M1", tgt, CFG.TapS) then
                 self.lastM1 = nowT
                 self.lastAttempt = nowT
                 self:_noteAction("M1", ctx, tgt)
@@ -4100,8 +4278,7 @@ function Bot:update(dt:number)
         end
         if (nowT - self.lastOffenseTime) >= CFG.AttackPunish and not self.isAttacking then
             if tgt.dist <= (CFG.M1Range + 1.2) and not self:_targetRagdolled(tgt) then
-                self:_registerM1Attempt(tgt)
-                if self:_pressAction("M1", CFG.TapS) then
+                if self:_fireM1("M1", tgt, CFG.TapS) then
                     self:_noteAction("M1", self:_ctxKey(tgt), tgt)
                     self.lastM1 = nowT
                 end
@@ -4124,11 +4301,11 @@ function Bot:update(dt:number)
                     self:_noteAction("SHOVE", idleCtx, tgt)
                     self.lastSkill = nowT
                     self.lastAttempt = nowT
+                    local target = tgt
                     task.delay(0.10, function()
                         if not (self.run and self.alive) then return end
-                        if not (tgt and tgt.model and tgt.model.Parent) then return end
-                        self:_registerM1Attempt(tgt)
-                        if self:_pressAction("M1", CFG.TapM) then
+                        if not (target and target.model and target.model.Parent) then return end
+                        if self:_fireM1("M1", target, CFG.TapM) then
                             self.lastM1 = os.clock()
                         end
                     end)
@@ -4213,8 +4390,7 @@ function Bot:update(dt:number)
         elseif not self.isAttacking then
             local sinceM1 = nowT - (self.lastM1 or 0)
             if sinceM1 >= CFG.M1Min then
-                self:_registerM1Attempt(tgt)
-                if self:_pressAction("M1", CFG.TapS) then
+                if self:_fireM1("M1", tgt, CFG.TapS) then
                     self.lastM1 = nowT
                     self.lastAttempt = nowT
                     self.lastOffenseTime = nowT
@@ -4249,11 +4425,11 @@ function Bot:update(dt:number)
                 if self:_pressAction("Shove") then
                     self:_noteAction("SHOVE", forceCtx, tgt)
                     self.lastSkill = nowT
+                    local target = tgt
                     task.delay(0.10, function()
                         if not (self.run and self.alive) then return end
-                        if not (tgt and tgt.model and tgt.model.Parent) then return end
-                        self:_registerM1Attempt(tgt)
-                        if self:_pressAction("M1", CFG.TapM) then
+                        if not (target and target.model and target.model.Parent) then return end
+                        if self:_fireM1("M1", target, CFG.TapM) then
                             self.lastM1 = os.clock()
                         end
                     end)
@@ -4308,8 +4484,7 @@ function AI.Decide(input)
     end
     if tgt and d<=CFG.M1Range and (nowT - (bot.lastM1 or 0)) > CFG.M1Min and not bot:_targetRagdolled(tgt) then
         add({name="M1", bias=0.50, exec=function()
-            bot:_registerM1Attempt(tgt)
-            return bot:_pressAction("M1", CFG.TapS)
+            return bot:_fireM1("M1", tgt, CFG.TapS)
         end})
     end
     if tgt and d<=CFG.CloseUseRange and slotReady(SLOT.Shove) then
