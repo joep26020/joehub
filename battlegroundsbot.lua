@@ -1223,7 +1223,7 @@ end
 function ComboTreeBuilder:addShoveTech(waitDash)
     if not self.ctx.canShove then return end
     self:append({kind="press",action="Shove",hold=0,wait=0.1})
-    self:append({kind="press",action="M1HOLD",hold=CFG.TapM,wait=.15()})
+    self:append({kind="press",action="M1HOLD",hold=CFG.TapM,wait=.15})
     self.state.m1Count=math.min(4,self.state.m1Count+1)
     self.state.usedShove=true
     if self.state.m1Count==1 then self.state.shoveOpened=true end
@@ -1234,7 +1234,7 @@ function ComboTreeBuilder:addShoveTech(waitDash)
 end
 function ComboTreeBuilder:addCP()
     if not self.ctx.canCP then return false end
-    self:append({kind="press",action="CP",hold=0,wait=1.6})
+    self:append({kind="press",action="CP",hold=0,wait=2})
     self.state.afterCP=true
     self.ctx.canCP=false
     return true
