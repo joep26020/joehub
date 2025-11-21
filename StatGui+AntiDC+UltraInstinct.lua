@@ -210,7 +210,7 @@ local CRIMSON_HIGH = Color3.fromRGB(255,60,60)
 
 local GUI_WIDTH_PX        = 105
 local GUI_HEIGHT_PX       = 36
-local BASE_HEIGHT         = 3.4
+local BASE_HEIGHT         = 4.3
 local DEAD_ZONE           = 20
 local LIFT_PER_STUD       = 0.03
 local MAX_LIFT            = 200
