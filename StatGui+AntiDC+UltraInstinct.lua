@@ -64,10 +64,19 @@ end
 
 local function getStatLabel(plr, stat)
     local root = game:GetService("CoreGui"):FindFirstChild("PlayerList", true)
-    local row = root and root:FindFirstChild("p_"..plr.UserId, true)
-    local g = row and row:FindFirstChild("GameStat_"..stat, true)
-    local ov = g and g:FindFirstChild("OverlayFrame", true)
-    return ov and ov:FindFirstChild("StatText", true)
+    if not root then return end
+    local rowName = "PlayerEntry_" .. plr.UserId
+    local row = root:FindFirstChild(rowName, true)
+    if not row then return end
+    local statContainer = row:FindFirstChild("GameStat_" .. stat, true)
+    if not statContainer then return end
+    return statContainer:FindFirstChild("PlayerStatDisplay", true)
+end
+
+local function labelNeedsFill(lbl)
+    if not lbl then return false end
+    local t = tostring(lbl.Text or "")
+    return not t:match("%d")
 end
 
 local function lerp(c1,c2,t)
@@ -88,25 +97,32 @@ local function fadeFactor(d)
 end
 
 local function clearReveal(plr)
+    local kv = plr:FindFirstChild("Kills")
+    local tv = plr:FindFirstChild("Total Kills")
     local kl = getStatLabel(plr,"Kills")
     local tl = getStatLabel(plr,"Total Kills")
-    if kl and plr:FindFirstChild("Kills") then
-        kl.Text = comma(plr.Kills.Value)
+    if kl and kv then
+        kl.Text = comma(kv.Value)
     end
-    if tl and plr:FindFirstChild("Total Kills") then
-        tl.Text = comma(plr["Total Kills"].Value)
+    if tl and tv then
+        tl.Text = comma(tv.Value)
     end
 end
 
 local function reveal(plr)
     if not LeaderboardSpy then return end
-    if plr:GetAttribute("S_HideKills")~=true then return end
-    local kl = getStatLabel(plr,"Kills")
-    local tl = getStatLabel(plr,"Total Kills")
     local kv = plr:FindFirstChild("Kills")
     local tv = plr:FindFirstChild("Total Kills")
-    if kl and kv then kl.Text = "🔍 "..comma(kv.Value) end
-    if tl and tv then tl.Text = "🔍 "..comma(tv.Value) end
+    if not kv and not tv then return end
+    local kl = getStatLabel(plr,"Kills")
+    local tl = getStatLabel(plr,"Total Kills")
+    local hide = plr:GetAttribute("S_HideKills") == true
+    if kv and kl and (hide or labelNeedsFill(kl)) then
+        kl.Text = "🔍 " .. comma(kv.Value)
+    end
+    if tv and tl and (hide or labelNeedsFill(tl)) then
+        tl.Text = "🔍 " .. comma(tv.Value)
+    end
 end
 
 local function trackTKF(plr)
@@ -115,12 +131,16 @@ local function trackTKF(plr)
     addConn(plr:GetAttributeChangedSignal("TotalKillsFrb"):Connect(function()
         local new = plr:GetAttribute("TotalKillsFrb") or 0
         local diff = new - (lastTKF[plr] or 0)
-        if diff>0 then
+        if diff > 0 then
             local kv = plr:FindFirstChild("Kills")
-            if kv then kv.Value = kv.Value + diff end
+            if kv then
+                kv.Value = kv.Value + diff
+            end
         end
         lastTKF[plr] = new
-        if plr:GetAttribute("S_HideKills")==true then reveal(plr) end
+        if plr:GetAttribute("S_HideKills") == true then
+            reveal(plr)
+        end
     end))
 end
 
@@ -156,6 +176,20 @@ addConn(Players.PlayerAdded:Connect(function(plr)
         end))
     end
 end))
+
+do
+    local accum = 0
+    addConn(RunService.Heartbeat:Connect(function(dt)
+        accum += dt
+        if accum < 0.5 or not LeaderboardSpy then return end
+        accum = 0
+        for _,plr in ipairs(Players:GetPlayers()) do
+            if plr ~= LP then
+                reveal(plr)
+            end
+        end
+    end))
+end
 
 local MenacingTemplate = Replicated:WaitForChild("Resources"):WaitForChild("LegacyReplication"):WaitForChild("Menacing")
 local MagicTemplateGui = ReplicatedFirst:WaitForChild("ScreenGui")
@@ -226,7 +260,6 @@ local function newMagicBar(parentGui,label,yScale)
     return { root = frame, bar = bar, inner = inner, glow = glow }
 end
 
--- 1. Replace setFill entirely with this:
 local function setFill(t, alpha, colLow, colHigh, pulse)
     if t.bar then
         t.bar.Size = UDim2.new(1, 0, t.bar.Size.Y.Scale, t.bar.Size.Y.Offset)
@@ -234,7 +267,6 @@ local function setFill(t, alpha, colLow, colHigh, pulse)
     end
     local col = (pulse and lerp(colLow, colHigh, pulse)) or colLow
     if t.inner then
-        -- fill horizontally (X = alpha, Y stays full)
         t.inner.Size = UDim2.new(alpha, 0, 1, 0)
         t.inner.ImageColor3 = col
     end
@@ -390,9 +422,6 @@ local function updateGuiLift()
         if h.ultBar.inner then h.ultBar.inner.ImageTransparency = t end
         if h.evasiveBar.inner then h.evasiveBar.inner.ImageTransparency = t end
 
-        local live = workspace:FindFirstChild("Live")
-        local lc  = live and live:FindFirstChild(char.Name)
-
         if h.ultBar.glow then
             h.ultBar.glow.ImageTransparency = t
         end
@@ -529,6 +558,7 @@ if AntiDeathCounterSpy then
     end
     addConn(workspace.Live.ChildAdded:Connect(hookDeathCounter))
 end
+
 local liveFolder = workspace:WaitForChild("Live")
 
 local function markEvasiveStart(model)
@@ -662,22 +692,11 @@ local function attachPlayer(plr)
         end
         return
     end
-    if LeaderboardSpy and (plr:FindFirstChild("Kills") or plr:FindFirstChild("Total Kills")) then
-        if plr:GetAttribute("S_HideKills")==true then reveal(plr) end
-        trackTKF(plr)
-        if plr:GetAttribute("S_HideKills")==true then hiddenKills[plr] = true end
-        addConn(plr:GetAttributeChangedSignal("S_HideKills"):Connect(function()
-            if plr:GetAttribute("S_HideKills") then
-                hiddenKills[plr] = true
-                reveal(plr)
-            else
-                hiddenKills[plr] = nil
-                clearReveal(plr)
-            end
-        end))
-    end
     addConn(plr.AncestryChanged:Connect(function(_,parent)
-        if not parent then lastTKF[plr] = nil end
+        if not parent then
+            lastTKF[plr] = nil
+            hiddenKills[plr] = nil
+        end
     end))
 end
 
@@ -710,9 +729,9 @@ local function startFollow()
         if movementConn then movementConn:Disconnect() movementConn = nil end
         if track then track:Stop() end
         animPlaying = false
-		if followToggle then
-			followToggle:SetValue(false, true)
-		end
+        if followToggle then
+            followToggle:SetValue(false, true)
+        end
         return
     end
     local best, minD = nil, math.huge
@@ -775,7 +794,6 @@ local function stopFollow()
     end
 end
 
--- Main Tab UI
 local toggles = {
     { Name = "Anti Death Counter",    Value = AntiDeathCounter },
     { Name = "DC Spy", Value = AntiDeathCounterSpy },
