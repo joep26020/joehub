@@ -210,7 +210,7 @@ local CRIMSON_HIGH = Color3.fromRGB(255,60,60)
 
 local GUI_WIDTH_PX        = 105
 local GUI_HEIGHT_PX       = 36
-local BASE_HEIGHT         = 2.4
+local BASE_HEIGHT         = 2.8
 local DEAD_ZONE           = 20
 local LIFT_PER_STUD       = 0.03
 local MAX_LIFT            = 200
@@ -255,7 +255,7 @@ local function newMagicBar(parentGui,label,yScale)
     return { root = frame, bar = bar, inner = inner, glow = glow }
 end
 
--- 1. Replace setFill entirely with this:
+
 local function setFill(t, alpha, colLow, colHigh, pulse)
     if t.bar then
         t.bar.Size = UDim2.new(1, 0, t.bar.Size.Y.Scale, t.bar.Size.Y.Offset)
@@ -263,7 +263,7 @@ local function setFill(t, alpha, colLow, colHigh, pulse)
     end
     local col = (pulse and lerp(colLow, colHigh, pulse)) or colLow
     if t.inner then
-        -- fill horizontally (X = alpha, Y stays full)
+
         t.inner.Size = UDim2.new(alpha, 0, 1, 0)
         t.inner.ImageColor3 = col
     end
@@ -804,7 +804,7 @@ local function stopFollow()
     end
 end
 
--- Main Tab UI
+
 local toggles = {
     { Name = "Anti Death Counter",    Value = AntiDeathCounter },
     { Name = "DC Spy", Value = AntiDeathCounterSpy },
