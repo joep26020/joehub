@@ -19,11 +19,11 @@ make the roasts personal.]]
 local ChatEnabled = true
 local ChatDistance = 80
 local MaxContextPerUser = 6
-local MinReplyDelay = 3
-local MaxReplyDelay = 4
+local MinReplyDelay = 4
+local MaxReplyDelay = 5
 local MaxRepliesPerWindow = 2
 local RateWindowSeconds = 15
-local MinGapBetweenReplies = 4
+local MinGapBetweenReplies = 6
 
 local ReplyTimestamps = {}
 local LastReplyTime = 0
