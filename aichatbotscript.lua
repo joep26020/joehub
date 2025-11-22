@@ -18,7 +18,7 @@ make the roasts personal.]]
 
 local ChatEnabled = true
 local ChatDistance = 80
-local MaxContextPerUser = 6
+local MaxContextPerUser = 25
 local MinReplyDelay = 4
 local MaxReplyDelay = 5
 local MaxRepliesPerWindow = 2
@@ -118,46 +118,78 @@ local function IsWhitelisted(plr)
     return effectiveListState(plr.Name) == "Whitelist"
 end
 
-local PerUserHistory = {}
+-- global ordered history: newest at the end
+-- each entry: {userId, name, display, isSelf, text, t}
 local GlobalHistory = {}
 local GlobalHistoryMax = 500
 
-local function addHistoryLine(plr, text)
-    if not plr or plr == LocalPlayer then return end
+local function addHistoryLine(plr, text, isSelf)
+    if not plr then return end
+
     local uname = plr.Name
-    local stamp = os.date("%X")
-    local name = plr.DisplayName or plr.Name
-    local line = string.format("[%s] %s: %s", stamp, name, text)
-    GlobalHistory[#GlobalHistory + 1] = line
+    local display = plr.DisplayName or uname
+    local uid = plr.UserId
+    local entry = {
+        userId  = uid,
+        name    = uname,
+        display = display,
+        isSelf  = isSelf and true or false,
+        text    = tostring(text or ""),
+        t       = os.time()
+    }
+
+    GlobalHistory[#GlobalHistory + 1] = entry
     if #GlobalHistory > GlobalHistoryMax then
         table.remove(GlobalHistory, 1)
     end
-    local bucket = PerUserHistory[uname]
-    if not bucket then
-        bucket = {}
-        PerUserHistory[uname] = bucket
-    end
-    bucket[#bucket + 1] = line
-    while #bucket > MaxContextPerUser do
-        table.remove(bucket, 1)
-    end
 end
 
-local function buildPromptFor(plr, latestMsg)
-    local bucket = PerUserHistory[plr.Name]
-    local ctx = ""
-    if bucket and #bucket > 0 then
-        ctx = table.concat(bucket, "\n") .. "\n"
+local function buildPromptFor(targetPlayer)
+    local targetName = targetPlayer.Name
+    local selfName = LocalPlayer.Name
+
+    -- collect last MaxContextPerUser entries involving either:
+    -- self or the target player; ignore everyone else
+    local ctxEntries = {}
+    for i = #GlobalHistory, 1, -1 do
+        local e = GlobalHistory[i]
+        if e.isSelf or e.name == targetName then
+            table.insert(ctxEntries, 1, e)
+            if #ctxEntries >= MaxContextPerUser then
+                break
+            end
+        end
     end
-    local prompt = INSTRUCTIONS
-        .. "\n\nconversation so far with this player:\n"
+
+    local ctx = ""
+    for _, e in ipairs(ctxEntries) do
+        local prefix
+        if e.isSelf then
+            prefix = "self(" .. selfName .. ")"
+        elseif e.name == targetName then
+            prefix = "player(" .. targetName .. ")"
+        else
+            -- should be filtered out already, but keep fallback
+            prefix = "other(" .. (e.name or "unknown") .. ")"
+        end
+        ctx = ctx .. prefix .. ": " .. e.text .. "\n"
+    end
+
+    local fullInstructions = INSTRUCTIONS
+        .. "\n\nyour in-game username is '" .. selfName .. "'."
+        .. "\nlines starting with 'self(" .. selfName .. ")' are your own past messages."
+        .. "\nlines starting with 'player(" .. targetName .. ")' are that specific enemy you're roasting."
+        .. "\nonly consider that player and yourself; ignore anyone else."
+
+    local prompt = fullInstructions
+        .. "\n\nrecent conversation context:\n"
         .. ctx
-        .. plr.Name .. ": " .. latestMsg
+
     return prompt
 end
 
-local function callGemini(plr, latestMsg)
-    local prompt = buildPromptFor(plr, latestMsg)
+local function callGemini(plr)
+    local prompt = buildPromptFor(plr)
     local body = {
         contents = {
             {
@@ -166,6 +198,7 @@ local function callGemini(plr, latestMsg)
             }
         }
     }
+
     notify("ChatBot", "thinking", 0.4)
     local ok, response = httpPostJson(GEMINI_URL, body)
     if not ok then
@@ -178,6 +211,7 @@ local function callGemini(plr, latestMsg)
         notify("ChatBot", "empty response", 1)
         return nil
     end
+
     local data
     ok, data = pcall(function()
         return HttpService:JSONDecode(response)
@@ -187,6 +221,7 @@ local function callGemini(plr, latestMsg)
         notify("ChatBot", "json error", 1)
         return nil
     end
+
     local text = ""
     local cand = data.candidates and data.candidates[1]
     if cand and cand.content and cand.content.parts and cand.content.parts[1] then
@@ -196,6 +231,7 @@ local function callGemini(plr, latestMsg)
         warn("[ChatBot] Gemini returned no text.")
         return nil
     end
+
     text = string.gsub(text, "[\n\r]+", " ")
     text = string.gsub(text, "^%s+", "")
     text = string.gsub(text, "%s+$", "")
@@ -258,7 +294,7 @@ local Window = Library:CreateWindow{
     MinSize = Vector2.new(200, 150),
     Acrylic = false,
     Theme = "Viow Mars",
-    MinimizeKey = Enum.KeyCode.Left
+    MinimizeKey = Enum.KeyCode.RightBracket
 }
 
 local Tabs = {
@@ -521,21 +557,21 @@ local function scheduleReplySend(reply)
     local now = os.clock()
     local gap = math.max(MinGapBetweenReplies, 3)
     local sinceLast = now - LastReplyTime
+
+    local function doSend()
+        if not ChatEnabled then return end
+        if not canSendReply() then return end
+        LastReplyTime = os.clock()
+        notify("ChatBot", "reply sent", 0.4)
+        chatMessage(reply)
+    end
+
     if sinceLast < gap then
         local extra = gap - sinceLast
-        task.delay(extra, function()
-            if not ChatEnabled then return end
-            if not canSendReply() then return end
-            LastReplyTime = os.clock()
-            notify("ChatBot", "reply sent", 0.4)
-            chatMessage(reply)
-        end)
-        return
+        task.delay(extra, doSend)
+    else
+        doSend()
     end
-    if not canSendReply() then return end
-    LastReplyTime = now
-    notify("ChatBot", "reply sent", 0.4)
-    chatMessage(reply)
 end
 
 local function handleIncomingMessage(plr, text)
@@ -543,28 +579,39 @@ local function handleIncomingMessage(plr, text)
     if not plr or plr == LocalPlayer then return end
     if not IsWhitelisted(plr) then return end
     if not messageWithinDistance(plr) then return end
-    addHistoryLine(plr, text)
+
+    addHistoryLine(plr, text, false)
     notify("ChatBot", "msg from "..plr.Name, 0.4)
-    local reply = callGemini(plr, text)
+
+    local reply = callGemini(plr)
     if not reply or reply == "" then return end
+
     local minD = math.max(MinReplyDelay, 5)
     local maxD = math.max(MaxReplyDelay, minD)
     local delay = minD
     if maxD > minD then
         delay = minD + math.random() * (maxD - minD)
     end
+
     task.delay(delay, function()
         scheduleReplySend(reply)
     end)
 end
 
+-- log SELF messages too (legacy chat)
 if isLegacyChat then
+    LocalPlayer.Chatted:Connect(function(msg)
+        addHistoryLine(LocalPlayer, msg, true)
+    end)
+
     local function hook(plr)
         if not plr or plr == LocalPlayer then return end
         plr.Chatted:Connect(function(msg)
+            addHistoryLine(plr, msg, false)
             handleIncomingMessage(plr, msg)
         end)
     end
+
     for _,p in ipairs(Players:GetPlayers()) do
         hook(p)
     end
@@ -573,11 +620,17 @@ else
     TextChatService.MessageReceived:Connect(function(msg)
         local src = msg.TextSource
         if not src then return end
-        if src.UserId == LocalPlayer.UserId then return end
         local plr = Players:GetPlayerByUserId(src.UserId)
         if not plr then return end
+
+        if plr == LocalPlayer then
+            addHistoryLine(LocalPlayer, msg.Text, true)
+            return
+        end
+
+        addHistoryLine(plr, msg.Text, false)
         handleIncomingMessage(plr, msg.Text)
     end)
 end
 
-print("[ChatBot] Gemini ChatBot loaded.")
+print("[ChatBot] Gemini ChatBot loaded with global self+player context.")
