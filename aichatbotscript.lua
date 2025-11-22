@@ -6,7 +6,7 @@ local StarterGui = game:GetService("StarterGui")
 
 local LocalPlayer = Players.LocalPlayer
 
-local GEMINI_API_KEY = "key"
+local GEMINI_API_KEY = "AIzaSyD4pYya06ApT3zKoW6-Di56CHh4OGw9Yd8"
 local GEMINI_MODEL = "gemini-2.5-flash"
 local GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/" .. GEMINI_MODEL .. ":generateContent?key=" .. GEMINI_API_KEY
 
@@ -253,7 +253,7 @@ local Window = Library:CreateWindow{
     Title = "Gemini ChatBot",
     SubTitle = "client-side key",
     TabWidth = 100,
-    Size = UDim2.fromOffset(700, 420),
+    Size = UDim2.fromOffset(700, 500),
     Resize = true,
     MinSize = Vector2.new(200, 150),
     Acrylic = false,
