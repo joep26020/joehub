@@ -6029,8 +6029,6 @@ print("[Orb Invis/Anim script loaded]")
 
 
 
-
-
 Players          = game:GetService("Players")
 RunService       = game:GetService("RunService")
 Workspace        = game:GetService("Workspace")
@@ -6316,6 +6314,7 @@ function enableAnimLockLoop(character, animator)
 end
 
 local overrideConnection
+local SkidFlingEndTimes = {}
 
 local function setFlingCamera(targetChar)
     if not targetChar then
@@ -6398,6 +6397,7 @@ function SkidFling(TargetPlayer, bypassWhitelist, durationOverride)
         if not TCharacter:FindFirstChildWhichIsA("BasePart") then return end
 
         local maxDuration = durationOverride or flingDuration
+        local baseEndTime = tick() + maxDuration
 
         local function FPos(bp, pos, ang)
             RootPart.CFrame         = CFrame.new(bp.Position) * pos * ang
@@ -6407,7 +6407,6 @@ function SkidFling(TargetPlayer, bypassWhitelist, durationOverride)
         end
 
         local function SFBasePart(bp)
-            local start   = tick()
             local angle   = 0
             repeat
                 if not (RootPart and Humanoid and Humanoid.Health > 0 and THumanoid and THumanoid.Health > 0) then break end
@@ -6447,7 +6446,7 @@ function SkidFling(TargetPlayer, bypassWhitelist, durationOverride)
                   or bp.Parent ~= TCharacter
                   or (THumanoid and THumanoid.Sit)
                   or Humanoid.Health <= 0
-                  or tick() > start + maxDuration
+                  or tick() > (SkidFlingEndTimes[TargetPlayer] or baseEndTime)
         end
 
         pcall(function() workspace.FallenPartsDestroyHeight = 0/0 end)
@@ -6585,6 +6584,7 @@ local LastHitFlingEnabled = false
 local lastHitAttrConn
 local lastHitHealthConn
 local lastHitCharConn
+local lastHitFlingActive = {}
 
 local function handleLastHitChange(char)
     if not LastHitFlingEnabled or not char then return end
@@ -6598,7 +6598,15 @@ local function handleLastHitChange(char)
             end
         end
         if target then
-            SkidFling(target,false,lastHitFlingDuration)
+            SkidFlingEndTimes[target] = tick() + lastHitFlingDuration
+            if not lastHitFlingActive[target] then
+                lastHitFlingActive[target] = true
+                task.spawn(function()
+                    SkidFling(target,false,lastHitFlingDuration)
+                    lastHitFlingActive[target] = nil
+                    SkidFlingEndTimes[target] = nil
+                end)
+            end
         end
     end
 end
