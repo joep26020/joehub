@@ -6,19 +6,19 @@ local StarterGui = game:GetService("StarterGui")
 
 local LocalPlayer = Players.LocalPlayer
 
-local GEMINI_API_KEY = "key"
-local GEMINI_MODEL = "gemini-2.5-flash"
+local GEMINI_API_KEY = "KEY"
+local GEMINI_MODEL = "gemini-2.0-flash"
 local GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/" .. GEMINI_MODEL .. ":generateContent?key=" .. GEMINI_API_KEY
 
 local INSTRUCTIONS = [[you are a trash-talker/rage-baiter.
 you roast people but never use slurs, gore, or nsfw.
 no emojis, no hashtags, no commas, no quotes.
 keep replies under 15 words, one short sentence, lowercase, no period, not corny.
-make the roasts personal.]]
+make the roasts personal, and don't repeat names in responses (such as self name and other name's) especially do not repeat self name: do not do this: (selfname): (message). just respond as the response]]
 
 local ChatEnabled = true
 local ChatDistance = 0
-local MaxContextPerUser = 5
+local MaxContextPerUser = 20
 local MinReplyDelay = 4
 local MaxReplyDelay = 5
 local MaxRepliesPerWindow = 2
