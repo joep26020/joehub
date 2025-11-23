@@ -6025,6 +6025,12 @@ player.CharacterAdded:Connect(onCharacterAdded)
 print("[Orb Invis/Anim script loaded]")
 
 
+
+
+
+
+
+
 Players          = game:GetService("Players")
 RunService       = game:GetService("RunService")
 Workspace        = game:GetService("Workspace")
@@ -6189,9 +6195,9 @@ Tabs.Main:CreateToggle("EnableCameraRigRemoval",{Title="Enable NOCUTSCENE",Defau
 for mode,store in pairs({UltOff="charactersWithCameraRigRemoval_UltOff", UltOn="charactersWithCameraRigRemoval_UltOn"}) do
     Tabs.Main:CreateDropdown("CameraRigRemoval_"..mode,{
         Title       = "CameraRig Removal – Ultimate "..(mode=="UltOff" and "OFF" or "ON"),
-        Values      = {"Suiryu","Genos","Garou","Saitama","Tatsumaki","Sonic","Atomic","MetalBat","KJ","ChildEmperor"},
+        Values      = {"Suiryu","Genos","Garou","Saitama","Tatsumaki","Sonic","Atomic","MetalBat","KJ","ChildEmperor","Monster"},
         Multi       = true,
-        Default     = {Suiryu=true,Genos=true,Garou=true,Saitama=true,Tatsumaki=true,Sonic=true,Atomic=true,MetalBat=true,KJ=true,ChildEmperor=true},
+        Default     = {Suiryu=true,Genos=true,Garou=true,Saitama=true,Tatsumaki=true,Sonic=true,Atomic=true,MetalBat=true,KJ=true,ChildEmperor=true,Monster=true},
         Callback    = function(tbl)
             _G[store]={}
             for disp,sel in pairs(tbl) do if sel then local attr=displayNameToAttribute[disp]; if attr then _G[store][attr]=true end end end
@@ -6204,9 +6210,9 @@ Tabs.Main:CreateToggle("EnableAlwaysRotate",{Title="Enable ALWAYS ROTATE",Defaul
 for mode,store in pairs({UltOff="charactersWithAlwaysRotate_UltOff", UltOn="charactersWithAlwaysRotate_UltOn"}) do
     Tabs.Main:CreateDropdown("AlwaysRotate_"..mode,{
         Title       = "AlwaysRotate – Ultimate "..(mode=="UltOff" and "OFF" or "ON"),
-        Values      = {"Suiryu","Genos","Garou","Saitama","Tatsumaki","Sonic","Atomic","MetalBat","KJ","ChildEmperor"},
+        Values      = {"Suiryu","Genos","Garou","Saitama","Tatsumaki","Sonic","Atomic","MetalBat","KJ","ChildEmperor","Monster"},
         Multi       = true,
-        Default     = {Suiryu=true,Genos=true,Garou=true,Saitama=true,Tatsumaki=true,Sonic=true,Atomic=true,MetalBat=true,KJ=true,ChildEmperor=true},
+        Default     = {Suiryu=true,Genos=true,Garou=true,Saitama=true,Tatsumaki=true,Sonic=true,Atomic=true,MetalBat=true,KJ=true,ChildEmperor=true,Monster=true},
         Callback    = function(tbl)
             _G[store]={}
             for disp,sel in pairs(tbl) do if sel then local attr=displayNameToAttribute[disp]; if attr then _G[store][attr]=true end end end
@@ -6289,8 +6295,13 @@ Players.PlayerRemoving:Connect(function() refreshLists() end)
 refreshLists()
 
 flingDuration = 2
-SkidTab:CreateSlider("FlingDur",{Title="Fling Duration",Min=1,Max=10,Default=2,Rounding=1,
-    Callback=function(v) flingDuration=v end})
+SkidTab:CreateInput("FlingDurInput",{
+    Title="Fling Duration (sec)",Placeholder="2",Numeric=true,Finished=true,
+    Callback=function(v)
+        local n = tonumber(v)
+        if n then flingDuration = n end
+    end
+})
 
 stopAnimationsConnection, heartbeatConnection = nil,nil
 function disableAnimLockLoop()
@@ -6346,7 +6357,7 @@ local function setFlingCamera(targetChar)
     end)
 end
 
-function SkidFling(TargetPlayer, bypassWhitelist)
+function SkidFling(TargetPlayer, bypassWhitelist, durationOverride)
     if (not TargetPlayer)
        or TargetPlayer == player
        or (not bypassWhitelist and IsWhitelisted(TargetPlayer))
@@ -6380,12 +6391,13 @@ function SkidFling(TargetPlayer, bypassWhitelist)
 
         if THumanoid and THumanoid.Sit and not AllBool then return end
 
-    if game.GameId == 10449761463 then
-        setFlingCamera(TCharacter)
-    end
-
+        if game.GameId == 10449761463 then
+            setFlingCamera(TCharacter)
+        end
 
         if not TCharacter:FindFirstChildWhichIsA("BasePart") then return end
+
+        local maxDuration = durationOverride or flingDuration
 
         local function FPos(bp, pos, ang)
             RootPart.CFrame         = CFrame.new(bp.Position) * pos * ang
@@ -6435,7 +6447,7 @@ function SkidFling(TargetPlayer, bypassWhitelist)
                   or bp.Parent ~= TCharacter
                   or (THumanoid and THumanoid.Sit)
                   or Humanoid.Health <= 0
-                  or tick() > start + flingDuration
+                  or tick() > start + maxDuration
         end
 
         pcall(function() workspace.FallenPartsDestroyHeight = 0/0 end)
@@ -6568,8 +6580,10 @@ local function getAttrInsensitive(inst, attrName)
     return inst:GetAttribute(attrName)
 end
 
+lastHitFlingDuration = 5
 local LastHitFlingEnabled = false
-local lastHitConn
+local lastHitAttrConn
+local lastHitHealthConn
 local lastHitCharConn
 
 local function handleLastHitChange(char)
@@ -6584,20 +6598,30 @@ local function handleLastHitChange(char)
             end
         end
         if target then
-            SkidFling(target)
+            SkidFling(target,false,lastHitFlingDuration)
         end
     end
 end
 
 local function attachLastHitListenerToChar(char)
-    if lastHitConn then
-        lastHitConn:Disconnect()
-        lastHitConn = nil
+    if lastHitAttrConn then
+        lastHitAttrConn:Disconnect()
+        lastHitAttrConn = nil
+    end
+    if lastHitHealthConn then
+        lastHitHealthConn:Disconnect()
+        lastHitHealthConn = nil
     end
     if not char then return end
-    lastHitConn = char:GetAttributeChangedSignal("LastHit"):Connect(function()
+    lastHitAttrConn = char:GetAttributeChangedSignal("LastHit"):Connect(function()
         handleLastHitChange(char)
     end)
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if hum then
+        lastHitHealthConn = hum.HealthChanged:Connect(function()
+            handleLastHitChange(char)
+        end)
+    end
 end
 
 local function updateLastHitFling()
@@ -6606,9 +6630,13 @@ local function updateLastHitFling()
         lastHitCharConn = nil
     end
     if not LastHitFlingEnabled then
-        if lastHitConn then
-            lastHitConn:Disconnect()
-            lastHitConn = nil
+        if lastHitAttrConn then
+            lastHitAttrConn:Disconnect()
+            lastHitAttrConn = nil
+        end
+        if lastHitHealthConn then
+            lastHitHealthConn:Disconnect()
+            lastHitHealthConn = nil
         end
         return
     end
@@ -6626,6 +6654,14 @@ SkidTab:CreateToggle("LastHitFlingToggle", {
     Callback = function(on)
         LastHitFlingEnabled = on
         updateLastHitFling()
+    end
+})
+
+SkidTab:CreateInput("LastHitFlingDurInput",{
+    Title="Last Hit Fling Duration (sec)",Placeholder="5",Numeric=true,Finished=true,
+    Callback=function(v)
+        local n = tonumber(v)
+        if n then lastHitFlingDuration = n end
     end
 })
 
