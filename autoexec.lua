@@ -6025,41 +6025,18 @@ player.CharacterAdded:Connect(onCharacterAdded)
 print("[Orb Invis/Anim script loaded]")
 
 
-
-
-
-
-
---#################################################################################################
---  TSBnocutscene + Fling SUITE – FULL, NO OMISSIONS – Rev 2025‑05‑02
---#################################################################################################
---  * Click‑Fling (2‑D screen targeting) bypasses WL/BL.  Red/Green status indicator.
---  * “Move ALL → Whitelist / Blacklist” buttons.
---  * Spoof‑Velocity tab (heartbeat BodyVelocity, HRP‑oriented, X Y Z inputs).
---  * Individual‑radius dropdown shows DISPLAY names.
---  * SkidFling mirrors your physics; aims at HumanoidRootPart.
---  * No neighbour‑scanning when Click‑Fling is OFF, preventing lag.
---  * Every helper, toggle, dropdown, slider, key‑bind, save‑manager, etc.,
---    from your prior script IS PRESENT – nothing omitted, nothing renamed.
---#################################################################################################
-
---████  SERVICES / GLOBALS
 Players          = game:GetService("Players")
 RunService       = game:GetService("RunService")
 Workspace        = game:GetService("Workspace")
 UserInputService = game:GetService("UserInputService")
 
 player           = Players.LocalPlayer
-AllBool          = false                               -- (used by fling‑all logic)
+AllBool          = false
 
---████  TINY UTILITY STUBS (referenced later, so we define no‑ops)
 function logFunctionExecution(name, duration) end
 function stopUnwantedAnimations(animator) end
 function playAnimation(animator) end
 
---==================================================================================================
--- 1)  PLAYER‑FINDING (UNCHANGED – now fully shown)
---==================================================================================================
 function GetPlayer(Name)
     Name = (Name or ""):lower()
     if Name == "all" or Name == "others" then
@@ -6080,9 +6057,6 @@ function GetPlayer(Name)
     end
 end
 
---==================================================================================================
--- 2)  CAMERA / CUTSCENE / ALWAYS‑ROTATE – FULL IMPLEMENTATION
---==================================================================================================
 desiredFOV                    = 70
 UltMode                       = false
 RemoveCameraRigEnabled        = false
@@ -6101,12 +6075,10 @@ Characters = {
 }
 displayNameToAttribute = {} for attr,info in pairs(Characters) do displayNameToAttribute[info.Name]=attr end
 
---── FOV
 function UpdateFOV()
     if Workspace.CurrentCamera then Workspace.CurrentCamera.FieldOfView = desiredFOV end
 end
 
---── CUT‑SCENE REMOVAL
 cameraRigConnection = nil
 function removeCameraRigsFromFolder(folder)
     for _,obj in ipairs(folder:GetDescendants()) do
@@ -6131,7 +6103,6 @@ end
 function cleanupCameraRigListener() if cameraRigConnection then cameraRigConnection:Disconnect();cameraRigConnection=nil end end
 function monitorRemoveCameraRigToggle() if RemoveCameraRigEnabled then setupCameraRigListener() else cleanupCameraRigListener() end end
 
---── ALWAYS ROTATE (simple impl: forces Humanoid.AutoRotate = true every heartbeat when enabled)
 shouldAlwaysRotate = false
 function applyAlwaysRotate()
     if not AlwaysRotateEnabled then return end
@@ -6140,10 +6111,8 @@ function applyAlwaysRotate()
     if hum then hum.AutoRotate = true end
 end
 
---── AGGREGATED APPLY
 function applySettings() UpdateFOV(); applyAlwaysRotate() end
 
---── PLAYER FOLDER MONITOR (restarts listeners on respawn)
 function monitorPlayerFolder()
     local function onLiveChildAdded(child)
         if child.Name == player.Name then
@@ -6157,7 +6126,6 @@ function monitorPlayerFolder()
 end
 monitorPlayerFolder()
 
---── ULT ATTRIBUTE MONITOR
 function monitorUltedAttribute()
     task.spawn(function()
         local live = Workspace:WaitForChild("Live",1)
@@ -6178,9 +6146,6 @@ local function selected(drop)
     return drop.GetValue and drop:GetValue() or drop.Value or {}
 end
 
---==================================================================================================
--- 3)  FLUENT UI – window, MAIN tab, sliders, toggles, etc. (EVERY LINE SHOWN)
---==================================================================================================
 Library = loadstring(game:HttpGetAsync(
     "https://github.com/ActualMasterOogway/Fluent-Renewed/releases/latest/download/Fluent.luau"
 ))()
@@ -6200,9 +6165,6 @@ Window = Library:CreateWindow{
     Theme="GitHub Dark Default",
 }
 
-
-
-
 Tabs = {
     Main     = Window:CreateTab{Title="Main",     Icon="circle-user-round"},
     Settings = Window:CreateTab{Title="Settings", Icon="settings"},
@@ -6212,23 +6174,18 @@ ListTab   = Window:CreateTab{Title="Player Lists", Icon="users"}
 SkidTab   = Window:CreateTab{Title="Skid", Icon="triangle-alert"}
 SpoofTab  = Window:CreateTab{Title="Spoof Velocity", Icon="send-horizontal"}
 
---── FOV SLIDER
 Tabs.Main:CreateSlider("FOVSlider",{Title="Field of View",Default=desiredFOV,Min=0,Max=120,Rounding=1,
     Callback=function(v) desiredFOV=v; UpdateFOV() end})
 
---── MANUAL FOV
 Tabs.Main:CreateInput("ManualFOV",{Title="Manual FOV Override",Placeholder="90",Numeric=true,Finished=true,
     Callback=function(v) local n=tonumber(v); if n then desiredFOV=n; UpdateFOV(); Library.Options["FOVSlider"]:SetValue(n) end end})
 
---── RESET
 Tabs.Main:CreateButton{Title="Reset FOV",Description="Back to 70",
     Callback=function() desiredFOV=70; UpdateFOV(); Library.Options["FOVSlider"]:SetValue(70) end}
 
---── CUT‑SCENE TOGGLE
 Tabs.Main:CreateToggle("EnableCameraRigRemoval",{Title="Enable NOCUTSCENE",Default=false,
     Callback=function(e) RemoveCameraRigEnabled=e; monitorRemoveCameraRigToggle() end})
 
---── CAMERA RIG REMOVAL DROPDOWNS (ULT OFF / ON)
 for mode,store in pairs({UltOff="charactersWithCameraRigRemoval_UltOff", UltOn="charactersWithCameraRigRemoval_UltOn"}) do
     Tabs.Main:CreateDropdown("CameraRigRemoval_"..mode,{
         Title       = "CameraRig Removal – Ultimate "..(mode=="UltOff" and "OFF" or "ON"),
@@ -6242,7 +6199,6 @@ for mode,store in pairs({UltOff="charactersWithCameraRigRemoval_UltOff", UltOn="
     })
 end
 
---── ALWAYS ROTATE
 Tabs.Main:CreateToggle("EnableAlwaysRotate",{Title="Enable ALWAYS ROTATE",Default=false,
     Callback=function(e) AlwaysRotateEnabled=e; applyAlwaysRotate() end})
 for mode,store in pairs({UltOff="charactersWithAlwaysRotate_UltOff", UltOn="charactersWithAlwaysRotate_UltOn"}) do
@@ -6258,9 +6214,6 @@ for mode,store in pairs({UltOff="charactersWithAlwaysRotate_UltOff", UltOn="char
     })
 end
 
---==================================================================================================
--- 3‑B)  CLICK‑FLING STATUS GUI (indicator) – as before
---==================================================================================================
 clickFlingStatusGui = Instance.new("ScreenGui", player:WaitForChild("PlayerGui"))
 clickFlingStatusGui.Name, clickFlingStatusGui.ResetOnSpawn = "ClickFlingStatus", false
 statusFrame = Instance.new("Frame", clickFlingStatusGui)
@@ -6276,10 +6229,6 @@ function updateClickFlingIndicator(on)
     statusFrame.BackgroundColor3 = on and Color3.fromRGB(0,200,0) or Color3.fromRGB(200,0,0)
     statusLabel.Text             = on and "ON" or "OFF"
 end
-
---==================================================================================================
--- 4)  WL / BL TAB (FULL, INCLUDING MOVE ALL)
---==================================================================================================
 
 ListState, newPlayersDefault, playerDisplayToUsername = {}, "Blacklist", {}
 WhitelistDD, BlacklistDD = nil, nil
@@ -6309,11 +6258,11 @@ BlacklistDD = ListTab:CreateDropdown("BL",{Title="Blacklist",Values={},Multi=tru
 ListTab:CreateButton{
     Title      = "Move Selected → WL",
     Callback   = function()
-        for disp,_ in pairs(selected(BlacklistDD)) do           -- <-- use helper
+        for disp,_ in pairs(selected(BlacklistDD)) do
             local uname = playerDisplayToUsername[disp]
             if uname then ListState[uname] = "Whitelist" end
         end
-        BlacklistDD:SetValue({})  -- clear selection
+        BlacklistDD:SetValue({})
         refreshLists()
     end
 }
@@ -6339,15 +6288,10 @@ Players.PlayerAdded:Connect(function() task.wait(1); refreshLists() end)
 Players.PlayerRemoving:Connect(function() refreshLists() end)
 refreshLists()
 
---==================================================================================================
--- 5)  SKID TAB (FLING, RADIUS, CLICK‑FLING, INDIVIDUAL DISTANCES)
---==================================================================================================
-
 flingDuration = 2
 SkidTab:CreateSlider("FlingDur",{Title="Fling Duration",Min=1,Max=10,Default=2,Rounding=1,
     Callback=function(v) flingDuration=v end})
 
---── ANIMATION LOOP DISABLE / ENABLE STUBS (from your original)
 stopAnimationsConnection, heartbeatConnection = nil,nil
 function disableAnimLockLoop()
     if stopAnimationsConnection then stopAnimationsConnection:Disconnect(); stopAnimationsConnection=nil end
@@ -6359,9 +6303,6 @@ function enableAnimLockLoop(character, animator)
         if not animTrack or not animTrack.IsPlaying then playAnimation(animator) end
     end)
 end
-
---── SKIDFLING (same as previous full listing – retains physics)
---     Parameter “bypassWhitelist” → true when click‑fling
 
 local overrideConnection
 
@@ -6406,7 +6347,6 @@ local function setFlingCamera(targetChar)
 end
 
 function SkidFling(TargetPlayer, bypassWhitelist)
-    -- ignore self, nil, or WL’ed player (unless bypass requested)
     if (not TargetPlayer)
        or TargetPlayer == player
        or (not bypassWhitelist and IsWhitelisted(TargetPlayer))
@@ -6434,12 +6374,10 @@ function SkidFling(TargetPlayer, bypassWhitelist)
     end
 
     if Character and Humanoid and RootPart and TCharacter then
-        -- save original position if we’re fairly still
         if RootPart.Velocity.Magnitude < 50 then
             getgenv().OldPos = RootPart.CFrame
         end
 
-        -- skip seated targets unless fling‑all override
         if THumanoid and THumanoid.Sit and not AllBool then return end
 
     if game.GameId == 10449761463 then
@@ -6449,8 +6387,6 @@ function SkidFling(TargetPlayer, bypassWhitelist)
 
         if not TCharacter:FindFirstChildWhichIsA("BasePart") then return end
 
-        ------------------------------------------------------------
-        -- helper to reposition our root aggressively
         local function FPos(bp, pos, ang)
             RootPart.CFrame         = CFrame.new(bp.Position) * pos * ang
             Character:SetPrimaryPartCFrame(RootPart.CFrame)
@@ -6458,7 +6394,6 @@ function SkidFling(TargetPlayer, bypassWhitelist)
             RootPart.RotVelocity    = Vector3.new(9e8, 9e8, 9e8)
         end
 
-        ------------------------------------------------------------
         local function SFBasePart(bp)
             local start   = tick()
             local angle   = 0
@@ -6466,7 +6401,6 @@ function SkidFling(TargetPlayer, bypassWhitelist)
                 if not (RootPart and Humanoid and Humanoid.Health > 0 and THumanoid and THumanoid.Health > 0) then break end
 
                 if bp.Velocity.Magnitude < 50 then
-                    -- spin pattern
                     angle += 100
                     FPos(bp, CFrame.new(0, 1.5, 0)     + THumanoid.MoveDirection * bp.Velocity.Magnitude/1.25,
                             CFrame.Angles(math.rad(angle),0,0)); task.wait()
@@ -6481,7 +6415,6 @@ function SkidFling(TargetPlayer, bypassWhitelist)
                     FPos(bp, CFrame.new(0,-1.5, 0)     + THumanoid.MoveDirection,
                             CFrame.Angles(math.rad(angle),0,0)); task.wait()
                 else
-                    -- straight pattern
                     FPos(bp, CFrame.new(0, 1.5, THumanoid.WalkSpeed), CFrame.Angles(math.rad(90),0,0)); task.wait()
                     FPos(bp, CFrame.new(0,-1.5,-THumanoid.WalkSpeed), CFrame.Angles(0,0,0));            task.wait()
                     FPos(bp, CFrame.new(0, 1.5, THumanoid.WalkSpeed), CFrame.Angles(math.rad(90),0,0)); task.wait()
@@ -6505,18 +6438,16 @@ function SkidFling(TargetPlayer, bypassWhitelist)
                   or tick() > start + flingDuration
         end
 
-        ----------------------------------------------------------------
         pcall(function() workspace.FallenPartsDestroyHeight = 0/0 end)
         getgenv().FPDH = workspace.FallenPartsDestroyHeight
 
         local BV = Instance.new("BodyVelocity", RootPart)
         BV.Name      = "EpixVel"
         BV.Velocity  = Vector3.new(9e8, 9e8, 9e8)
-        BV.MaxForce  = Vector3.new(1/0, 1/0, 1/0)   -- truly infinite
+        BV.MaxForce  = Vector3.new(1/0, 1/0, 1/0)
 
         Humanoid:SetStateEnabled(Enum.HumanoidStateType.Seated, false)
 
-        -- choose which part to fling against
         if TRootPart and THead then
             if (TRootPart.Position - THead.Position).Magnitude > 5 then
                 SFBasePart(THead)
@@ -6541,7 +6472,6 @@ function SkidFling(TargetPlayer, bypassWhitelist)
 	        overrideConnection = nil
 	    end
 
-        -- bring us back home
         repeat
             RootPart.CFrame = getgenv().OldPos * CFrame.new(0,0.5,0)
             Character:SetPrimaryPartCFrame(RootPart.CFrame)
@@ -6562,7 +6492,6 @@ function SkidFling(TargetPlayer, bypassWhitelist)
     isSkidFlinging = false
 end
 
---── CLICK‑FLING
 clickFlingEnabled, mouseConnection = false, nil
 clickFlingSoundOn  = Instance.new("Sound",player) clickFlingSoundOn.SoundId="rbxassetid://7153189899" clickFlingSoundOn.Volume=2
 clickFlingSoundOff = Instance.new("Sound",player) clickFlingSoundOff.SoundId="rbxassetid://489109520" clickFlingSoundOff.Volume=4
@@ -6599,8 +6528,6 @@ function toggleClickFling(state)
     else        clickFlingSoundOff:Play(); stopClickFling() end
 end
 
-
-
 SkidTab:CreateToggle("ClickFlingToggle", {
     Title   = "Enable Click Fling (Closest to Mouse)",
     Default = false,
@@ -6609,7 +6536,6 @@ SkidTab:CreateToggle("ClickFlingToggle", {
         print("ClickFlingToggle =>", enabled)
     end
 })
-
 
 function ToggleUI()
     local guiObject = Window.GUI
@@ -6631,16 +6557,86 @@ SkidTab:CreateKeybind("ClickFlingKeybind", {
     end
 })
 
---── FLING-ALL + RADIUS  (patched)
+local function getAttrInsensitive(inst, attrName)
+    if not inst or not attrName then return nil end
+    local attrs = inst:GetAttributes()
+    for k,v in pairs(attrs) do
+        if string.lower(k) == string.lower(attrName) then
+            return v
+        end
+    end
+    return inst:GetAttribute(attrName)
+end
+
+local LastHitFlingEnabled = false
+local lastHitConn
+local lastHitCharConn
+
+local function handleLastHitChange(char)
+    if not LastHitFlingEnabled or not char then return end
+    local lastHit = getAttrInsensitive(char, "LastHit")
+    if typeof(lastHit) == "string" and lastHit ~= "" then
+        local target
+        for _,p in ipairs(Players:GetPlayers()) do
+            if p.Name == lastHit or p.DisplayName == lastHit then
+                target = p
+                break
+            end
+        end
+        if target then
+            SkidFling(target)
+        end
+    end
+end
+
+local function attachLastHitListenerToChar(char)
+    if lastHitConn then
+        lastHitConn:Disconnect()
+        lastHitConn = nil
+    end
+    if not char then return end
+    lastHitConn = char:GetAttributeChangedSignal("LastHit"):Connect(function()
+        handleLastHitChange(char)
+    end)
+end
+
+local function updateLastHitFling()
+    if lastHitCharConn then
+        lastHitCharConn:Disconnect()
+        lastHitCharConn = nil
+    end
+    if not LastHitFlingEnabled then
+        if lastHitConn then
+            lastHitConn:Disconnect()
+            lastHitConn = nil
+        end
+        return
+    end
+    if player.Character then
+        attachLastHitListenerToChar(player.Character)
+    end
+    lastHitCharConn = player.CharacterAdded:Connect(function(char)
+        attachLastHitListenerToChar(char)
+    end)
+end
+
+SkidTab:CreateToggle("LastHitFlingToggle", {
+    Title   = "Last Hit Fling",
+    Default = false,
+    Callback = function(on)
+        LastHitFlingEnabled = on
+        updateLastHitFling()
+    end
+})
+
 FlingAllEnabled, RadiusFlingEnabled = false, false
 FlingRadius,   FlingLoopDelay      = 25, 2
 flingAllRunning, radiusFlingRunning = false, false
 
--- never override WL/BL when flinging-all
 local function SkidFlingAll()
     AllBool = false
     for _,p in ipairs(Players:GetPlayers()) do
-        SkidFling(p)              -- normal whitelist check
+        SkidFling(p)
     end
 end
 
@@ -6664,7 +6660,6 @@ SkidTab:CreateToggle("FlingAllToggle",{
     end
 })
 
---── INDIVIDUAL DISTANCES
 local individualDistances, displayToUser = {}, {}
 
 local function rebuildIndividualPlayerList()
@@ -6679,9 +6674,9 @@ local function rebuildIndividualPlayerList()
     if distanceDropdown then distanceDropdown:SetValues(list) end
 end
 
-local function pick(drop)          -- safe getter (works old/new Fluent)
+local function pick(drop)
     local v = drop.GetValue and drop:GetValue() or drop.Value
-    if typeof(v) == "table" then      -- Multi table?
+    if typeof(v) == "table" then
         for k,sel in pairs(v) do if sel then return k end end
         return nil
     end
@@ -6694,7 +6689,7 @@ distanceDropdown = SkidTab:CreateDropdown("IndivDistDrop",{
 distanceInput = SkidTab:CreateInput("IndivDistInput",{
     Title="Distance (studs)",Placeholder="150",Numeric=true,Finished=true,
     Callback=function(v)
-        local name = pick(distanceDropdown)          -- display name
+        local name = pick(distanceDropdown)
         local num  = tonumber(v)
         if name and num then
             local uname = displayToUser[name] or name
@@ -6707,7 +6702,6 @@ rebuildIndividualPlayerList()
 Players.PlayerAdded:Connect(function() task.delay(1, rebuildIndividualPlayerList) end)
 Players.PlayerRemoving:Connect(rebuildIndividualPlayerList)
 
---── RADIUS-FLING  (respects per-player distances)
 local function startRadiusFlingLoop()
     if radiusFlingRunning then return end
     radiusFlingRunning = true
@@ -6745,16 +6739,10 @@ SkidTab:CreateInput("FlingRadiusInput",{
     Callback=function(v) local n=tonumber(v) if n then FlingRadius=n end end
 })
 
-
---==================================================================================================
--- 6)  SPOOF VELOCITY TAB
---==================================================================================================
-
 SpoofVelEnabled, SpoofVelX, SpoofVelY, SpoofVelZ = false,0,0,0
 local spoofLoopThread
 
 local function startSpoofLoop()
-    -- restart if previous coroutine is finished
     if spoofLoopThread and coroutine.status(spoofLoopThread) ~= "dead" then return end
 
     spoofLoopThread = coroutine.create(function()
@@ -6766,7 +6754,6 @@ local function startSpoofLoop()
             if Root then
                 local vel = Root.Velocity
 
-                -- phase ①  big kick
                 Root.Velocity = Vector3.new(
                     vel.X * (SpoofVelX ~= 0 and SpoofVelX or 1),
                     vel.Y * (SpoofVelY ~= 0 and SpoofVelY or 1),
@@ -6775,12 +6762,10 @@ local function startSpoofLoop()
 
                 RunService.RenderStepped:Wait()
 
-                -- phase ②  restore
                 Root.Velocity = vel
 
                 RunService.Stepped:Wait()
 
-                -- phase ③  micro‑nudge
                 Root.Velocity = vel + Vector3.new(0, 0.1, 0)
             end
         end
@@ -6796,11 +6781,9 @@ SpoofTab:CreateToggle("SpoofVelToggle",{
         if on then
             startSpoofLoop()
         end
-        -- when turned OFF, while‑loop condition fails and coroutine ends
     end
 })
 
--- ── X / Y / Z input boxes (unchanged)
 local function addAxisInput(axis)
     SpoofTab:CreateInput("SpoofVel"..axis,{
         Title=axis.." Velocity",Placeholder="0",Numeric=true,Finished=true,
@@ -6812,10 +6795,6 @@ local function addAxisInput(axis)
 end
 addAxisInput("X") ; addAxisInput("Y") ; addAxisInput("Z")
 
-
---==================================================================================================
--- 7)  SAVE / LOAD
---==================================================================================================
 InterfaceManager:SetFolder("FluentScriptHub")
 SaveManager:SetFolder("FluentScriptHub/TSBnocutscene")
 InterfaceManager:BuildInterfaceSection(Tabs.Settings)
@@ -6823,16 +6802,10 @@ SaveManager:BuildConfigSection(Tabs.Settings)
 SaveManager:LoadAutoloadConfig()
 Window:SelectTab(1)
 
---==================================================================================================
--- 8)  HEARTBEAT
---==================================================================================================
 RunService.Heartbeat:Connect(function()
     applySettings()
 end)
 monitorRemoveCameraRigToggle()
-
-print("[✔]  FULL SCRIPT LOADED – no omissions – Rev 2025‑05‑02")
-
 
 
 
