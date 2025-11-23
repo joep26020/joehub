@@ -10,17 +10,17 @@ local GEMINI_API_KEY = "key"
 local GEMINI_MODEL = "gemini-2.5-flash"
 local GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/" .. GEMINI_MODEL .. ":generateContent?key=" .. GEMINI_API_KEY
 
-local INSTRUCTIONS = [[you are a blunt trash-talking bot.
+local INSTRUCTIONS = [[you are a trash-talking bot.
 you roast people but never use slurs, gore, or nsfw.
 no emojis, no hashtags, no commas, no quotes.
-keep replies under 12 words, one short sentence, lowercase, no period, not corny.
+keep replies under 15 words, one short sentence, lowercase, no period, not corny.
 make the roasts personal.]]
 
 local ChatEnabled = true
-local ChatDistance = 80
-local MaxContextPerUser = 25
-local MinReplyDelay = 4
-local MaxReplyDelay = 5
+local ChatDistance = 0
+local MaxContextPerUser = 6
+local MinReplyDelay = 3.5
+local MaxReplyDelay = 4.5
 local MaxRepliesPerWindow = 2
 local RateWindowSeconds = 15
 local MinGapBetweenReplies = 6
