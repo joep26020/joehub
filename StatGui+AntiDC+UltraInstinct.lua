@@ -6,7 +6,7 @@ local EvasiveBar          = true
 local LeaderboardSpy      = true
 local followKey           = Enum.KeyCode.X
 local SPEED               = 700
-local BEHIND_DIST         = 4.2
+local BEHIND_DIST         = 4
 local ANIM_INTERVAL       = 0.2
 
 local Players         = game:GetService("Players")
