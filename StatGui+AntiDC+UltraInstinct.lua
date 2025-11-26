@@ -132,6 +132,8 @@ local function trackTKF(plr)
         if diff>0 then
             local kv = plr:FindFirstChild("Kills")
             if kv then kv.Value = kv.Value + diff end
+            local tv = plr:FindFirstChild("Total Kills")
+            if tv then tv.Value = tv.Value + diff end
         end
         lastTKF[plr] = new
         if plr:GetAttribute("S_HideKills")==true then reveal(plr) end
