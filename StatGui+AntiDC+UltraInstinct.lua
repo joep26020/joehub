@@ -188,7 +188,10 @@ do
     end)
 end
 
-local MenacingTemplate = Replicated:WaitForChild("Resources"):WaitForChild("LegacyReplication"):WaitForChild("Menacing")
+local MenacingTemplate =
+    Replicated:FindFirstChild("Resources")
+    and Replicated.Resources:FindFirstChild("LegacyReplication")
+    and Replicated.Resources.LegacyReplication:FindFirstChild("Menacing")
 local MagicTemplateGui = ReplicatedFirst:WaitForChild("ScreenGui")
 local MagicTemplate    = MagicTemplateGui:WaitForChild("MagicHealth")
 
