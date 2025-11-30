@@ -6,7 +6,7 @@ local EvasiveBar          = true
 local LeaderboardSpy      = true
 local followKey           = Enum.KeyCode.X
 local SPEED               = 700
-local BEHIND_DIST         = 4.1
+local BEHIND_DIST         = 4.4
 local ANIM_INTERVAL       = 0.2
 
 local Players         = game:GetService("Players")
@@ -188,10 +188,7 @@ do
     end)
 end
 
-local MenacingTemplate =
-    Replicated:FindFirstChild("Resources")
-    and Replicated.Resources:FindFirstChild("LegacyReplication")
-    and Replicated.Resources.LegacyReplication:FindFirstChild("Menacing")
+local MenacingTemplate = Replicated:WaitForChild("Resources"):WaitForChild("LegacyReplication"):WaitForChild("Menacing")
 local MagicTemplateGui = ReplicatedFirst:WaitForChild("ScreenGui")
 local MagicTemplate    = MagicTemplateGui:WaitForChild("MagicHealth")
 
