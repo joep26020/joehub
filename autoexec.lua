@@ -494,13 +494,13 @@ end)
 
 local liveFolder = workspace:FindFirstChild("Live")
 
-local playerFolder = liveFolder:FindFirstChild(player.Name)
-
+local playerFolder = liveFolder and liveFolder:FindFirstChild(player.Name)
 local hasTrashCan = playerFolder and playerFolder:FindFirstChild("Trash Can")
+
 
 local DetectedAnimations = {
     -- tatsu grab
---[[
+
     ["rbxassetid://17275150809"] = {
         DetectionRadius = 40,
         CharacterRequirement = "All", 
@@ -511,7 +511,7 @@ local DetectedAnimations = {
             handleDetectedAnimation()
         end
     },
-]]
+
     [SECONDARY_ANIMATION_ID] = {
         DetectionRadius = 40,
         CharacterRequirement = "All", 
@@ -622,6 +622,7 @@ local DetectedAnimations = {
             handleDetectedAnimation()
         end
     },
+
 --[[
     -- death hit drag
     ["rbxassetid://14900168720"] = {
@@ -635,7 +636,7 @@ local DetectedAnimations = {
         end
     },
 ]]
-
+--[[
     -- death blow
     ["rbxassetid://15134211820"] = {
         DetectionRadius = 100,
@@ -658,7 +659,7 @@ local DetectedAnimations = {
             handleDetectedAnimation()
         end
     },
-
+]]
 --[[
     -- garou run
     ["rbxassetid://13630786846"] = {
@@ -684,7 +685,7 @@ local DetectedAnimations = {
         end
     },
 ]]
-    -- garou stomp
+--[[  -- garou stomp
     ["rbxassetid://12463072679"] = {
         DetectionRadius = 20,
         CharacterRequirement = "All",
@@ -730,6 +731,7 @@ local DetectedAnimations = {
             handleDetectedAnimation()
         end
     },
+]]
 --[[
     -- garou stomp super slam
     ["rbxassetid://12467789963"] = {
@@ -4026,8 +4028,7 @@ end
 SaveManager:SetLibrary(Fluent)
 InterfaceManager:SetLibrary(Fluent)
 
--- Set the folder where main configs will be saved
-InterfaceManager:SetFolder("FluentAimAssist/config")
+
 SaveManager:SetFolder("FluentAimAssist/config")
 
 -- Build the main interface and config sections
@@ -6839,12 +6840,14 @@ local function addAxisInput(axis)
 end
 addAxisInput("X") ; addAxisInput("Y") ; addAxisInput("Z")
 
-InterfaceManager:SetFolder("FluentScriptHub")
+
 SaveManager:SetFolder("FluentScriptHub/TSBnocutscene")
 InterfaceManager:BuildInterfaceSection(Tabs.Settings)
 SaveManager:BuildConfigSection(Tabs.Settings)
 SaveManager:LoadAutoloadConfig()
 Window:SelectTab(1)
+
+
 
 RunService.Heartbeat:Connect(function()
     applySettings()
@@ -6878,8 +6881,6 @@ end)
 
 workspace:SetAttribute("VIPServer", true)
 
-if game.PlaceId == 10449761463 then
-	loadstring(game:HttpGet("https://raw.githubusercontent.com/joep26020/joehub/refs/heads/main/StatGui%2BAntiDC%2BUltraInstinct.lua"))()
-end
+loadstring(game:HttpGet("https://raw.githubusercontent.com/joep26020/joehub/refs/heads/main/StatGui%2BAntiDC%2BUltraInstinct.lua"))()
 
 
