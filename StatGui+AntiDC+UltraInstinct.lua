@@ -888,7 +888,7 @@ end)
 SaveManager:SetLibrary(Library)
 InterfaceManager:SetLibrary(Library)
 InterfaceManager:SetFolder("FluentAzacksHub")
-
+SaveManager:SetFolder("FluentAzacksHub/TSBgame")
 InterfaceManager:BuildInterfaceSection(Tabs.Settings)
 SaveManager:BuildConfigSection(Tabs.Settings)
 SaveManager:LoadAutoloadConfig()
