@@ -22,7 +22,7 @@ local Camera   = workspace.CurrentCamera
 local Library = loadstring(game:HttpGetAsync("https://github.com/ActualMasterOogway/Fluent-Renewed/releases/latest/download/Fluent.luau"))()
 local SaveManager = loadstring(game:HttpGetAsync("https://raw.githubusercontent.com/ActualMasterOogway/Fluent-Renewed/master/Addons/SaveManager.luau"))()
 local InterfaceManager = loadstring(game:HttpGetAsync("https://raw.githubusercontent.com/ActualMasterOogway/Fluent-Renewed/master/Addons/InterfaceManager.luau"))()
-
+local Options = Library.Options
 local Window = Library:CreateWindow{
     Title = "StatGui+AntiDC+UltraInstinct",
     SubTitle = "by Azacks",
@@ -715,6 +715,32 @@ end
 for _,p in ipairs(Players:GetPlayers()) do attachPlayer(p) end
 addConn(Players.PlayerAdded:Connect(attachPlayer))
 
+local speedInput = Tabs.Main:CreateInput("SpeedInput", {
+    Title = "Speed",
+    Default = tostring(SPEED),
+    Placeholder = "Numeric",
+    Numeric = true,
+    Finished = true
+})
+
+
+local behindInput = Tabs.Main:CreateInput("BehindDistInput", {
+    Title = "Behind Distance",
+    Default = tostring(BEHIND_DIST),
+    Placeholder = "e.g. 4.4",
+    Numeric = false,
+    Finished = true
+})
+
+
+local animInput = Tabs.Main:CreateInput("AnimIntervalInput", {
+    Title = "Anim Interval",
+    Default = tostring(ANIM_INTERVAL),
+    Placeholder = "e.g. 0.2",
+    Numeric = false,
+    Finished = true
+})
+
 local animation = Instance.new("Animation")
 animation.AnimationId = "rbxassetid://15957361339"
 
@@ -767,37 +793,46 @@ local function startFollow()
     local tHRP = target.Character:FindFirstChild("HumanoidRootPart")
     if not (tHum and tHRP) then return end
     isFollowing = true
-    movementConn = RunService.Heartbeat:Connect(function(dt)
-        if not isFollowing then return end
-        if not target or not target.Character or not target.Character:FindFirstChild("HumanoidRootPart")
-           or not target.Character:FindFirstChildOfClass("Humanoid")
-           or target.Character:FindFirstChildOfClass("Humanoid").Health<=0 then
-            startFollow()
-            return
-        end
-        local tHRP2 = target.Character.HumanoidRootPart
-        local goalPos = tHRP2.Position - tHRP2.CFrame.LookVector*BEHIND_DIST
-        local direction = goalPos - hrp.Position
-        local dist = direction.Magnitude
-        if dist > SPEED*dt then
-            hrp.CFrame = CFrame.lookAt(hrp.Position + direction.Unit*SPEED*dt, tHRP2.Position)
-        else
-            hrp.CFrame = CFrame.lookAt(goalPos, tHRP2.Position)
-        end
-        if dist>BEHIND_DIST then
-            if not animPlaying then
-                animPlaying = true
-                track:Play()
-                task.delay(ANIM_INTERVAL, function()
-                    track:Stop()
-                    animPlaying = false
-                end)
-            end
-        elseif animPlaying then
-            track:Stop()
-            animPlaying = false
-        end
-    end)
+	movementConn = RunService.Heartbeat:Connect(function(dt)
+	    if not isFollowing then return end
+	    if not target or not target.Character or not target.Character:FindFirstChild("HumanoidRootPart")
+	       or not target.Character:FindFirstChildOfClass("Humanoid")
+	       or target.Character:FindFirstChildOfClass("Humanoid").Health<=0 then
+	        startFollow()
+	        return
+	    end
+	
+	    local tHRP2 = target.Character.HumanoidRootPart
+	
+	    local speed    = tonumber(Options.SpeedInput and Options.SpeedInput.Value) or SPEED
+	    local behind   = tonumber(Options.BehindDistInput and Options.BehindDistInput.Value) or BEHIND_DIST
+	    local interval = tonumber(Options.AnimIntervalInput and Options.AnimIntervalInput.Value) or ANIM_INTERVAL
+	
+	    local goalPos = tHRP2.Position - tHRP2.CFrame.LookVector * behind
+	    local direction = goalPos - hrp.Position
+	    local dist = direction.Magnitude
+	
+	    if dist > speed * dt then
+	        hrp.CFrame = CFrame.lookAt(hrp.Position + direction.Unit * speed * dt, tHRP2.Position)
+	    else
+	        hrp.CFrame = CFrame.lookAt(goalPos, tHRP2.Position)
+	    end
+	
+	    if dist > behind then
+	        if not animPlaying then
+	            animPlaying = true
+	            track:Play()
+	            task.delay(interval, function()
+	                track:Stop()
+	                animPlaying = false
+	            end)
+	        end
+	    elseif animPlaying then
+	        track:Stop()
+	        animPlaying = false
+	    end
+	end)
+
 end
 
 local function stopFollow()
@@ -828,41 +863,7 @@ for _,info in ipairs(toggles) do
     end)
 end
 
-local speedInput = Tabs.Main:CreateInput("SpeedInput", {
-    Title = "Speed",
-    Default = tostring(SPEED),
-    Placeholder = "Numeric",
-    Numeric = true,
-    Finished = true
-})
-speedInput:OnChanged(function()
-    local n = tonumber(speedInput.Value)
-    if n then SPEED = n end
-end)
 
-local behindInput = Tabs.Main:CreateInput("BehindDistInput", {
-    Title = "Behind Distance",
-    Default = tostring(BEHIND_DIST),
-    Placeholder = "Numeric",
-    Numeric = true,
-    Finished = true
-})
-behindInput:OnChanged(function()
-    local n = tonumber(behindInput.Value)
-    if n then BEHIND_DIST = n end
-end)
-
-local animInput = Tabs.Main:CreateInput("AnimIntervalInput", {
-    Title = "Anim Interval",
-    Default = tostring(ANIM_INTERVAL),
-    Placeholder = "Numeric",
-    Numeric = true,
-    Finished = true
-})
-animInput:OnChanged(function()
-    local n = tonumber(animInput.Value)
-    if n then ANIM_INTERVAL = n end
-end)
 
 local followToggle = Tabs.Main:CreateToggle("FollowToggle", { Title = "Follow On/Off", Default = false })
 followToggle:OnChanged(function(val)
