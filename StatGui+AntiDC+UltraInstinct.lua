@@ -8,6 +8,7 @@ local followKey           = Enum.KeyCode.X
 local SPEED               = 700
 local BEHIND_DIST         = 4.4
 local ANIM_INTERVAL       = 0.2
+local GoodBoyToggle = false
 
 local Players         = game:GetService("Players")
 local RunService      = game:GetService("RunService")
@@ -39,6 +40,23 @@ local Tabs = {
     Main = Window:CreateTab{ Title = "Main", Icon = "phosphor-circuitry" },
     Settings = Window:CreateTab{ Title = "Settings", Icon = "settings" }
 }
+
+local TextChatService = game:GetService("TextChatService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local isLegacyChat = false
+pcall(function()
+    isLegacyChat = TextChatService.ChatVersion == Enum.ChatVersion.LegacyChatService
+end)
+
+function chatMessage(str)
+    str = tostring(str)
+    if not isLegacyChat then
+        TextChatService.TextChannels.RBXGeneral:SendAsync(str)
+    else
+		ReplicatedStorage.DefaultChatSystemChatEvents.SayMessageRequest:FireServer(str,"All")
+    end
+end
+
 
 local conns = {}
 local headGuis = {}
@@ -538,7 +556,20 @@ if AntiDeathCounterSpy then
         end
         if liveModel:FindFirstChild("Counter") then fireVFX() end
         addConn(liveModel.ChildAdded:Connect(function(child)
-            if child.Name=="Counter" then fireVFX() end
+            if child.Name=="Counter" then
+				fireVFX()
+			    if GoodBoyToggle then
+			        local myHRP = LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")
+			        local theirHRP = liveModel:FindFirstChild("HumanoidRootPart")
+			
+			        if myHRP and theirHRP then
+			            local dist = (myHRP.Position - theirHRP.Position).Magnitude
+			            if dist <= 80 then
+			                chatMessage("counter like a good boy")
+			            end
+			        end
+			    end
+			end
         end))
         local humanoid = liveModel:FindFirstChildOfClass("Humanoid") or liveModel:WaitForChild("Humanoid",2)
         local animator = humanoid:FindFirstChildOfClass("Animator") or humanoid:WaitForChild("Animator",2)
@@ -848,7 +879,8 @@ local toggles = {
     { Name = "Ult Bar",              Value = UltBar },
     { Name = "Ping Bar",             Value = PingBar },
     { Name = "Evasive Bar",          Value = EvasiveBar },
-    { Name = "Leaderboard Spy",      Value = LeaderboardSpy }
+    { Name = "Leaderboard Spy",      Value = LeaderboardSpy },
+	{ Name = "Counter Like a Good Boy", Value = GoodBoyToggle }
 }
 
 for _,info in ipairs(toggles) do
@@ -860,6 +892,7 @@ for _,info in ipairs(toggles) do
         if info.Name == "Ping Bar"             then PingBar             = val end
         if info.Name == "Evasive Bar"          then EvasiveBar          = val end
         if info.Name == "Leaderboard Spy"      then LeaderboardSpy      = val end
+		if info.Name == "Counter Like a Good Boy" then GoodBoyToggle = val end
     end)
 end
 
