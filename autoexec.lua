@@ -134,6 +134,7 @@ increasedDensityValue = 7
 qResetTime = 1
 
 isSpecificAnimationPlaying = false
+getgenv().pauseSpoof = false
 
 originalProperties = {}
 
@@ -2500,39 +2501,45 @@ end
 
 
 local function pickUpTrashCan(trashCan)
+    -- DISABLE SPOOFING
+    getgenv().pauseSpoof = true 
+    
     local originalChar = player.Character
-    if not originalChar or not originalChar.PrimaryPart then return end
+    if not originalChar or not originalChar.PrimaryPart then 
+        getgenv().pauseSpoof = false -- Resume if failed
+        return 
+    end
 
     local srcHRP = originalChar:FindFirstChild("HumanoidRootPart")
-    if not srcHRP then return end
+    if not srcHRP then 
+        getgenv().pauseSpoof = false 
+        return 
+    end
 
-    -- ✅ Save the MODEL pivot (more robust than HRP CFrame)
     local savedPivot = originalChar:GetPivot()
 
     if aimAssistEnabled then aimAssistEnabled = false end
 
-    -- Create clone at the exact saved pivot
+    -- Create clone
     local clone = createClone(originalChar)
     if not clone or not clone.PrimaryPart then
-        warn("Clone failed to create in pickUpTrashCan"); return
+        warn("Clone failed to create in pickUpTrashCan")
+        getgenv().pauseSpoof = false -- Resume if failed
+        return
     end
     stabilizeClone(clone)
 
-    -- Force placement by model pivot (prevents HRP-vs-pivot mismatch)
     clone:PivotTo(savedPivot)
 
-    -- Make sure its Humanoid isn't sitting or platform-standing initially
     local ch = clone:FindFirstChildOfClass("Humanoid")
-	controlClone(clone)
+    controlClone(clone)
     setupCamera(clone)
     pcall(function() syncAnimations(originalChar, clone) end)
 
-    -- Now start moving the MAIN character; we delayed this until after clone is placed
     local canConnection = RunService.Heartbeat:Connect(function()
         movePlayerToTrashcan(trashCan)
     end)
 
-    -- Mirror sFLY forces (or fall back to normal running per the fix above)
     local stopMirroring = mirrorFlyForces(srcHRP, clone:FindFirstChild("HumanoidRootPart"))
 
     local pickedUp = spamClickUntilPickedUp(trashCan)
@@ -2554,9 +2561,11 @@ local function pickUpTrashCan(trashCan)
     restoreCamera()
     if not userAimAssistToggledOff then aimAssistEnabled = true end
 
+    -- RE-ENABLE SPOOFING
+    getgenv().pauseSpoof = false
+
     return pickedUp
 end
-
 
 
 
@@ -6833,46 +6842,54 @@ SkidTab:CreateInput("FlingRadiusInput",{
     Callback=function(v) local n=tonumber(v) if n then FlingRadius=n end end
 })
 
-SpoofVelEnabled, SpoofVelX, SpoofVelY, SpoofVelZ = false,0,0,0
+
+SpoofVelEnabled = false
+SpoofVelRight = 0   -- X (Right is positive)
+SpoofVelUp = 0      -- Y (Up is positive)
+SpoofVelForward = 0 -- Z (Forward is negative in Roblox, we handle the math below)
+
 local spoofLoopThread
-local pauseSpoof = false
 local function startSpoofLoop()
     if spoofLoopThread and coroutine.status(spoofLoopThread) ~= "dead" then return end
 
     spoofLoopThread = coroutine.create(function()
         while SpoofVelEnabled do
             RunService.Heartbeat:Wait()
-			if not pauseSpoof then
-	            local char = player.Character
-	            local Root = char and char:FindFirstChild("HumanoidRootPart")
-	            if Root then
-					local vel = Root.AssemblyLinearVelocity or Root.Velocity
-					
-					-- X=right, Y=up, Z=forward (LOCAL to HRP)
-					local localSpoof  = Vector3.new(SpoofVelX, SpoofVelY, SpoofVelZ)
-					
-					-- rotate it into WORLD space based on HRP orientation
-					local worldSpoof  = Root.CFrame:VectorToWorldSpace(localSpoof)
-					
-					-- apply
-					if Root.AssemblyLinearVelocity then
-					    Root.AssemblyLinearVelocity = vel + worldSpoof
-					else
-					    Root.Velocity = vel + worldSpoof
-					end
-					
-					RunService.RenderStepped:Wait()
-					
-					-- restore
-	
-					if Root.AssemblyLinearVelocity then
-					    Root.AssemblyLinearVelocity = vel
-					else
-					    Root.Velocity = vel
-					end
-	
-	            end
-			end
+            
+            -- Check the global pause variable
+            if not getgenv().pauseSpoof then
+                local char = player.Character
+                local Root = char and char:FindFirstChild("HumanoidRootPart")
+                if Root then
+                    local vel = Root.AssemblyLinearVelocity or Root.Velocity
+                    
+                    -- MATH EXPLANATION:
+                    -- X: Positive is Right
+                    -- Y: Positive is Up
+                    -- Z: In Roblox CFrame, Forward is Negative Z. 
+                    --    So we take user input "Forward" and make it negative Z.
+                    local localSpoof = Vector3.new(SpoofVelRight, SpoofVelUp, -SpoofVelForward)
+                    
+                    -- Convert local direction (relative to where you are looking) to World Space
+                    local worldSpoof = Root.CFrame:VectorToWorldSpace(localSpoof)
+                    
+                    -- Apply Velocity
+                    if Root.AssemblyLinearVelocity then
+                        Root.AssemblyLinearVelocity = vel + worldSpoof
+                    else
+                        Root.Velocity = vel + worldSpoof
+                    end
+                    
+                    RunService.RenderStepped:Wait()
+                    
+                    -- Restore Velocity (to prevent flinging off the map)
+                    if Root.AssemblyLinearVelocity then
+                        Root.AssemblyLinearVelocity = vel
+                    else
+                        Root.Velocity = vel
+                    end
+                end
+            end
         end
     end)
     coroutine.resume(spoofLoopThread)
@@ -6889,16 +6906,38 @@ SpoofTab:CreateToggle("SpoofVelToggle",{
     end
 })
 
-local function addAxisInput(axis)
-    SpoofTab:CreateInput("SpoofVel"..axis,{
-        Title=axis.." Velocity",Placeholder="0",Numeric=true,Finished=true,
-        Callback=function(v)
-            local n=tonumber(v) or 0
-            if axis=="X" then SpoofVelX=n elseif axis=="Y" then SpoofVelY=n else SpoofVelZ=n end
-        end
-    })
-end
-addAxisInput("X") ; addAxisInput("Y") ; addAxisInput("Z")
+-- Left / Right Input
+SpoofTab:CreateInput("SpoofVelX", {
+    Title = "Right (+) / Left (-)",
+    Placeholder = "0",
+    Numeric = true,
+    Finished = true,
+    Callback = function(v)
+        SpoofVelRight = tonumber(v) or 0
+    end
+})
+
+-- Forward / Back Input
+SpoofTab:CreateInput("SpoofVelZ", {
+    Title = "Forward (+) / Back (-)",
+    Placeholder = "0",
+    Numeric = true,
+    Finished = true,
+    Callback = function(v)
+        SpoofVelForward = tonumber(v) or 0
+    end
+})
+
+-- Up / Down Input
+SpoofTab:CreateInput("SpoofVelY", {
+    Title = "Up (+) / Down (-)",
+    Placeholder = "0",
+    Numeric = true,
+    Finished = true,
+    Callback = function(v)
+        SpoofVelUp = tonumber(v) or 0
+    end
+})
 
 InterfaceManager:SetFolder("FluentScriptHub")
 SaveManager:SetFolder("FluentScriptHub/TSBnocutscene")
