@@ -6797,23 +6797,29 @@ local function startSpoofLoop()
             local char = player.Character
             local Root = char and char:FindFirstChild("HumanoidRootPart")
             if Root then
-				local vel = Root.Velocity
+				local vel = Root.AssemblyLinearVelocity or Root.Velocity
 				
-				local localSpoof = Vector3.new(SpoofVelX, SpoofVelY, SpoofVelZ)
+		
+				local localSpoof  = Vector3.new(SpoofVelX, SpoofVelY, SpoofVelZ)
 				
-
-				local worldSpoof = Root.CFrame:VectorToWorldSpace(localSpoof)
-
-				Root.Velocity = vel + worldSpoof
+	
+				local worldSpoof  = Root.CFrame:VectorToWorldSpace(localSpoof)
+				
+	
+				if Root.AssemblyLinearVelocity then
+				    Root.AssemblyLinearVelocity = vel + worldSpoof
+				else
+				    Root.Velocity = vel + worldSpoof
+				end
 				
 				RunService.RenderStepped:Wait()
-
-				Root.Velocity = vel
-				
-				RunService.Stepped:Wait()
 				
 
-				Root.Velocity = vel + Vector3.new(0, 0.1, 0)
+				if Root.AssemblyLinearVelocity then
+				    Root.AssemblyLinearVelocity = vel
+				else
+				    Root.Velocity = vel
+				end
 
             end
         end
