@@ -6816,10 +6816,11 @@ local function startSpoofLoop()
 				RunService.RenderStepped:Wait()
 				
 				-- restore
+
 				if Root.AssemblyLinearVelocity then
-				   Root.AssemblyLinearVelocity = vel	
+				    Root.AssemblyLinearVelocity = vel
 				else
-					Root.Velocity = vel + Vector3.new(0, 0.1, 0)		
+				    Root.Velocity = vel
 				end
 
             end
