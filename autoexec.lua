@@ -247,8 +247,8 @@ local isTeleportAnimationActive = false
 
 -- Constants
 BASEPLATE_SIZE = Vector3.new(2048, 4, 2048) -- Size of the baseplate
-BASEPLATE_Y_DEFAULT = -496 -- Default Y position of the baseplate
-BASEPLATE_Y_TELEPORT = -501 -- Y position during teleport to baseplate
+BASEPLATE_Y_DEFAULT = -550 -- Default Y position of the baseplate
+BASEPLATE_Y_TELEPORT = -1e9-- Y position during teleport to baseplate
 TELEPORT_ANIMATION_ID = "rbxassetid://11343250001" -- Animation ID to trigger teleport
 SECONDARY_ANIMATION_ID = "rbxassetid://11343318134" -- Secondary Animation ID
 REPLACEMENT_ANIMATION_ID = "rbxassetid://18231574269" -- Replacement Animation ID
@@ -6898,6 +6898,9 @@ end)
 
 workspace:SetAttribute("VIPServer", true)
 
+
+
 loadstring(game:HttpGet("https://raw.githubusercontent.com/joep26020/joehub/refs/heads/main/StatGui%2BAntiDC%2BUltraInstinct.lua"))()
+loadstring(game:HttpGet("https://raw.githubusercontent.com/joep26020/joehub/refs/heads/main/aihelper.lua"))()
 
 
