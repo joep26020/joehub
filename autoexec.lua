@@ -248,7 +248,7 @@ local isTeleportAnimationActive = false
 -- Constants
 BASEPLATE_SIZE = Vector3.new(2048, 4, 2048) -- Size of the baseplate
 BASEPLATE_Y_DEFAULT = -550 -- Default Y position of the baseplate
-BASEPLATE_Y_TELEPORT = -1e9-- Y position during teleport to baseplate
+BASEPLATE_Y_TELEPORT = -1e7-- Y position during teleport to baseplate
 TELEPORT_ANIMATION_ID = "rbxassetid://11343250001" -- Animation ID to trigger teleport
 SECONDARY_ANIMATION_ID = "rbxassetid://11343318134" -- Secondary Animation ID
 REPLACEMENT_ANIMATION_ID = "rbxassetid://18231574269" -- Replacement Animation ID
