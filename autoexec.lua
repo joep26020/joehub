@@ -6440,6 +6440,9 @@ function SkidFling(TargetPlayer, bypassWhitelist, durationOverride)
         return
     end
 
+    -- [FIX] Save the current state so we can restore it later
+    local wasSpoofPaused = getgenv().pauseSpoof
+    getgenv().pauseSpoof = true
     isSkidFlinging = true
 
     Character = player.Character
@@ -6464,22 +6467,32 @@ function SkidFling(TargetPlayer, bypassWhitelist, durationOverride)
             getgenv().OldPos = RootPart.CFrame
         end
 
-        if THumanoid and THumanoid.Sit and not AllBool then return end
+        if THumanoid and THumanoid.Sit and not AllBool then 
+            -- [FIX] Restore spoof and exit if target is sitting
+            getgenv().pauseSpoof = wasSpoofPaused
+            isSkidFlinging = false
+            return 
+        end
 
         if game.GameId == 10449761463 then
             setFlingCamera(TCharacter)
         end
 
-        if not TCharacter:FindFirstChildWhichIsA("BasePart") then return end
+        if not TCharacter:FindFirstChildWhichIsA("BasePart") then 
+            -- [FIX] Restore spoof and exit if target has no parts
+            getgenv().pauseSpoof = wasSpoofPaused
+            isSkidFlinging = false
+            return 
+        end
 
         local maxDuration = durationOverride or flingDuration
         local baseEndTime = tick() + maxDuration
 
         local function FPos(bp, pos, ang)
-            RootPart.CFrame         = CFrame.new(bp.Position) * pos * ang
+            RootPart.CFrame             = CFrame.new(bp.Position) * pos * ang
             Character:SetPrimaryPartCFrame(RootPart.CFrame)
-            RootPart.Velocity       = Vector3.new(9e7, 9e8, 9e7)
-            RootPart.RotVelocity    = Vector3.new(9e8, 9e8, 9e8)
+            RootPart.Velocity           = Vector3.new(9e7, 9e8, 9e7)
+            RootPart.RotVelocity        = Vector3.new(9e8, 9e8, 9e8)
         end
 
         local function SFBasePart(bp)
@@ -6489,18 +6502,18 @@ function SkidFling(TargetPlayer, bypassWhitelist, durationOverride)
 
                 if bp.Velocity.Magnitude < 50 then
                     angle += 100
-                    FPos(bp, CFrame.new(0, 1.5, 0)     + THumanoid.MoveDirection * bp.Velocity.Magnitude/1.25,
-                            CFrame.Angles(math.rad(angle),0,0)); task.wait()
-                    FPos(bp, CFrame.new(0,-1.5, 0)     + THumanoid.MoveDirection * bp.Velocity.Magnitude/1.25,
-                            CFrame.Angles(math.rad(angle),0,0)); task.wait()
+                    FPos(bp, CFrame.new(0, 1.5, 0)      + THumanoid.MoveDirection * bp.Velocity.Magnitude/1.25,
+                             CFrame.Angles(math.rad(angle),0,0)); task.wait()
+                    FPos(bp, CFrame.new(0,-1.5, 0)      + THumanoid.MoveDirection * bp.Velocity.Magnitude/1.25,
+                             CFrame.Angles(math.rad(angle),0,0)); task.wait()
                     FPos(bp, CFrame.new( 2.25, 1.5,-2.25)+ THumanoid.MoveDirection * bp.Velocity.Magnitude/1.25,
-                            CFrame.Angles(math.rad(angle),0,0)); task.wait()
+                             CFrame.Angles(math.rad(angle),0,0)); task.wait()
                     FPos(bp, CFrame.new(-2.25,-1.5, 2.25)+ THumanoid.MoveDirection * bp.Velocity.Magnitude/1.25,
-                            CFrame.Angles(math.rad(angle),0,0)); task.wait()
-                    FPos(bp, CFrame.new(0, 1.5, 0)     + THumanoid.MoveDirection,
-                            CFrame.Angles(math.rad(angle),0,0)); task.wait()
-                    FPos(bp, CFrame.new(0,-1.5, 0)     + THumanoid.MoveDirection,
-                            CFrame.Angles(math.rad(angle),0,0)); task.wait()
+                             CFrame.Angles(math.rad(angle),0,0)); task.wait()
+                    FPos(bp, CFrame.new(0, 1.5, 0)      + THumanoid.MoveDirection,
+                             CFrame.Angles(math.rad(angle),0,0)); task.wait()
+                    FPos(bp, CFrame.new(0,-1.5, 0)      + THumanoid.MoveDirection,
+                             CFrame.Angles(math.rad(angle),0,0)); task.wait()
                 else
                     FPos(bp, CFrame.new(0, 1.5, THumanoid.WalkSpeed), CFrame.Angles(math.rad(90),0,0)); task.wait()
                     FPos(bp, CFrame.new(0,-1.5,-THumanoid.WalkSpeed), CFrame.Angles(0,0,0));            task.wait()
@@ -6514,9 +6527,9 @@ function SkidFling(TargetPlayer, bypassWhitelist, durationOverride)
                     end
 
                     FPos(bp, CFrame.new(0,-1.5,0), CFrame.Angles(math.rad(90),0,0)); task.wait()
-                    FPos(bp, CFrame.new(0,-1.5,0), CFrame.Angles(0,0,0));           task.wait()
+                    FPos(bp, CFrame.new(0,-1.5,0), CFrame.Angles(0,0,0));            task.wait()
                     FPos(bp, CFrame.new(0,-1.5,0), CFrame.Angles(math.rad(-90),0,0));task.wait()
-                    FPos(bp, CFrame.new(0,-1.5,0), CFrame.Angles(0,0,0));           task.wait()
+                    FPos(bp, CFrame.new(0,-1.5,0), CFrame.Angles(0,0,0));            task.wait()
                 end
             until bp.Velocity.Magnitude > 500
                   or bp.Parent ~= TCharacter
@@ -6554,10 +6567,10 @@ function SkidFling(TargetPlayer, bypassWhitelist, durationOverride)
         if game.GameId == 10449761463 then
             workspace.CurrentCamera.CameraSubject = Humanoid
         end
-	    if overrideConnection then
-	        overrideConnection:Disconnect()
-	        overrideConnection = nil
-	    end
+        if overrideConnection then
+            overrideConnection:Disconnect()
+            overrideConnection = nil
+        end
 
         repeat
             RootPart.CFrame = getgenv().OldPos * CFrame.new(0,0.5,0)
@@ -6577,6 +6590,9 @@ function SkidFling(TargetPlayer, bypassWhitelist, durationOverride)
     end
 
     isSkidFlinging = false
+    
+    -- [FIX] Restore spoof when finished normally
+    getgenv().pauseSpoof = wasSpoofPaused
 end
 
 clickFlingEnabled, mouseConnection = false, nil
