@@ -6817,9 +6817,9 @@ local function startSpoofLoop()
 				
 				-- restore
 				if Root.AssemblyLinearVelocity then
-				    Root.Velocity = vel + Vector3.new(0, 0.1, 0)
+				   Root.AssemblyLinearVelocity = vel	
 				else
-					Root.AssemblyLinearVelocity = vel			
+					Root.Velocity = vel + Vector3.new(0, 0.1, 0)		
 				end
 
             end
