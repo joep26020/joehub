@@ -2573,12 +2573,19 @@ spawn(function()
             local playerFolder = liveFolder and liveFolder:FindFirstChild(player.Name)
             local hasTrashCan = playerFolder and playerFolder:FindFirstChild("Trash Can")
 
-            if not hasTrashCan then
-                local candidateCan = getFarthestTrashCan()
-                if candidateCan then
-                    local success = pickUpTrashCan(candidateCan)
-                end
-            end
+			if not hasTrashCan then
+			    local candidateCan = getFarthestTrashCan()
+			    if candidateCan then
+			        pauseSpoof = true
+			        local ok, err = pcall(function()
+			            pickUpTrashCan(candidateCan)
+			        end)
+			        pauseSpoof = false
+			
+			        if not ok then warn(err) end
+			    end
+			end
+
         end
     end
 end)
@@ -6787,43 +6794,44 @@ SkidTab:CreateInput("FlingRadiusInput",{
 
 SpoofVelEnabled, SpoofVelX, SpoofVelY, SpoofVelZ = false,0,0,0
 local spoofLoopThread
-
+local pauseSpoof = false
 local function startSpoofLoop()
     if spoofLoopThread and coroutine.status(spoofLoopThread) ~= "dead" then return end
 
     spoofLoopThread = coroutine.create(function()
         while SpoofVelEnabled do
             RunService.Heartbeat:Wait()
-
-            local char = player.Character
-            local Root = char and char:FindFirstChild("HumanoidRootPart")
-            if Root then
-				local vel = Root.AssemblyLinearVelocity or Root.Velocity
-				
-				-- X=right, Y=up, Z=forward (LOCAL to HRP)
-				local localSpoof  = Vector3.new(SpoofVelX, SpoofVelY, SpoofVelZ)
-				
-				-- rotate it into WORLD space based on HRP orientation
-				local worldSpoof  = Root.CFrame:VectorToWorldSpace(localSpoof)
-				
-				-- apply
-				if Root.AssemblyLinearVelocity then
-				    Root.AssemblyLinearVelocity = vel + worldSpoof
-				else
-				    Root.Velocity = vel + worldSpoof
-				end
-				
-				RunService.RenderStepped:Wait()
-				
-				-- restore
-
-				if Root.AssemblyLinearVelocity then
-				    Root.AssemblyLinearVelocity = vel
-				else
-				    Root.Velocity = vel
-				end
-
-            end
+			if not pauseSpoof then
+	            local char = player.Character
+	            local Root = char and char:FindFirstChild("HumanoidRootPart")
+	            if Root then
+					local vel = Root.AssemblyLinearVelocity or Root.Velocity
+					
+					-- X=right, Y=up, Z=forward (LOCAL to HRP)
+					local localSpoof  = Vector3.new(SpoofVelX, SpoofVelY, SpoofVelZ)
+					
+					-- rotate it into WORLD space based on HRP orientation
+					local worldSpoof  = Root.CFrame:VectorToWorldSpace(localSpoof)
+					
+					-- apply
+					if Root.AssemblyLinearVelocity then
+					    Root.AssemblyLinearVelocity = vel + worldSpoof
+					else
+					    Root.Velocity = vel + worldSpoof
+					end
+					
+					RunService.RenderStepped:Wait()
+					
+					-- restore
+	
+					if Root.AssemblyLinearVelocity then
+					    Root.AssemblyLinearVelocity = vel
+					else
+					    Root.Velocity = vel
+					end
+	
+	            end
+			end
         end
     end)
     coroutine.resume(spoofLoopThread)
