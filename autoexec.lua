@@ -2573,10 +2573,27 @@ end
 -- TOGGLE ON/OFF WITH “N” KEY
 --------------------------------------------------------------------------------
 
+--------------------------------------------------------------------------------
+-- TOGGLE ON/OFF WITH "N" OR "F" KEYS
+--------------------------------------------------------------------------------
+
 UserInputService.InputBegan:Connect(function(input, gpe)
     if gpe then return end
-    if input.KeyCode == Enum.KeyCode.N then
+
+    -- Check for N or F
+    if input.KeyCode == Enum.KeyCode.N or input.KeyCode == Enum.KeyCode.F then
+        
+        -- LOGIC: If F is pressed, only proceed if it is currently ON.
+        -- This prevents F from turning it ON.
+        if input.KeyCode == Enum.KeyCode.F and not autoTrashGrabEnabled then 
+            return 
+        end
+
+        -- Toggle the state
+        -- If N was pressed: It flips (On -> Off, Off -> On)
+        -- If F was pressed: We passed the check above, so it must be On. Flipping it makes it Off.
         autoTrashGrabEnabled = not autoTrashGrabEnabled
+
         if autoTrashGrabEnabled then
             print("Auto Trash Grab ENABLED")
             setAllTrashCansCollide(false)
@@ -6856,24 +6873,16 @@ local function startSpoofLoop()
         while SpoofVelEnabled do
             RunService.Heartbeat:Wait()
             
-            -- Check the global pause variable
-            if not getgenv().pauseSpoof then
+            -- UPDATED LINE BELOW: Checks pauseSpoof AND checks if skid flinging is active
+            if not getgenv().pauseSpoof and not isSkidFlinging then
                 local char = player.Character
                 local Root = char and char:FindFirstChild("HumanoidRootPart")
                 if Root then
                     local vel = Root.AssemblyLinearVelocity or Root.Velocity
                     
-                    -- MATH EXPLANATION:
-                    -- X: Positive is Right
-                    -- Y: Positive is Up
-                    -- Z: In Roblox CFrame, Forward is Negative Z. 
-                    --    So we take user input "Forward" and make it negative Z.
                     local localSpoof = Vector3.new(SpoofVelRight, SpoofVelUp, -SpoofVelForward)
-                    
-                    -- Convert local direction (relative to where you are looking) to World Space
                     local worldSpoof = Root.CFrame:VectorToWorldSpace(localSpoof)
                     
-                    -- Apply Velocity
                     if Root.AssemblyLinearVelocity then
                         Root.AssemblyLinearVelocity = vel + worldSpoof
                     else
@@ -6882,7 +6891,6 @@ local function startSpoofLoop()
                     
                     RunService.RenderStepped:Wait()
                     
-                    -- Restore Velocity (to prevent flinging off the map)
                     if Root.AssemblyLinearVelocity then
                         Root.AssemblyLinearVelocity = vel
                     else
