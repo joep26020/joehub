@@ -1595,12 +1595,16 @@ function createBaseplate()
     baseplate.Parent = workspace
 end
 
--- Function to update the baseplate's position to follow the player's X and Z
 function updateBaseplatePosition()
-    if baseplate and getDetectionRoot() and not isTeleporting then
+    if baseplate and getDetectionRoot() then
         local playerPosition = getDetectionRoot().Position
-        local targetY = teleported and BASEPLATE_Y_TELEPORT or BASEPLATE_Y_DEFAULT
-        baseplate.Position = Vector3.new(playerPosition.X, targetY, playerPosition.Z)
+        local targetTopY = isTeleporting and BASEPLATE_Y_TELEPORT or BASEPLATE_Y_DEFAULT
+        local halfHeight = BASEPLATE_SIZE.Y / 2
+        baseplate.Position = Vector3.new(
+            playerPosition.X,
+            targetTopY - halfHeight,
+            playerPosition.Z
+        )
     end
 end
 
