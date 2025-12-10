@@ -4028,7 +4028,8 @@ end
 SaveManager:SetLibrary(Fluent)
 InterfaceManager:SetLibrary(Fluent)
 
-
+-- Set the folder where main configs will be saved
+InterfaceManager:SetFolder("FluentAimAssist/config")
 SaveManager:SetFolder("FluentAimAssist/config")
 
 -- Build the main interface and config sections
@@ -6799,13 +6800,13 @@ local function startSpoofLoop()
             if Root then
 				local vel = Root.AssemblyLinearVelocity or Root.Velocity
 				
-		
+				-- X=right, Y=up, Z=forward (LOCAL to HRP)
 				local localSpoof  = Vector3.new(SpoofVelX, SpoofVelY, SpoofVelZ)
 				
-	
+				-- rotate it into WORLD space based on HRP orientation
 				local worldSpoof  = Root.CFrame:VectorToWorldSpace(localSpoof)
 				
-	
+				-- apply
 				if Root.AssemblyLinearVelocity then
 				    Root.AssemblyLinearVelocity = vel + worldSpoof
 				else
@@ -6814,11 +6815,11 @@ local function startSpoofLoop()
 				
 				RunService.RenderStepped:Wait()
 				
-
+				-- restore
 				if Root.AssemblyLinearVelocity then
-				    Root.AssemblyLinearVelocity = vel
+				    Root.Velocity = vel + Vector3.new(0, 0.1, 0)
 				else
-				    Root.Velocity = vel
+					Root.AssemblyLinearVelocity = vel			
 				end
 
             end
@@ -6849,14 +6850,12 @@ local function addAxisInput(axis)
 end
 addAxisInput("X") ; addAxisInput("Y") ; addAxisInput("Z")
 
-
+InterfaceManager:SetFolder("FluentScriptHub")
 SaveManager:SetFolder("FluentScriptHub/TSBnocutscene")
 InterfaceManager:BuildInterfaceSection(Tabs.Settings)
 SaveManager:BuildConfigSection(Tabs.Settings)
 SaveManager:LoadAutoloadConfig()
 Window:SelectTab(1)
-
-
 
 RunService.Heartbeat:Connect(function()
     applySettings()
