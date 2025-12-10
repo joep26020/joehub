@@ -1596,15 +1596,35 @@ function createBaseplate()
 end
 
 function updateBaseplatePosition()
-    if baseplate and getDetectionRoot() then
-        local playerPosition = getDetectionRoot().Position
-        local targetTopY = isTeleporting and BASEPLATE_Y_TELEPORT or BASEPLATE_Y_DEFAULT
-        local halfHeight = BASEPLATE_SIZE.Y / 2
-        baseplate.Position = Vector3.new(
-            playerPosition.X,
-            targetTopY - halfHeight,
-            playerPosition.Z
-        )
+    if not baseplate or not getDetectionRoot() then return end
+    
+    local root = getDetectionRoot()
+    local playerPosition = root.Position
+    
+    local targetTopY = isTeleporting and BASEPLATE_Y_TELEPORT or BASEPLATE_Y_DEFAULT
+    
+    local halfHeight = BASEPLATE_SIZE.Y / 2 
+    
+    baseplate.Position = Vector3.new(
+        playerPosition.X,
+        targetTopY - halfHeight,
+        playerPosition.Z
+    )
+    
+    if isTeleporting and player.Character then
+        local hrp = player.Character:FindFirstChild("HumanoidRootPart")
+        if hrp then
+            local baseplateTopY = baseplate.Position.Y + halfHeight
+            
+            local desiredHRPY = baseplateTopY + (hrp.Size.Y / 2)
+            
+            local currentCF = hrp.CFrame
+            hrp.CFrame = CFrame.new(
+                currentCF.Position.X,
+                desiredHRPY,
+                currentCF.Position.Z
+            ) * CFrame.fromOrientation(currentCF:ToOrientation())
+        end
     end
 end
 
