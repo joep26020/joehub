@@ -1550,17 +1550,34 @@ handleDetectedAnimation = function(specialMode)
 end
 
 isAnyRelevantAnimationPlaying = function()
-    local rootPos = getDetectionRoot().Position
+    local root = getDetectionRoot()
+    if not root then return false end
+    local rootPos = root.Position
+    
     for _, other in ipairs(Players:GetPlayers()) do
         if other ~= player and not spawnTimes[other.UserId] then
-            local oHRP = other.Character and other.Character:FindFirstChild("HumanoidRootPart")
-            local anims = other.Character and other.Character:FindFirstChild("Humanoid"):GetPlayingAnimationTracks()
-            if oHRP and anims then
-                local dist = (oHRP.Position - rootPos).Magnitude
-                for _, track in ipairs(anims) do
-                    local cfg = DetectedAnimations[track.Animation.AnimationId]
-                    if cfg and dist <= cfg.DetectionRadius then
-                        return true
+            local character = other.Character
+            if character then
+                local oHRP = character:FindFirstChild("HumanoidRootPart")
+                if oHRP then
+                    local humanoid = character:FindFirstChildOfClass("Humanoid")
+                    if humanoid then
+                        local success, anims = pcall(function()
+                            return humanoid:GetPlayingAnimationTracks()
+                        end)
+                        
+                        if success and anims then
+                            local dist = (oHRP.Position - rootPos).Magnitude
+                            for _, track in ipairs(anims) do
+                                local animId = track.Animation and track.Animation.AnimationId
+                                if animId then
+                                    local cfg = DetectedAnimations[animId]
+                                    if cfg and dist <= cfg.DetectionRadius then
+                                        return true
+                                    end
+                                end
+                            end
+                        end
                     end
                 end
             end
