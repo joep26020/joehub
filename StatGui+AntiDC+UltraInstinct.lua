@@ -61,11 +61,14 @@ local function fireF(isDown)
 end
 
 local function equipBestCounterTool()
-    local plr = game.Players.LocalPlayer
+    local plr = Players.LocalPlayer
     local char = plr.Character
     local backpack = plr.Backpack
+    
     if not (char and backpack) then return end
-    local items = {"Death Blow","Spiraling Storm","Split Second Counter","Prey's Peril"}
+
+    local items = {"Death Blow", "Spiraling Storm", "Split Second Counter", "Prey's Peril"}
+
     for _, itemName in ipairs(items) do
         local tool = backpack:FindFirstChild(itemName)
         if tool then
@@ -75,6 +78,14 @@ local function equipBestCounterTool()
                     tool.Parent = backpack
                 end
             end)
+
+            local args = {
+                [1] = {
+                    ["Name"] = tool.Name,
+                    ["Effect"] = "Cooldown"
+                }
+            }
+            Replicated.Replication:FireServer(unpack(args))
             break
         end
     end
