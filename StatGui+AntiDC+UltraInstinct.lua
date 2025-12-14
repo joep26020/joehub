@@ -39,7 +39,100 @@ local Window = Library:CreateWindow{
 local Tabs = {
     Main = Window:CreateTab{ Title = "Main", Icon = "phosphor-circuitry" },
     Settings = Window:CreateTab{ Title = "Settings", Icon = "settings" }
+	Tabs.Fight = Window:CreateTab{ Title = "Fight", Icon = "swords" }
 }
+
+getgenv().AutoBlocking = getgenv().AutoBlocking or false
+getgenv().AutoCounter  = getgenv().AutoCounter  or false
+
+
+
+local function fireF(isDown)
+    local char = LP.Character
+    if not char then return end
+    local comm = char:FindFirstChild("Communicate")
+    if not comm then return end
+    local goal = isDown and "KeyPress" or "KeyRelease"
+    local args = { [1] = { Goal = goal, Key = Enum.KeyCode.F } }
+    comm:FireServer(unpack(args))
+end
+
+local function equipBestCounterTool()
+    local char = LP.Character
+    if not char then return end
+    local backpack = LP:FindFirstChild("Backpack")
+    if not backpack then return end
+    local items = { "Death Blow", "Spiraling Storm", "Split Second Counter", "Prey's Peril" }
+    for _, name in ipairs(items) do
+        local tool = backpack:FindFirstChild(name)
+        if tool then
+            tool.Parent = char
+            return
+        end
+    end
+end
+
+local function getMyHead()
+    local char = LP.Character
+    if not char then return nil end
+    return char:FindFirstChild("Head")
+end
+
+local function enemyM1ingNearby(maxDist)
+    local myHead = getMyHead()
+    if not myHead then return nil end
+    local live = workspace:FindFirstChild("Live")
+    if not live then return nil end
+    for _, k in ipairs(live:GetChildren()) do
+        if k:IsA("Model") and k.Name ~= LP.Name then
+            local head = k:FindFirstChild("Head")
+            local hum  = k:FindFirstChildOfClass("Humanoid")
+            if head and head:IsA("BasePart") and hum and hum.Health > 0 then
+                if (head.Position - myHead.Position).Magnitude <= maxDist then
+                    if k:FindFirstChild("M1ing") then
+                        return k
+                    end
+                end
+            end
+        end
+    end
+    return nil
+end
+
+Tabs.Fight:CreateToggle("AutoBlockToggle", { Title = "Auto Block", Default = false }):OnChanged(function(v)
+    getgenv().AutoBlocking = v
+    if not v then pcall(function() fireF(false) end) end
+end)
+
+Tabs.Fight:CreateToggle("AutoCounterToggle", { Title = "Auto Counter", Default = false }):OnChanged(function(v)
+    getgenv().AutoCounter = v
+end)
+
+local AUTO_MAX_DIST = 19.5
+local fHeld = false
+
+addConn(RunService.RenderStepped:Connect(function()
+    if not (getgenv().AutoBlocking or getgenv().AutoCounter) then
+        if fHeld then fHeld = false pcall(function() fireF(false) end) end
+        return
+    end
+
+    local m1 = nil
+    pcall(function() m1 = enemyM1ingNearby(AUTO_MAX_DIST) end)
+
+    if getgenv().AutoBlocking then
+        local shouldHold = (m1 ~= nil)
+        if shouldHold ~= fHeld then
+            fHeld = shouldHold
+            pcall(function() fireF(shouldHold) end)
+        end
+    end
+
+    if getgenv().AutoCounter and m1 then
+        pcall(equipBestCounterTool)
+    end
+end))
+
 
 local TextChatService = game:GetService("TextChatService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
