@@ -61,16 +61,25 @@ local function fireF(isDown)
 end
 
 local function equipBestCounterTool()
-    local inventory = game.Players.LocalPlayer.Backpack
+    local plr = game.Players.LocalPlayer
+    local char = plr.Character
+    local backpack = plr.Backpack
+    if not (char and backpack) then return end
     local items = {"Death Blow","Spiraling Storm","Split Second Counter","Prey's Peril"}
     for _, itemName in ipairs(items) do
-        local item = inventory:FindFirstChild(itemName)
-        if item then
-            item.Parent = game.Players.LocalPlayer.Character
+        local tool = backpack:FindFirstChild(itemName)
+        if tool then
+            tool.Parent = char
+            task.defer(function()
+                if tool and tool.Parent == char and backpack then
+                    tool.Parent = backpack
+                end
+            end)
             break
         end
     end
 end
+
 
 local function getMyHead()
     local char = LP.Character
