@@ -43,9 +43,9 @@ local Tabs = {
 }
 
 getgenv().AutoBlocking = getgenv().AutoBlocking or false
-getgenv().AutoCounter = getgenv().AutoCounter or false
-getgenv().AutoBlockDist = getgenv().AutoBlockDist or ""
-getgenv().AutoCounterDist = getgenv().AutoCounterDist or ""
+getgenv().AutoCounter  = getgenv().AutoCounter  or false
+getgenv().AutoBlockDist = getgenv().AutoBlockDist or "19.5"
+getgenv().AutoCounterDist = getgenv().AutoCounterDist or "19.5"
 
 local function fireF(isDown)
     local char = LP.Character
