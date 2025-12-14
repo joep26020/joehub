@@ -38,7 +38,7 @@ local Window = Library:CreateWindow{
 
 local Tabs = {
     Main = Window:CreateTab{ Title = "Main", Icon = "phosphor-circuitry" },
-    Settings = Window:CreateTab{ Title = "Settings", Icon = "settings" }
+    Settings = Window:CreateTab{ Title = "Settings", Icon = "settings" },
 	Tabs.Fight = Window:CreateTab{ Title = "Fight", Icon = "swords" }
 }
 
