@@ -39,13 +39,8 @@ local Window = Library:CreateWindow{
 local Tabs = {
     Main = Window:CreateTab{ Title = "Main", Icon = "phosphor-circuitry" },
     Settings = Window:CreateTab{ Title = "Settings", Icon = "settings" },
-	Tabs.Fight = Window:CreateTab{ Title = "Fight", Icon = "swords" }
+	Tabs.Fight = Window:CreateTab{ Title = "Fight", Icon = "swords" },
 }
-
-getgenv().AutoBlocking = getgenv().AutoBlocking or false
-getgenv().AutoCounter  = getgenv().AutoCounter  or false
-getgenv().AutoBlockDist = tostring(getgenv().AutoBlockDist or "19.5")
-getgenv().AutoCounterDist = tostring(getgenv().AutoCounterDist or "19.5")
 
 
 local function fireF(isDown)
