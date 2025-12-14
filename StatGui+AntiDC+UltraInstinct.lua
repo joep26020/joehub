@@ -44,7 +44,8 @@ local Tabs = {
 
 getgenv().AutoBlocking = getgenv().AutoBlocking or false
 getgenv().AutoCounter  = getgenv().AutoCounter  or false
-
+getgenv().AutoBlockDist = tostring(getgenv().AutoBlockDist or "19.5")
+getgenv().AutoCounterDist = tostring(getgenv().AutoCounterDist or "19.5")
 
 
 local function fireF(isDown)
@@ -99,6 +100,26 @@ local function enemyM1ingNearby(maxDist)
     return nil
 end
 
+Tabs.Fight:CreateInput("AutoBlockDistInput", {
+    Title = "Auto Block Distance",
+    Default = tostring(getgenv().AutoBlockDist),
+    Placeholder = "any number",
+    Numeric = false,
+    Finished = false
+}):OnChanged(function(v)
+    getgenv().AutoBlockDist = tostring(v or "")
+end)
+
+Tabs.Fight:CreateInput("AutoCounterDistInput", {
+    Title = "Auto Counter Distance",
+    Default = tostring(getgenv().AutoCounterDist),
+    Placeholder = "any number",
+    Numeric = false,
+    Finished = false
+}):OnChanged(function(v)
+    getgenv().AutoCounterDist = tostring(v or "")
+end)
+
 Tabs.Fight:CreateToggle("AutoBlockToggle", { Title = "Auto Block", Default = false }):OnChanged(function(v)
     getgenv().AutoBlocking = v
     if not v then pcall(function() fireF(false) end) end
@@ -108,7 +129,6 @@ Tabs.Fight:CreateToggle("AutoCounterToggle", { Title = "Auto Counter", Default =
     getgenv().AutoCounter = v
 end)
 
-local AUTO_MAX_DIST = 19.5
 local fHeld = false
 
 addConn(RunService.RenderStepped:Connect(function()
@@ -117,10 +137,16 @@ addConn(RunService.RenderStepped:Connect(function()
         return
     end
 
-    local m1 = nil
-    pcall(function() m1 = enemyM1ingNearby(AUTO_MAX_DIST) end)
+    local blockDist = tonumber(getgenv().AutoBlockDist)
+    local counterDist = tonumber(getgenv().AutoCounterDist)
 
-    if getgenv().AutoBlocking then
+    if getgenv().AutoBlocking and not blockDist then
+        if fHeld then fHeld = false pcall(function() fireF(false) end) end
+    end
+
+    if getgenv().AutoBlocking and blockDist then
+        local m1 = nil
+        pcall(function() m1 = enemyM1ingNearby(blockDist) end)
         local shouldHold = (m1 ~= nil)
         if shouldHold ~= fHeld then
             fHeld = shouldHold
@@ -128,8 +154,12 @@ addConn(RunService.RenderStepped:Connect(function()
         end
     end
 
-    if getgenv().AutoCounter and m1 then
-        pcall(equipBestCounterTool)
+    if getgenv().AutoCounter and counterDist then
+        local m1c = nil
+        pcall(function() m1c = enemyM1ingNearby(counterDist) end)
+        if m1c then
+            pcall(equipBestCounterTool)
+        end
     end
 end))
 
