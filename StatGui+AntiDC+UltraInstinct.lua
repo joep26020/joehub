@@ -47,58 +47,6 @@ getgenv().AutoCounter  = getgenv().AutoCounter  or false
 getgenv().AutoBlockDist = getgenv().AutoBlockDist or "19.5"
 getgenv().AutoCounterDist = getgenv().AutoCounterDist or "19.5"
 
-local function fireF(isDown)
-    local char = LP.Character
-    if not char then return end
-    local comm = char:FindFirstChild("Communicate")
-    if not comm then return end
-    local goal = isDown and "KeyPress" or "KeyRelease"
-    local args = { [1] = { Goal = goal, Key = Enum.KeyCode.F } }
-    comm:FireServer(unpack(args))
-end
-
-local function equipBestCounterTool()
-    local char = LP.Character
-    if not char then return end
-    local backpack = LP:FindFirstChild("Backpack")
-    if not backpack then return end
-    local items = { "Death Blow", "Spiraling Storm", "Split Second Counter", "Prey's Peril" }
-    for _, name in ipairs(items) do
-        local tool = backpack:FindFirstChild(name)
-        if tool then
-            tool.Parent = char
-            return
-        end
-    end
-end
-
-local function getMyHead()
-    local char = LP.Character
-    if not char then return nil end
-    return char:FindFirstChild("Head")
-end
-
-local function enemyM1ingNearby(maxDist)
-    local myHead = getMyHead()
-    if not myHead then return nil end
-    local live = workspace:FindFirstChild("Live")
-    if not live then return nil end
-    for _, k in ipairs(live:GetChildren()) do
-        if k:IsA("Model") and k.Name ~= LP.Name then
-            local head = k:FindFirstChild("Head")
-            local hum  = k:FindFirstChildOfClass("Humanoid")
-            if head and head:IsA("BasePart") and hum and hum.Health > 0 then
-                if (head.Position - myHead.Position).Magnitude <= maxDist then
-                    if k:FindFirstChild("M1ing") then
-                        return k
-                    end
-                end
-            end
-        end
-    end
-    return nil
-end
-
 Tabs.Fight:CreateInput("AutoBlockDistInput", {
     Title = "Auto Block Distance",
     Default = tostring(getgenv().AutoBlockDist),
@@ -129,8 +77,35 @@ Tabs.Fight:CreateToggle("AutoCounterToggle", { Title = "Auto Counter", Default =
 end)
 
 local fHeld = false
+local m1Down = false
+
+UserInputService.InputBegan:Connect(function(input, gp)
+    if gp then return end
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+        m1Down = true
+        if fHeld then
+            fHeld = false
+            pcall(function() fireF(false) end)
+        end
+    end
+end)
+
+UserInputService.InputEnded:Connect(function(input, gp)
+    if gp then return end
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+        m1Down = false
+    end
+end)
 
 RunService.RenderStepped:Connect(function()
+    if m1Down then
+        if fHeld then
+            fHeld = false
+            pcall(function() fireF(false) end)
+        end
+        return
+    end
+
     if not (getgenv().AutoBlocking or getgenv().AutoCounter) then
         if fHeld then fHeld = false pcall(function() fireF(false) end) end
         return
@@ -161,7 +136,6 @@ RunService.RenderStepped:Connect(function()
         end
     end
 end)
-
 
 local TextChatService = game:GetService("TextChatService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
