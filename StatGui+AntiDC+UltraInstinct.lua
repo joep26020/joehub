@@ -42,6 +42,10 @@ local Tabs = {
 	Fight = Window:CreateTab{ Title = "Fight", Icon = "swords" },
 }
 
+getgenv().AutoBlocking = getgenv().AutoBlocking or false
+getgenv().AutoCounter = getgenv().AutoCounter or false
+getgenv().AutoBlockDist = getgenv().AutoBlockDist or ""
+getgenv().AutoCounterDist = getgenv().AutoCounterDist or ""
 
 local function fireF(isDown)
     local char = LP.Character
