@@ -39,7 +39,7 @@ local Window = Library:CreateWindow{
 local Tabs = {
     Main = Window:CreateTab{ Title = "Main", Icon = "phosphor-circuitry" },
     Settings = Window:CreateTab{ Title = "Settings", Icon = "settings" },
-	Tabs.Fight = Window:CreateTab{ Title = "Fight", Icon = "swords" },
+	Fight = Window:CreateTab{ Title = "Fight", Icon = "swords" },
 }
 
 
@@ -126,7 +126,7 @@ end)
 
 local fHeld = false
 
-addConn(RunService.RenderStepped:Connect(function()
+RunService.RenderStepped:Connect(function()
     if not (getgenv().AutoBlocking or getgenv().AutoCounter) then
         if fHeld then fHeld = false pcall(function() fireF(false) end) end
         return
@@ -156,7 +156,7 @@ addConn(RunService.RenderStepped:Connect(function()
             pcall(equipBestCounterTool)
         end
     end
-end))
+end)
 
 
 local TextChatService = game:GetService("TextChatService")
