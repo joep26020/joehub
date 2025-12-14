@@ -48,6 +48,7 @@ getgenv().AutoCounter  = getgenv().AutoCounter  or false
 getgenv().AutoBlockDist = getgenv().AutoBlockDist or "19.5"
 getgenv().AutoCounterDist = getgenv().AutoCounterDist or "19.5"
 
+local UIS = UserInputService or game:GetService("UserInputService")
 
 local function fireF(isDown)
     local char = LP.Character
@@ -60,16 +61,13 @@ local function fireF(isDown)
 end
 
 local function equipBestCounterTool()
-    local char = LP.Character
-    if not char then return end
-    local backpack = LP:FindFirstChild("Backpack")
-    if not backpack then return end
-    local items = { "Death Blow", "Spiraling Storm", "Split Second Counter", "Prey's Peril" }
-    for _, name in ipairs(items) do
-        local tool = backpack:FindFirstChild(name)
-        if tool then
-            tool.Parent = char
-            return
+    local inventory = game.Players.LocalPlayer.Backpack
+    local items = {"Death Blow","Spiraling Storm","Split Second Counter","Prey's Peril"}
+    for _, itemName in ipairs(items) do
+        local item = inventory:FindFirstChild(itemName)
+        if item then
+            item.Parent = game.Players.LocalPlayer.Character
+            break
         end
     end
 end
@@ -138,20 +136,26 @@ RunService.RenderStepped:Connect(function()
         return
     end
 
+    local m1Held = UIS:IsMouseButtonPressed(Enum.UserInputType.MouseButton1)
+    if m1Held and fHeld then
+        fHeld = false
+        pcall(function() fireF(false) end)
+    end
+
     local blockDist = tonumber(getgenv().AutoBlockDist)
     local counterDist = tonumber(getgenv().AutoCounterDist)
 
-    if getgenv().AutoBlocking and not blockDist then
-        if fHeld then fHeld = false pcall(function() fireF(false) end) end
-    end
-
-    if getgenv().AutoBlocking and blockDist then
-        local m1 = nil
-        pcall(function() m1 = enemyM1ingNearby(blockDist) end)
-        local shouldHold = (m1 ~= nil)
-        if shouldHold ~= fHeld then
-            fHeld = shouldHold
-            pcall(function() fireF(shouldHold) end)
+    if getgenv().AutoBlocking then
+        if m1Held or not blockDist then
+            if fHeld then fHeld = false pcall(function() fireF(false) end) end
+        else
+            local m1 = nil
+            pcall(function() m1 = enemyM1ingNearby(blockDist) end)
+            local shouldHold = (m1 ~= nil)
+            if shouldHold ~= fHeld then
+                fHeld = shouldHold
+                pcall(function() fireF(shouldHold) end)
+            end
         end
     end
 
